@@ -16,6 +16,10 @@ func pathSTS(b *backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "Name of the role",
 			},
+			"external_id": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "External ID to include in STS assume role call",
+			},
 			"ttl": &framework.FieldSchema{
 				Type: framework.TypeDurationSecond,
 				Description: `Lifetime of the token in seconds.
@@ -55,10 +59,17 @@ func (b *backend) pathSTSRead(ctx context.Context, req *logical.Request, d *fram
 
 	// Use sts:AssumeRole
 	if role.ARN != "" {
+		// Try using provided external ID first
+		externalID := d.Get("external_id").(string)
+		if externalID == "" {
+			// Fall back to external ID store with role, if any
+			externalID = role.ExternalID
+		}
+
 		return b.assumeRole(
 			ctx,
 			req.Storage,
-			req.DisplayName, name, role.ARN, role.ExternalID,
+			req.DisplayName, name, role.ARN, externalID,
 			ttl,
 		)
 	}
