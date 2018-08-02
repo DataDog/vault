@@ -3,8 +3,6 @@ package aws
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
@@ -42,38 +40,33 @@ the session for AWS account owners defaults to one hour.`,
 }
 
 func (b *backend) pathSTSRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	policyName := d.Get("name").(string)
+	name := d.Get("name").(string)
 	ttl := int64(d.Get("ttl").(int))
 
-	// Read the policy
-	policy, err := req.Storage.Get(ctx, "policy/"+policyName)
+	// Read the role config
+	role, err := getRoleConfig(ctx, req, name)
 	if err != nil {
 		return nil, errwrap.Wrapf("error retrieving role: {{err}}", err)
 	}
-	if policy == nil {
+	if role == nil {
 		return logical.ErrorResponse(fmt.Sprintf(
-			"Role '%s' not found", policyName)), nil
+			"Role '%s' not found", name)), nil
 	}
-	policyValue := string(policy.Value)
-	if strings.HasPrefix(policyValue, "arn:") {
-		if strings.Contains(policyValue, ":role/") {
-			return b.assumeRole(
-				ctx,
-				req.Storage,
-				req.DisplayName, policyName, policyValue,
-				ttl,
-			)
-		} else {
-			return logical.ErrorResponse(
-					"Can't generate STS credentials for a managed policy; use a role to assume or an inline policy instead"),
-				logical.ErrInvalidRequest
-		}
+
+	// Use sts:AssumeRole
+	if role.ARN != "" {
+		return b.assumeRole(
+			ctx,
+			req.Storage,
+			req.DisplayName, name, role.ARN, role.ExternalID,
+			ttl,
+		)
 	}
-	// Use the helper to create the secret
+	// Use sts:GetFederationToken
 	return b.secretTokenCreate(
 		ctx,
 		req.Storage,
-		req.DisplayName, policyName, policyValue,
+		req.DisplayName, name, role.Policy,
 		ttl,
 	)
 }

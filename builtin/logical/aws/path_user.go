@@ -34,19 +34,19 @@ func pathUser(b *backend) *framework.Path {
 func (b *backend) pathUserRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	policyName := d.Get("name").(string)
 
-	// Read the policy
-	policy, err := req.Storage.Get(ctx, "policy/"+policyName)
+	// Read the role config
+	role, err := getRoleConfig(ctx, req, policyName)
 	if err != nil {
 		return nil, errwrap.Wrapf("error retrieving role: {{err}}", err)
 	}
-	if policy == nil {
+	if role == nil {
 		return logical.ErrorResponse(fmt.Sprintf(
 			"Role '%s' not found", policyName)), nil
 	}
 
 	// Use the helper to create the secret
 	return b.secretAccessKeysCreate(
-		ctx, req.Storage, req.DisplayName, policyName, string(policy.Value))
+		ctx, req.Storage, req.DisplayName, policyName, role.Policy)
 }
 
 func pathUserRollback(ctx context.Context, req *logical.Request, _kind string, data interface{}) error {

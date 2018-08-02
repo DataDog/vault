@@ -1,17 +1,68 @@
 package aws
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-
 	"errors"
 	"strings"
 
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
+
+type roleConfig struct {
+	ARN        string `json:"arn,omitempty"`
+	Policy     string `json:"policy,omitempty"`
+	ExternalID string `json:"external_id,omitempty"`
+}
+
+func (r *roleConfig) toMap() map[string]interface{} {
+	ret := make(map[string]interface{})
+	if r.ARN != "" {
+		ret["arn"] = r.ARN
+	}
+	if r.Policy != "" {
+		ret["policy"] = r.Policy
+	}
+	if r.ExternalID != "" {
+		ret["external_id"] = r.ExternalID
+	}
+	return ret
+}
+
+func getRoleConfig(ctx context.Context, req *logical.Request, name string) (*roleConfig, error) {
+	var cfg roleConfig
+
+	// Try new path first
+	entry, err := req.Storage.Get(ctx, "role/"+name)
+	if err != nil {
+		return nil, err
+	}
+	if entry != nil {
+		err = entry.DecodeJSON(&cfg)
+		if err != nil {
+			return nil, err
+		}
+		return &cfg, nil
+	}
+
+	// Fallback to previous implementation where the role was stored as a single string
+	// into `policy/<name>`, holding either an ARN or an IAM policy document.
+	entry, err = req.Storage.Get(ctx, "policy/"+name)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+
+	val := string(entry.Value)
+	if strings.HasPrefix(val, "arn:") {
+		cfg.ARN = val
+	} else {
+		cfg.Policy = val
+	}
+	return &cfg, nil
+}
 
 func pathListRoles(b *backend) *framework.Path {
 	return &framework.Path{
@@ -37,7 +88,12 @@ func pathRoles() *framework.Path {
 
 			"arn": &framework.FieldSchema{
 				Type:        framework.TypeString,
-				Description: "ARN Reference to a managed policy",
+				Description: "ARN Reference to a managed policy or role to assume",
+			},
+
+			"external_id": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "External ID used for STS assume role",
 			},
 
 			"policy": &framework.FieldSchema{
@@ -58,15 +114,28 @@ func pathRoles() *framework.Path {
 }
 
 func (b *backend) pathRoleList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	entries, err := req.Storage.List(ctx, "policy/")
+	entries, err := req.Storage.List(ctx, "role/")
 	if err != nil {
 		return nil, err
 	}
+	entriesV1, err := req.Storage.List(ctx, "policy/")
+	if err != nil {
+		return nil, err
+	}
+	if len(entriesV1) > 0 {
+		entries = append(entries, entriesV1...)
+	}
+
 	return logical.ListResponse(entries), nil
 }
 
 func pathRolesDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete(ctx, "policy/"+d.Get("name").(string))
+	err := req.Storage.Delete(ctx, "role/"+d.Get("name").(string))
+	if err != nil {
+		return nil, err
+	}
+
+	err = req.Storage.Delete(ctx, "policy/"+d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -75,75 +144,45 @@ func pathRolesDelete(ctx context.Context, req *logical.Request, d *framework.Fie
 }
 
 func pathRolesRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	entry, err := req.Storage.Get(ctx, "policy/"+d.Get("name").(string))
+	role, err := getRoleConfig(ctx, req, d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
-	if entry == nil {
+	if role == nil {
 		return nil, nil
 	}
 
-	val := string(entry.Value)
-	if strings.HasPrefix(val, "arn:") {
-		return &logical.Response{
-			Data: map[string]interface{}{
-				"arn": val,
-			},
-		}, nil
-	}
 	return &logical.Response{
-		Data: map[string]interface{}{
-			"policy": val,
-		},
+		Data: role.toMap(),
 	}, nil
 }
 
-func useInlinePolicy(d *framework.FieldData) (bool, error) {
-	bp := d.Get("policy").(string) != ""
-	ba := d.Get("arn").(string) != ""
-
-	if !bp && !ba {
-		return false, errors.New("either policy or arn must be provided")
-	}
-	if bp && ba {
-		return false, errors.New("only one of policy or arn should be provided")
-	}
-	return bp, nil
-}
-
 func pathRolesWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	var buf bytes.Buffer
+	arn := d.Get("arn").(string)
+	policy := d.Get("policy").(string)
+	externalID := d.Get("external_id").(string)
 
-	uip, err := useInlinePolicy(d)
+	if arn == "" && policy == "" {
+		return nil, errors.New("either policy or arn must be provided")
+	}
+	if arn != "" && policy != "" {
+		return nil, errors.New("only one of policy or arn should be provided")
+	}
+	if policy != "" && externalID != "" {
+		return nil, errors.New("external_id cannot be provided with policy")
+	}
+
+	// Write the role config into storage
+	entry, err := logical.StorageEntryJSON("role/"+d.Get("name").(string), roleConfig{
+		ARN:        arn,
+		Policy:     policy,
+		ExternalID: externalID,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	if uip {
-		if err := json.Compact(&buf, []byte(d.Get("policy").(string))); err != nil {
-			return logical.ErrorResponse(fmt.Sprintf(
-				"Error compacting policy: %s", err)), nil
-		}
-		// Write the policy into storage
-		err := req.Storage.Put(ctx, &logical.StorageEntry{
-			Key:   "policy/" + d.Get("name").(string),
-			Value: buf.Bytes(),
-		})
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Write the arn ref into storage
-		err := req.Storage.Put(ctx, &logical.StorageEntry{
-			Key:   "policy/" + d.Get("name").(string),
-			Value: []byte(d.Get("arn").(string)),
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return nil, nil
+	err = req.Storage.Put(ctx, entry)
+	return nil, err
 }
 
 const pathListRolesHelpSyn = `List the existing roles in this backend`

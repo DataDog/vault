@@ -112,22 +112,25 @@ func (b *backend) secretTokenCreate(ctx context.Context, s logical.Storage,
 }
 
 func (b *backend) assumeRole(ctx context.Context, s logical.Storage,
-	displayName, policyName, policy string,
+	displayName, name, arn, externalID string,
 	lifeTimeInSeconds int64) (*logical.Response, error) {
 	STSClient, err := clientSTS(ctx, s)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 
-	username, usernameWarning := genUsername(displayName, policyName, "iam_user")
+	username, usernameWarning := genUsername(displayName, name, "iam_user")
 
-	tokenResp, err := STSClient.AssumeRole(
-		&sts.AssumeRoleInput{
-			RoleSessionName: aws.String(username),
-			RoleArn:         aws.String(policy),
-			DurationSeconds: &lifeTimeInSeconds,
-		})
+	assumeRoleOpts := &sts.AssumeRoleInput{
+		RoleSessionName: aws.String(username),
+		RoleArn:         aws.String(arn),
+		DurationSeconds: &lifeTimeInSeconds,
+	}
+	if len(externalID) > 0 {
+		assumeRoleOpts.ExternalId = aws.String(externalID)
+	}
 
+	tokenResp, err := STSClient.AssumeRole(assumeRoleOpts)
 	if err != nil {
 		return logical.ErrorResponse(fmt.Sprintf(
 			"Error assuming role: %s", err)), nil
@@ -139,7 +142,7 @@ func (b *backend) assumeRole(ctx context.Context, s logical.Storage,
 		"security_token": *tokenResp.Credentials.SessionToken,
 	}, map[string]interface{}{
 		"username": username,
-		"policy":   policy,
+		"policy":   arn,
 		"is_sts":   true,
 	})
 
