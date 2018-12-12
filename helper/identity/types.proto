@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+option go_package = "github.com/hashicorp/vault/helper/identity";
+
 package identity;
 
 import "google/protobuf/timestamp.proto";
@@ -110,6 +112,10 @@ message Entity {
 	// MFASecrets holds the MFA secrets indexed by the identifier of the MFA
 	// method configuration.
 	//map<string, mfa.Secret> mfa_secrets = 10;
+
+	// Disabled indicates whether tokens associated with the account should not
+	// be able to be used
+	bool disabled = 11;
 }
 
 // Alias represents the alias that gets stored inside of the

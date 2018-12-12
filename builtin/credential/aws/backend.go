@@ -39,14 +39,14 @@ type backend struct {
 	blacklistMutex sync.RWMutex
 
 	// Guards the blacklist/whitelist tidy functions
-	tidyBlacklistCASGuard uint32
-	tidyWhitelistCASGuard uint32
+	tidyBlacklistCASGuard *uint32
+	tidyWhitelistCASGuard *uint32
 
 	// Duration after which the periodic function of the backend needs to
 	// tidy the blacklist and whitelist entries.
 	tidyCooldownPeriod time.Duration
 
-	// nextTidyTime holds the time at which the periodic func should initiatite
+	// nextTidyTime holds the time at which the periodic func should initiate
 	// the tidy operations. This is set by the periodicFunc based on the value
 	// of tidyCooldownPeriod.
 	nextTidyTime time.Time
@@ -82,10 +82,12 @@ func Backend(conf *logical.BackendConfig) (*backend, error) {
 	b := &backend{
 		// Setting the periodic func to be run once in an hour.
 		// If there is a real need, this can be made configurable.
-		tidyCooldownPeriod:  time.Hour,
-		EC2ClientsMap:       make(map[string]map[string]*ec2.EC2),
-		IAMClientsMap:       make(map[string]map[string]*iam.IAM),
-		iamUserIdToArnCache: cache.New(7*24*time.Hour, 24*time.Hour),
+		tidyCooldownPeriod:    time.Hour,
+		EC2ClientsMap:         make(map[string]map[string]*ec2.EC2),
+		IAMClientsMap:         make(map[string]map[string]*iam.IAM),
+		iamUserIdToArnCache:   cache.New(7*24*time.Hour, 24*time.Hour),
+		tidyBlacklistCASGuard: new(uint32),
+		tidyWhitelistCASGuard: new(uint32),
 	}
 
 	b.resolveArnToUniqueIDFunc = b.resolveArnToRealUniqueId
@@ -227,7 +229,7 @@ func (b *backend) resolveArnToRealUniqueId(ctx context.Context, s logical.Storag
 	// Sigh
 	region := getAnyRegionForAwsPartition(entity.Partition)
 	if region == nil {
-		return "", fmt.Errorf("Unable to resolve partition %q to a region", entity.Partition)
+		return "", fmt.Errorf("unable to resolve partition %q to a region", entity.Partition)
 	}
 	iamClient, err := b.clientIAM(ctx, s, region.ID(), entity.AccountNumber)
 	if err != nil {

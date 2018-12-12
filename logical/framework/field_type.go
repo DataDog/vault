@@ -26,6 +26,10 @@ const (
 	// a string field
 	TypeCommaStringSlice
 
+	// TypeLowerCaseString is a helper for TypeString that returns a lowercase
+	// version of the provided string
+	TypeLowerCaseString
+
 	// TypeNameString represents a name that is URI safe and follows specific
 	// rules.  These rules include start and end with an alphanumeric
 	// character and characters in the middle can be alphanumeric or . or -.
@@ -34,12 +38,18 @@ const (
 	// TypeKVPairs allows you to represent the data as a map or a list of
 	// equal sign delimited key pairs
 	TypeKVPairs
+
+	// TypeCommaIntSlice is a helper for TypeSlice that returns a sanitized
+	// slice of Ints
+	TypeCommaIntSlice
 )
 
 func (t FieldType) String() string {
 	switch t {
 	case TypeString:
 		return "string"
+	case TypeLowerCaseString:
+		return "lowercase string"
 	case TypeNameString:
 		return "name string"
 	case TypeInt:
@@ -52,7 +62,7 @@ func (t FieldType) String() string {
 		return "keypair"
 	case TypeDurationSecond:
 		return "duration (sec)"
-	case TypeSlice, TypeStringSlice, TypeCommaStringSlice:
+	case TypeSlice, TypeStringSlice, TypeCommaStringSlice, TypeCommaIntSlice:
 		return "slice"
 	default:
 		return "unknown type"

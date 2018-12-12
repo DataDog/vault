@@ -6,12 +6,12 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/SermoDigital/jose/crypto"
 	"github.com/SermoDigital/jose/jws"
 	"github.com/SermoDigital/jose/jwt"
 	multierror "github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/vault/helper/cidrutil"
 	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
@@ -78,6 +78,11 @@ func (b *kubeAuthBackend) pathLogin() framework.OperationFunc {
 			return logical.ErrorResponse(fmt.Sprintf("invalid role name \"%s\"", roleName)), nil
 		}
 
+		// Check for a CIDR match.
+		if req.Connection != nil && !cidrutil.RemoteAddrIsOk(req.Connection.RemoteAddr, role.BoundCIDRs) {
+			return logical.ErrorResponse("request originated from invalid CIDR"), nil
+		}
+
 		config, err := b.config(ctx, req.Storage)
 		if err != nil {
 			return nil, err
@@ -119,16 +124,10 @@ func (b *kubeAuthBackend) pathLogin() framework.OperationFunc {
 				LeaseOptions: logical.LeaseOptions{
 					Renewable: true,
 					TTL:       role.TTL,
+					MaxTTL:    role.MaxTTL,
 				},
+				BoundCIDRs: role.BoundCIDRs,
 			},
-		}
-
-		// If 'Period' is set, use the value of 'Period' as the TTL.
-		// Otherwise, set the normal TTL.
-		if role.Period > time.Duration(0) {
-			resp.Auth.TTL = role.Period
-		} else {
-			resp.Auth.TTL = role.TTL
 		}
 
 		return resp, nil
@@ -329,16 +328,11 @@ func (b *kubeAuthBackend) pathLoginRenew() framework.OperationFunc {
 			return nil, fmt.Errorf("role %s does not exist during renewal", roleName)
 		}
 
-		// If 'Period' is set on the Role, the token should never expire.
-		// Replenish the TTL with 'Period's value.
-		if role.Period > time.Duration(0) {
-			// If 'Period' was updated after the token was issued,
-			// token will bear the updated 'Period' value as its TTL.
-			req.Auth.TTL = role.Period
-			return &logical.Response{Auth: req.Auth}, nil
-		}
-
-		return framework.LeaseExtend(role.TTL, role.MaxTTL, b.System())(ctx, req, data)
+		resp := &logical.Response{Auth: req.Auth}
+		resp.Auth.TTL = role.TTL
+		resp.Auth.MaxTTL = role.MaxTTL
+		resp.Auth.Period = role.Period
+		return resp, nil
 	}
 }
 

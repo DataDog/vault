@@ -33,6 +33,7 @@ func GetHexFormatted(buf []byte, sep string) string {
 	return ret.String()
 }
 
+// ParseHexFormatted returns the raw bytes from a formatted hex string
 func ParseHexFormatted(in, sep string) []byte {
 	var ret bytes.Buffer
 	var err error
@@ -41,9 +42,8 @@ func ParseHexFormatted(in, sep string) []byte {
 	for _, inByte := range inBytes {
 		if inBits, err = strconv.ParseInt(inByte, 16, 8); err != nil {
 			return nil
-		} else {
-			ret.WriteByte(byte(inBits))
 		}
+		ret.WriteByte(byte(inBits))
 	}
 	return ret.Bytes()
 }
@@ -109,8 +109,6 @@ func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 		return nil, errutil.UserError{Err: "empty pem bundle"}
 	}
 
-	pemBundle = strings.TrimSpace(pemBundle)
-
 	pemBytes := []byte(pemBundle)
 	var pemBlock *pem.Block
 	parsedBundle := &ParsedCertBundle{}
@@ -119,7 +117,7 @@ func ParsePEMBundle(pemBundle string) (*ParsedCertBundle, error) {
 	for len(pemBytes) > 0 {
 		pemBlock, pemBytes = pem.Decode(pemBytes)
 		if pemBlock == nil {
-			return nil, errutil.UserError{Err: "no data found"}
+			return nil, errutil.UserError{Err: "no data found in PEM block"}
 		}
 
 		if signer, err := x509.ParseECPrivateKey(pemBlock.Bytes); err == nil {

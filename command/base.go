@@ -43,6 +43,8 @@ type BaseCommand struct {
 	flagFormat string
 	flagField  string
 
+	flagMFA []string
+
 	tokenHelper token.TokenHelper
 
 	client *api.Client
@@ -109,9 +111,21 @@ func (c *BaseCommand) Client() (*api.Client, error) {
 		client.SetToken(token)
 	}
 
+	client.SetMFACreds(c.flagMFA)
+
 	c.client = client
 
 	return client, nil
+}
+
+// SetAddress sets the token helper on the command; useful for the demo server and other outside cases.
+func (c *BaseCommand) SetAddress(addr string) {
+	c.flagAddress = addr
+}
+
+// SetTokenHelper sets the token helper on the command.
+func (c *BaseCommand) SetTokenHelper(th token.TokenHelper) {
+	c.tokenHelper = th
 }
 
 // TokenHelper returns the token helper attached to the command.
@@ -160,14 +174,19 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 		if bit&FlagSetHTTP != 0 {
 			f := set.NewFlagSet("HTTP Options")
 
-			f.StringVar(&StringVar{
+			addrStringVar := &StringVar{
 				Name:       "address",
 				Target:     &c.flagAddress,
-				Default:    "https://127.0.0.1:8200",
 				EnvVar:     "VAULT_ADDR",
 				Completion: complete.PredictAnything,
 				Usage:      "Address of the Vault server.",
-			})
+			}
+			if c.flagAddress != "" {
+				addrStringVar.Default = c.flagAddress
+			} else {
+				addrStringVar.Default = "https://127.0.0.1:8200"
+			}
+			f.StringVar(addrStringVar)
 
 			f.StringVar(&StringVar{
 				Name:       "ca-cert",
@@ -177,7 +196,7 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 				Completion: complete.PredictFiles("*"),
 				Usage: "Path on the local disk to a single PEM-encoded CA " +
 					"certificate to verify the Vault server's SSL certificate. This " +
-					"takes precendence over -ca-path.",
+					"takes precedence over -ca-path.",
 			})
 
 			f.StringVar(&StringVar{
@@ -242,6 +261,15 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 					"The TTL is specified as a numeric string with suffix like \"30s\" " +
 					"or \"5m\".",
 			})
+
+			f.StringSliceVar(&StringSliceVar{
+				Name:       "mfa",
+				Target:     &c.flagMFA,
+				Default:    nil,
+				EnvVar:     api.EnvVaultMFA,
+				Completion: complete.PredictAnything,
+				Usage:      "Supply MFA credentials as part of X-Vault-MFA header.",
+			})
 		}
 
 		if bit&(FlagSetOutputField|FlagSetOutputFormat) != 0 {
@@ -256,7 +284,7 @@ func (c *BaseCommand) flagSet(bit FlagSetBit) *FlagSets {
 					Usage: "Print only the field with the given name. Specifying " +
 						"this option will take precedence over other formatting " +
 						"directives. The result will not have a trailing newline " +
-						"making it idea for piping to other processes.",
+						"making it ideal for piping to other processes.",
 				})
 			}
 
@@ -330,6 +358,12 @@ func (f *FlagSets) Parsed() bool {
 // Args returns the remaining args after parsing.
 func (f *FlagSets) Args() []string {
 	return f.mainSet.Args()
+}
+
+// Visit visits the flags in lexicographical order, calling fn for each. It
+// visits only those flags that have been set.
+func (f *FlagSets) Visit(fn func(*flag.Flag)) {
+	f.mainSet.Visit(fn)
 }
 
 // Help builds custom help for this command, grouping by flag set.

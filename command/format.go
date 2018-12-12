@@ -59,6 +59,7 @@ func outputWithFormat(ui cli.Ui, secret *api.Secret, data interface{}) int {
 
 type Formatter interface {
 	Output(ui cli.Ui, secret *api.Secret, data interface{}) error
+	Format(data interface{}) ([]byte, error)
 }
 
 var Formatters = map[string]Formatter{
@@ -68,27 +69,29 @@ var Formatters = map[string]Formatter{
 	"yml":   YamlFormatter{},
 }
 
-func format() string {
-	format := os.Getenv(EnvVaultFormat)
-	if format == "" {
-		format = "table"
-	}
-	return format
-}
-
 func Format(ui cli.Ui) string {
 	switch ui.(type) {
 	case *VaultUI:
 		return ui.(*VaultUI).format
 	}
-	return format()
+
+	format := os.Getenv(EnvVaultFormat)
+	if format == "" {
+		format = "table"
+	}
+
+	return format
 }
 
 // An output formatter for json output of an object
 type JsonFormatter struct{}
 
+func (j JsonFormatter) Format(data interface{}) ([]byte, error) {
+	return json.MarshalIndent(data, "", "  ")
+}
+
 func (j JsonFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) error {
-	b, err := json.MarshalIndent(data, "", "  ")
+	b, err := j.Format(data)
 	if err != nil {
 		return err
 	}
@@ -100,8 +103,12 @@ func (j JsonFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) e
 type YamlFormatter struct {
 }
 
+func (y YamlFormatter) Format(data interface{}) ([]byte, error) {
+	return yaml.Marshal(data)
+}
+
 func (y YamlFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) error {
-	b, err := yaml.Marshal(data)
+	b, err := y.Format(data)
 	if err == nil {
 		ui.Output(strings.TrimSpace(string(b)))
 	}
@@ -112,6 +119,11 @@ func (y YamlFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) e
 type TableFormatter struct {
 }
 
+// We don't use this
+func (t TableFormatter) Format(data interface{}) ([]byte, error) {
+	return nil, nil
+}
+
 func (t TableFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) error {
 	switch data.(type) {
 	case *api.Secret:
@@ -120,8 +132,11 @@ func (t TableFormatter) Output(ui cli.Ui, secret *api.Secret, data interface{}) 
 		return t.OutputList(ui, secret, data)
 	case []string:
 		return t.OutputList(ui, nil, data)
+	case map[string]interface{}:
+		t.OutputMap(ui, data.(map[string]interface{}))
+		return nil
 	default:
-		return errors.New("Cannot use the table formatter for this type")
+		return errors.New("cannot use the table formatter for this type")
 	}
 }
 
@@ -134,7 +149,7 @@ func (t TableFormatter) OutputList(ui cli.Ui, secret *api.Secret, data interface
 		ui.Output(tableOutput(data.([]string), nil))
 		return nil
 	default:
-		return errors.New("Error: table formatter cannot output list for this data type")
+		return errors.New("error: table formatter cannot output list for this data type")
 	}
 
 	list := data.([]interface{})
@@ -144,7 +159,7 @@ func (t TableFormatter) OutputList(ui cli.Ui, secret *api.Secret, data interface
 		for i, v := range list {
 			typed, ok := v.(string)
 			if !ok {
-				return fmt.Errorf("Error: %v is not a string", v)
+				return fmt.Errorf("%v is not a string", v)
 			}
 			keys[i] = typed
 		}
@@ -203,7 +218,9 @@ func (t TableFormatter) OutputSecret(ui cli.Ui, secret *api.Secret) error {
 			out = append(out, fmt.Sprintf("token_duration %s %s", hopeDelim, humanDurationInt(secret.Auth.LeaseDuration)))
 		}
 		out = append(out, fmt.Sprintf("token_renewable %s %t", hopeDelim, secret.Auth.Renewable))
-		out = append(out, fmt.Sprintf("token_policies %s %v", hopeDelim, secret.Auth.Policies))
+		out = append(out, fmt.Sprintf("token_policies %s %q", hopeDelim, secret.Auth.TokenPolicies))
+		out = append(out, fmt.Sprintf("identity_policies %s %q", hopeDelim, secret.Auth.IdentityPolicies))
+		out = append(out, fmt.Sprintf("policies %s %q", hopeDelim, secret.Auth.Policies))
 		for k, v := range secret.Auth.Metadata {
 			out = append(out, fmt.Sprintf("token_meta_%s %s %v", k, hopeDelim, v))
 		}
@@ -247,6 +264,34 @@ func (t TableFormatter) OutputSecret(ui cli.Ui, secret *api.Secret) error {
 	return nil
 }
 
+func (t TableFormatter) OutputMap(ui cli.Ui, data map[string]interface{}) {
+	out := make([]string, 0, len(data)+1)
+	if len(data) > 0 {
+		keys := make([]string, 0, len(data))
+		for k := range data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			out = append(out, fmt.Sprintf("%s %s %v", k, hopeDelim, data[k]))
+		}
+	}
+
+	// If we got this far and still don't have any data, there's nothing to print,
+	// sorry.
+	if len(out) == 0 {
+		return
+	}
+
+	// Prepend the header
+	out = append([]string{"Key" + hopeDelim + "Value"}, out...)
+
+	ui.Output(tableOutput(out, &columnize.Config{
+		Delim: hopeDelim,
+	}))
+}
+
 // OutputSealStatus will print *api.SealStatusResponse in the CLI according to the format provided
 func OutputSealStatus(ui cli.Ui, client *api.Client, status *api.SealStatusResponse) int {
 	switch Format(ui) {
@@ -284,6 +329,11 @@ func OutputSealStatus(ui cli.Ui, client *api.Client, status *api.SealStatusRespo
 	leaderStatus, err := client.Sys().Leader()
 	if err != nil && strings.Contains(err.Error(), "Vault is sealed") {
 		leaderStatus = &api.LeaderResponse{HAEnabled: true}
+		err = nil
+	}
+	if err != nil {
+		ui.Error(fmt.Sprintf("Error checking leader status: %s", err))
+		return 1
 	}
 
 	// Output if HA is enabled
@@ -291,16 +341,23 @@ func OutputSealStatus(ui cli.Ui, client *api.Client, status *api.SealStatusRespo
 	if leaderStatus.HAEnabled {
 		mode := "sealed"
 		if !status.Sealed {
+			out = append(out, fmt.Sprintf("HA Cluster | %s", leaderStatus.LeaderClusterAddress))
 			mode = "standby"
+			showLeaderAddr := false
 			if leaderStatus.IsSelf {
 				mode = "active"
+			} else {
+				if leaderStatus.LeaderAddress == "" {
+					leaderStatus.LeaderAddress = "<none>"
+				}
+				showLeaderAddr = true
 			}
-		}
+			out = append(out, fmt.Sprintf("HA Mode | %s", mode))
 
-		out = append(out, fmt.Sprintf("HA Mode | %s", mode))
-
-		if !status.Sealed {
-			out = append(out, fmt.Sprintf("HA Cluster | %s", leaderStatus.LeaderClusterAddress))
+			// This is down here just to keep ordering consistent
+			if showLeaderAddr {
+				out = append(out, fmt.Sprintf("Active Node Address | %s", leaderStatus.LeaderAddress))
+			}
 		}
 	}
 

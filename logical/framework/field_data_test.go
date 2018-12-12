@@ -55,6 +55,60 @@ func TestFieldDataGet(t *testing.T) {
 			"bar",
 		},
 
+		"lowercase string type, lowercase string value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeLowerCaseString},
+			},
+			map[string]interface{}{
+				"foo": "bar",
+			},
+			"foo",
+			"bar",
+		},
+
+		"lowercase string type, mixed-case string value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeLowerCaseString},
+			},
+			map[string]interface{}{
+				"foo": "BaR",
+			},
+			"foo",
+			"bar",
+		},
+
+		"lowercase string type, int value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeLowerCaseString},
+			},
+			map[string]interface{}{
+				"foo": 42,
+			},
+			"foo",
+			"42",
+		},
+
+		"lowercase string type, unset value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeLowerCaseString},
+			},
+			map[string]interface{}{},
+			"foo",
+			"",
+		},
+
+		"lowercase string type, unset value with lowercase default": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{
+					Type:    TypeLowerCaseString,
+					Default: "bar",
+				},
+			},
+			map[string]interface{}{},
+			"foo",
+			"bar",
+		},
+
 		"int type, int value": {
 			map[string]*FieldSchema{
 				"foo": &FieldSchema{Type: TypeInt},
@@ -224,7 +278,7 @@ func TestFieldDataGet(t *testing.T) {
 			[]string{},
 		},
 
-		"commma string slice type, string slice with one value": {
+		"comma string slice type, string slice with one value": {
 			map[string]*FieldSchema{
 				"foo": &FieldSchema{Type: TypeCommaStringSlice},
 			},
@@ -257,6 +311,93 @@ func TestFieldDataGet(t *testing.T) {
 			[]string{},
 		},
 
+		"comma int slice type, comma int with one value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": 1,
+			},
+			"foo",
+			[]int{1},
+		},
+
+		"comma int slice type, comma int with multi value slice": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": []int{1, 2, 3},
+			},
+			"foo",
+			[]int{1, 2, 3},
+		},
+
+		"comma int slice type, comma int with multi value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": "1,2,3",
+			},
+			"foo",
+			[]int{1, 2, 3},
+		},
+
+		"comma int slice type, nil int slice value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": "",
+			},
+			"foo",
+			[]int{},
+		},
+
+		"comma int slice type, int slice with one value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": []interface{}{"1"},
+			},
+			"foo",
+			[]int{1},
+		},
+
+		"comma int slice type, int slice with multi value strings": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": []interface{}{"1", "2", "3"},
+			},
+			"foo",
+			[]int{1, 2, 3},
+		},
+
+		"comma int slice type, int slice with multi value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": []interface{}{1, 2, 3},
+			},
+			"foo",
+			[]int{1, 2, 3},
+		},
+
+		"comma int slice type, empty int slice value": {
+			map[string]*FieldSchema{
+				"foo": &FieldSchema{Type: TypeCommaIntSlice},
+			},
+			map[string]interface{}{
+				"foo": []interface{}{},
+			},
+			"foo",
+			[]int{},
+		},
 		"name string type, valid string": {
 			map[string]*FieldSchema{
 				"foo": &FieldSchema{Type: TypeNameString},

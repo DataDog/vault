@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/mgutz/logxi/v1"
+	"github.com/hashicorp/errwrap"
+	log "github.com/hashicorp/go-hclog"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/ast"
+	"github.com/hashicorp/vault/helper/hclutil"
 	"github.com/hashicorp/vault/helper/parseutil"
 )
 
@@ -55,12 +57,14 @@ type Config struct {
 	ClusterAddr          string      `hcl:"cluster_addr"`
 	DisableClustering    bool        `hcl:"-"`
 	DisableClusteringRaw interface{} `hcl:"disable_clustering"`
+
+	DisableSealWrap    bool        `hcl:"-"`
+	DisableSealWrapRaw interface{} `hcl:"disable_sealwrap"`
 }
 
 // DevConfig is a Config that is used for dev mode of Vault.
 func DevConfig(ha, transactional bool) *Config {
 	ret := &Config{
-		DisableCache:      false,
 		DisableMlock:      true,
 		EnableRawEndpoint: true,
 
@@ -173,11 +177,11 @@ type Telemetry struct {
 	CirconusCheckID string `hcl:"circonus_check_id"`
 	// CirconusCheckForceMetricActivation will force enabling metrics, as they are encountered,
 	// if the metric already exists and is NOT active. If check management is enabled, the default
-	// behavior is to add new metrics as they are encoutered. If the metric already exists in the
+	// behavior is to add new metrics as they are encountered. If the metric already exists in the
 	// check, it will *NOT* be activated. This setting overrides that behavior.
 	// Default: "false"
 	CirconusCheckForceMetricActivation string `hcl:"circonus_check_force_metric_activation"`
-	// CirconusCheckInstanceID serves to uniquely identify the metrics comming from this "instance".
+	// CirconusCheckInstanceID serves to uniquely identify the metrics coming from this "instance".
 	// It can be used to maintain metric continuity with transient or ephemeral instances as
 	// they move around within an infrastructure.
 	// Default: hostname:app
@@ -313,6 +317,11 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.PidFile = c2.PidFile
 	}
 
+	result.DisableSealWrap = c.DisableSealWrap
+	if c2.DisableSealWrap {
+		result.DisableSealWrap = c2.DisableSealWrap
+	}
+
 	return result
 }
 
@@ -394,6 +403,12 @@ func ParseConfig(d string, logger log.Logger) (*Config, error) {
 		}
 	}
 
+	if result.DisableSealWrapRaw != nil {
+		if result.DisableSealWrap, err = parseutil.ParseBool(result.DisableSealWrapRaw); err != nil {
+			return nil, err
+		}
+	}
+
 	list, ok := obj.Node.(*ast.ObjectList)
 	if !ok {
 		return nil, fmt.Errorf("error parsing: file doesn't contain a root object")
@@ -422,57 +437,58 @@ func ParseConfig(d string, logger log.Logger) (*Config, error) {
 		"api_addr",
 		"cluster_addr",
 		"disable_clustering",
+		"disable_sealwrap",
 	}
-	if err := checkHCLKeys(list, valid); err != nil {
+	if err := hclutil.CheckHCLKeys(list, valid); err != nil {
 		return nil, err
 	}
 
 	// Look for storage but still support old backend
 	if o := list.Filter("storage"); len(o.Items) > 0 {
 		if err := parseStorage(&result, o, "storage"); err != nil {
-			return nil, fmt.Errorf("error parsing 'storage': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'storage': {{err}}", err)
 		}
 	} else {
 		if o := list.Filter("backend"); len(o.Items) > 0 {
 			if err := parseStorage(&result, o, "backend"); err != nil {
-				return nil, fmt.Errorf("error parsing 'backend': %s", err)
+				return nil, errwrap.Wrapf("error parsing 'backend': {{err}}", err)
 			}
 		}
 	}
 
 	if o := list.Filter("ha_storage"); len(o.Items) > 0 {
 		if err := parseHAStorage(&result, o, "ha_storage"); err != nil {
-			return nil, fmt.Errorf("error parsing 'ha_storage': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'ha_storage': {{err}}", err)
 		}
 	} else {
 		if o := list.Filter("ha_backend"); len(o.Items) > 0 {
 			if err := parseHAStorage(&result, o, "ha_backend"); err != nil {
-				return nil, fmt.Errorf("error parsing 'ha_backend': %s", err)
+				return nil, errwrap.Wrapf("error parsing 'ha_backend': {{err}}", err)
 			}
 		}
 	}
 
 	if o := list.Filter("hsm"); len(o.Items) > 0 {
 		if err := parseSeal(&result, o, "hsm"); err != nil {
-			return nil, fmt.Errorf("error parsing 'hsm': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'hsm': {{err}}", err)
 		}
 	}
 
 	if o := list.Filter("seal"); len(o.Items) > 0 {
 		if err := parseSeal(&result, o, "seal"); err != nil {
-			return nil, fmt.Errorf("error parsing 'seal': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'seal': {{err}}", err)
 		}
 	}
 
 	if o := list.Filter("listener"); len(o.Items) > 0 {
 		if err := parseListeners(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'listener': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'listener': {{err}}", err)
 		}
 	}
 
 	if o := list.Filter("telemetry"); len(o.Items) > 0 {
 		if err := parseTelemetry(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'telemetry': %s", err)
+			return nil, errwrap.Wrapf("error parsing 'telemetry': {{err}}", err)
 		}
 	}
 
@@ -493,9 +509,7 @@ func LoadConfigDir(dir string, logger log.Logger) (*Config, error) {
 		return nil, err
 	}
 	if !fi.IsDir() {
-		return nil, fmt.Errorf(
-			"configuration path must be a directory: %s",
-			dir)
+		return nil, fmt.Errorf("configuration path must be a directory: %q", dir)
 	}
 
 	var files []string
@@ -534,7 +548,7 @@ func LoadConfigDir(dir string, logger log.Logger) (*Config, error) {
 	for _, f := range files {
 		config, err := LoadConfigFile(f, logger)
 		if err != nil {
-			return nil, fmt.Errorf("Error loading %s: %s", f, err)
+			return nil, errwrap.Wrapf(fmt.Sprintf("error loading %q: {{err}}", f), err)
 		}
 
 		if result == nil {
@@ -712,14 +726,20 @@ func parseSeal(result *Config, list *ast.ObjectList, blockName string) error {
 		valid = []string{
 			"lib",
 			"slot",
+			"token_label",
 			"pin",
 			"mechanism",
 			"hmac_mechanism",
 			"key_label",
+			"default_key_label",
 			"hmac_key_label",
+			"hmac_default_key_label",
 			"generate_key",
 			"regenerate_key",
 			"max_parallel",
+			"disable_auto_reinit_on_error",
+			"rsa_encrypt_local",
+			"rsa_oaep_hash",
 		}
 	case "awskms":
 		valid = []string{
@@ -729,11 +749,28 @@ func parseSeal(result *Config, list *ast.ObjectList, blockName string) error {
 			"kms_key_id",
 			"max_parallel",
 		}
+	case "gcpckms":
+		valid = []string{
+			"credentials",
+			"project",
+			"region",
+			"key_ring",
+			"crypto_key",
+		}
+	case "azurekeyvault":
+		valid = []string{
+			"tenant_id",
+			"client_id",
+			"client_secret",
+			"environment",
+			"vault_name",
+			"key_name",
+		}
 	default:
 		return fmt.Errorf("invalid seal type %q", key)
 	}
 
-	if err := checkHCLKeys(item.Val, valid); err != nil {
+	if err := hclutil.CheckHCLKeys(item.Val, valid); err != nil {
 		return multierror.Prefix(err, fmt.Sprintf("%s.%s:", blockName, key))
 	}
 
@@ -762,6 +799,10 @@ func parseListeners(result *Config, list *ast.ObjectList) error {
 			"address",
 			"cluster_address",
 			"endpoint",
+			"x_forwarded_for_authorized_addrs",
+			"x_forwarded_for_hop_skips",
+			"x_forwarded_for_reject_not_authorized",
+			"x_forwarded_for_reject_not_present",
 			"infrastructure",
 			"node_id",
 			"proxy_protocol_behavior",
@@ -777,7 +818,7 @@ func parseListeners(result *Config, list *ast.ObjectList) error {
 			"tls_client_ca_file",
 			"token",
 		}
-		if err := checkHCLKeys(item.Val, valid); err != nil {
+		if err := hclutil.CheckHCLKeys(item.Val, valid); err != nil {
 			return multierror.Prefix(err, fmt.Sprintf("listeners.%s:", key))
 		}
 
@@ -827,7 +868,7 @@ func parseTelemetry(result *Config, list *ast.ObjectList) error {
 		"statsd_address",
 		"statsite_address",
 	}
-	if err := checkHCLKeys(item.Val, valid); err != nil {
+	if err := hclutil.CheckHCLKeys(item.Val, valid); err != nil {
 		return multierror.Prefix(err, "telemetry:")
 	}
 
@@ -844,32 +885,4 @@ func parseTelemetry(result *Config, list *ast.ObjectList) error {
 		return multierror.Prefix(err, "telemetry:")
 	}
 	return nil
-}
-
-func checkHCLKeys(node ast.Node, valid []string) error {
-	var list *ast.ObjectList
-	switch n := node.(type) {
-	case *ast.ObjectList:
-		list = n
-	case *ast.ObjectType:
-		list = n.List
-	default:
-		return fmt.Errorf("cannot check HCL keys of type %T", n)
-	}
-
-	validMap := make(map[string]struct{}, len(valid))
-	for _, v := range valid {
-		validMap[v] = struct{}{}
-	}
-
-	var result error
-	for _, item := range list.Items {
-		key := item.Keys[0].Token.Value().(string)
-		if _, ok := validMap[key]; !ok {
-			result = multierror.Append(result, fmt.Errorf(
-				"invalid key '%s' on line %d", key, item.Assign.Line))
-		}
-	}
-
-	return result
 }

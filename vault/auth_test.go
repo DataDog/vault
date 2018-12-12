@@ -124,18 +124,20 @@ func TestCore_EnableCredential_Local(t *testing.T) {
 		Type: credentialTableType,
 		Entries: []*MountEntry{
 			&MountEntry{
-				Table:    credentialTableType,
-				Path:     "noop/",
-				Type:     "noop",
-				UUID:     "abcd",
-				Accessor: "noop-abcd",
+				Table:            credentialTableType,
+				Path:             "noop/",
+				Type:             "noop",
+				UUID:             "abcd",
+				Accessor:         "noop-abcd",
+				BackendAwareUUID: "abcde",
 			},
 			&MountEntry{
-				Table:    credentialTableType,
-				Path:     "noop2/",
-				Type:     "noop",
-				UUID:     "bcde",
-				Accessor: "noop-bcde",
+				Table:            credentialTableType,
+				Path:             "noop2/",
+				Type:             "noop",
+				UUID:             "bcde",
+				Accessor:         "noop-bcde",
+				BackendAwareUUID: "bcdea",
 			},
 		},
 	}
@@ -162,7 +164,7 @@ func TestCore_EnableCredential_Local(t *testing.T) {
 	}
 
 	c.auth.Entries[1].Local = true
-	if err := c.persistAuth(context.Background(), c.auth, false); err != nil {
+	if err := c.persistAuth(context.Background(), c.auth, nil); err != nil {
 		t.Fatal(err)
 	}
 
