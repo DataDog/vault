@@ -1,31 +1,54 @@
 package postgresql
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
+	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
-	_ "github.com/lib/pq"
 )
+
+func pathListRoles(b *backend) *framework.Path {
+	return &framework.Path{
+		Pattern: "roles/?$",
+
+		Callbacks: map[logical.Operation]framework.OperationFunc{
+			logical.ListOperation: b.pathRoleList,
+		},
+
+		HelpSynopsis:    pathRoleHelpSyn,
+		HelpDescription: pathRoleHelpDesc,
+	}
+}
 
 func pathRoles(b *backend) *framework.Path {
 	return &framework.Path{
 		Pattern: "roles/" + framework.GenericNameRegex("name"),
 		Fields: map[string]*framework.FieldSchema{
-			"name": &framework.FieldSchema{
+			"name": {
 				Type:        framework.TypeString,
 				Description: "Name of the role.",
 			},
 
-			"sql": &framework.FieldSchema{
+			"sql": {
 				Type:        framework.TypeString,
 				Description: "SQL string to create a user. See help for more info.",
+			},
+
+			"revocation_sql": {
+				Type: framework.TypeString,
+				Description: `SQL statements to be executed to revoke a user. Must be a semicolon-separated
+string, a base64-encoded semicolon-separated string, a serialized JSON string
+array, or a base64-encoded serialized JSON string array. The '{{name}}' value
+will be substituted.`,
 			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.ReadOperation:   b.pathRoleRead,
-			logical.WriteOperation:  b.pathRoleCreate,
+			logical.UpdateOperation: b.pathRoleCreate,
 			logical.DeleteOperation: b.pathRoleDelete,
 		},
 
@@ -34,8 +57,8 @@ func pathRoles(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) Role(s logical.Storage, n string) (*roleEntry, error) {
-	entry, err := s.Get("role/" + n)
+func (b *backend) Role(ctx context.Context, s logical.Storage, n string) (*roleEntry, error) {
+	entry, err := s.Get(ctx, "role/"+n)
 	if err != nil {
 		return nil, err
 	}
@@ -51,9 +74,8 @@ func (b *backend) Role(s logical.Storage, n string) (*roleEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathRoleDelete(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("role/" + data.Get("name").(string))
+func (b *backend) pathRoleDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "role/"+data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -61,9 +83,8 @@ func (b *backend) pathRoleDelete(
 	return nil, nil
 }
 
-func (b *backend) pathRoleRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	role, err := b.Role(req.Storage, data.Get("name").(string))
+func (b *backend) pathRoleRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	role, err := b.Role(ctx, req.Storage, data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -73,24 +94,38 @@ func (b *backend) pathRoleRead(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"sql": role.SQL,
+			"sql":            role.SQL,
+			"revocation_sql": role.RevocationSQL,
 		},
 	}, nil
 }
 
-func (b *backend) pathRoleCreate(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRoleList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	entries, err := req.Storage.List(ctx, "role/")
+	if err != nil {
+		return nil, err
+	}
+
+	return logical.ListResponse(entries), nil
+}
+
+func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 	sql := data.Get("sql").(string)
 
 	// Get our connection
-	db, err := b.DB(req.Storage)
+	db, err := b.DB(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 
 	// Test the query by trying to prepare it
-	for _, query := range SplitSQL(sql) {
+	for _, query := range strutil.ParseArbitraryStringSlice(sql, ";") {
+		query = strings.TrimSpace(query)
+		if len(query) == 0 {
+			continue
+		}
+
 		stmt, err := db.Prepare(Query(query, map[string]string{
 			"name":       "foo",
 			"password":   "bar",
@@ -105,12 +140,13 @@ func (b *backend) pathRoleCreate(
 
 	// Store it
 	entry, err := logical.StorageEntryJSON("role/"+name, &roleEntry{
-		SQL: sql,
+		SQL:           sql,
+		RevocationSQL: data.Get("revocation_sql").(string),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
@@ -118,7 +154,8 @@ func (b *backend) pathRoleCreate(
 }
 
 type roleEntry struct {
-	SQL string `json:"sql"`
+	SQL           string `json:"sql" mapstructure:"sql" structs:"sql"`
+	RevocationSQL string `json:"revocation_sql" mapstructure:"revocation_sql" structs:"revocation_sql"`
 }
 
 const pathRoleHelpSyn = `
@@ -147,6 +184,14 @@ Example of a decent SQL query to use:
 	  VALID UNTIL '{{expiration}}';
 	GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "{{name}}";
 
-Note the above user would be able to access everything. In schema dc1.
-For more complex GRANT clauses, see the PostgreSQL manuel.
+Note the above user would be able to access everything in schema public.
+For more complex GRANT clauses, see the PostgreSQL manual.
+
+The "revocation_sql" parameter customizes the SQL string used to revoke a user.
+Example of a decent revocation SQL query to use:
+
+	REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {{name}};
+	REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {{name}};
+	REVOKE USAGE ON SCHEMA public FROM {{name}};
+	DROP ROLE IF EXISTS {{name}};
 `

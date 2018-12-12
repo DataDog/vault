@@ -1,6 +1,7 @@
 package salt
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -8,7 +9,8 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/hashicorp/vault/helper/uuid"
+	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/logical"
 )
 
@@ -26,7 +28,6 @@ type Salt struct {
 	config    *Config
 	salt      string
 	generated bool
-	hmacType  string
 }
 
 type HashFunc func([]byte) []byte
@@ -51,7 +52,7 @@ type Config struct {
 }
 
 // NewSalt creates a new salt based on the configuration
-func NewSalt(view logical.Storage, config *Config) (*Salt, error) {
+func NewSalt(ctx context.Context, view logical.Storage, config *Config) (*Salt, error) {
 	// Setup the configuration
 	if config == nil {
 		config = &Config{}
@@ -62,6 +63,10 @@ func NewSalt(view logical.Storage, config *Config) (*Salt, error) {
 	if config.HashFunc == nil {
 		config.HashFunc = SHA256Hash
 	}
+	if config.HMAC == nil {
+		config.HMAC = sha256.New
+		config.HMACType = "hmac-sha256"
+	}
 
 	// Create the salt
 	s := &Salt{
@@ -69,9 +74,13 @@ func NewSalt(view logical.Storage, config *Config) (*Salt, error) {
 	}
 
 	// Look for the salt
-	raw, err := view.Get(config.Location)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read salt: %v", err)
+	var raw *logical.StorageEntry
+	var err error
+	if view != nil {
+		raw, err = view.Get(ctx, config.Location)
+		if err != nil {
+			return nil, errwrap.Wrapf("failed to read salt: {{err}}", err)
+		}
 	}
 
 	// Restore the salt if it exists
@@ -81,15 +90,18 @@ func NewSalt(view logical.Storage, config *Config) (*Salt, error) {
 
 	// Generate a new salt if necessary
 	if s.salt == "" {
-		s.salt = uuid.GenerateUUID()
+		s.salt, err = uuid.GenerateUUID()
+		if err != nil {
+			return nil, errwrap.Wrapf("failed to generate uuid: {{err}}", err)
+		}
 		s.generated = true
 		if view != nil {
 			raw := &logical.StorageEntry{
 				Key:   config.Location,
 				Value: []byte(s.salt),
 			}
-			if err := view.Put(raw); err != nil {
-				return nil, fmt.Errorf("failed to persist salt: %v", err)
+			if err := view.Put(ctx, raw); err != nil {
+				return nil, errwrap.Wrapf("failed to persist salt: {{err}}", err)
 			}
 		}
 	}
@@ -98,7 +110,6 @@ func NewSalt(view logical.Storage, config *Config) (*Salt, error) {
 		if len(config.HMACType) == 0 {
 			return nil, fmt.Errorf("HMACType must be defined")
 		}
-		s.hmacType = config.HMACType
 	}
 
 	return s, nil
@@ -110,24 +121,30 @@ func (s *Salt) SaltID(id string) string {
 	return SaltID(s.salt, id, s.config.HashFunc)
 }
 
-// GetHMAC is used to apply a salt and hash function to an ID to make sure
-// it is not reversible, with an additional HMAC
-func (s *Salt) GetHMAC(id string) string {
+// GetHMAC is used to apply a salt and hash function to data to make sure it is
+// not reversible, with an additional HMAC
+func (s *Salt) GetHMAC(data string) string {
 	hm := hmac.New(s.config.HMAC, []byte(s.salt))
-	hm.Write([]byte(id))
+	hm.Write([]byte(data))
 	return hex.EncodeToString(hm.Sum(nil))
 }
 
-// GetIdentifiedHMAC is used to apply a salt and hash function to an ID to make sure
-// it is not reversible, with an additional HMAC, and ID prepended
-func (s *Salt) GetIdentifiedHMAC(id string) string {
-	return s.hmacType + ":" + s.GetHMAC(id)
+// GetIdentifiedHMAC is used to apply a salt and hash function to data to make
+// sure it is not reversible, with an additional HMAC, and ID prepended
+func (s *Salt) GetIdentifiedHMAC(data string) string {
+	return s.config.HMACType + ":" + s.GetHMAC(data)
 }
 
 // DidGenerate returns if the underlying salt value was generated
 // on initialization or if an existing salt value was loaded
 func (s *Salt) DidGenerate() bool {
 	return s.generated
+}
+
+// SaltIDHashFunc uses the supplied hash function instead of the configured
+// hash func in the salt.
+func (s *Salt) SaltIDHashFunc(id string, hashFunc HashFunc) string {
+	return SaltID(s.salt, id, hashFunc)
 }
 
 // SaltID is used to apply a salt and hash function to an ID to make sure

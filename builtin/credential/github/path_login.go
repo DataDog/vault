@@ -1,10 +1,14 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/google/go-github/github"
+	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -20,40 +24,155 @@ func pathLogin(b *backend) *framework.Path {
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.WriteOperation: b.pathLogin,
+			logical.UpdateOperation:         b.pathLogin,
+			logical.AliasLookaheadOperation: b.pathLoginAliasLookahead,
 		},
 	}
 }
 
-func (b *backend) pathLogin(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	// Get all our stored state
-	config, err := b.Config(req.Storage)
+func (b *backend) pathLoginAliasLookahead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	token := data.Get("token").(string)
+
+	var verifyResp *verifyCredentialsResp
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
+		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		verifyResp = verifyResponse
+	}
+
+	return &logical.Response{
+		Auth: &logical.Auth{
+			Alias: &logical.Alias{
+				Name: *verifyResp.User.Login,
+			},
+		},
+	}, nil
+}
+
+func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	token := data.Get("token").(string)
+
+	var verifyResp *verifyCredentialsResp
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
+		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		verifyResp = verifyResponse
+	}
+
+	config, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
-	if config.Org == "" {
-		return logical.ErrorResponse(
+
+	resp := &logical.Response{
+		Auth: &logical.Auth{
+			InternalData: map[string]interface{}{
+				"token": token,
+			},
+			Policies: verifyResp.Policies,
+			Metadata: map[string]string{
+				"username": *verifyResp.User.Login,
+				"org":      *verifyResp.Org.Login,
+			},
+			DisplayName: *verifyResp.User.Login,
+			LeaseOptions: logical.LeaseOptions{
+				TTL:       config.TTL,
+				MaxTTL:    config.MaxTTL,
+				Renewable: true,
+			},
+			Alias: &logical.Alias{
+				Name: *verifyResp.User.Login,
+			},
+		},
+	}
+
+	for _, teamName := range verifyResp.TeamNames {
+		if teamName == "" {
+			continue
+		}
+		resp.Auth.GroupAliases = append(resp.Auth.GroupAliases, &logical.Alias{
+			Name: teamName,
+		})
+	}
+
+	return resp, nil
+}
+
+func (b *backend) pathLoginRenew(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	if req.Auth == nil {
+		return nil, fmt.Errorf("request auth was nil")
+	}
+
+	tokenRaw, ok := req.Auth.InternalData["token"]
+	if !ok {
+		return nil, fmt.Errorf("token created in previous version of Vault cannot be validated properly at renewal time")
+	}
+	token := tokenRaw.(string)
+
+	var verifyResp *verifyCredentialsResp
+	if verifyResponse, resp, err := b.verifyCredentials(ctx, req, token); err != nil {
+		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		verifyResp = verifyResponse
+	}
+	if !policyutil.EquivalentPolicies(verifyResp.Policies, req.Auth.Policies) {
+		return nil, fmt.Errorf("policies do not match")
+	}
+
+	config, err := b.Config(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &logical.Response{Auth: req.Auth}
+	resp.Auth.TTL = config.TTL
+	resp.Auth.MaxTTL = config.MaxTTL
+
+	// Remove old aliases
+	resp.Auth.GroupAliases = nil
+
+	for _, teamName := range verifyResp.TeamNames {
+		resp.Auth.GroupAliases = append(resp.Auth.GroupAliases, &logical.Alias{
+			Name: teamName,
+		})
+	}
+
+	return resp, nil
+}
+
+func (b *backend) verifyCredentials(ctx context.Context, req *logical.Request, token string) (*verifyCredentialsResp, *logical.Response, error) {
+	config, err := b.Config(ctx, req.Storage)
+	if err != nil {
+		return nil, nil, err
+	}
+	if config.Organization == "" {
+		return nil, logical.ErrorResponse(
 			"configure the github credential backend first"), nil
 	}
 
-	client, err := b.Client(data.Get("token").(string))
+	client, err := b.Client(token)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if config.BaseURL != "" {
 		parsedURL, err := url.Parse(config.BaseURL)
 		if err != nil {
-			return nil, fmt.Errorf("Successfully parsed base_url when set but failing to parse now: %s", err)
+			return nil, nil, errwrap.Wrapf("successfully parsed base_url when set but failing to parse now: {{err}}", err)
 		}
 		client.BaseURL = parsedURL
 	}
 
 	// Get the user
-	user, _, err := client.Users.Get("")
+	user, _, err := client.Users.Get(ctx, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Verify that the user is part of the organization
@@ -63,11 +182,11 @@ func (b *backend) pathLogin(
 		PerPage: 100,
 	}
 
-	var allOrgs []github.Organization
+	var allOrgs []*github.Organization
 	for {
-		orgs, resp, err := client.Organizations.List("", orgOpt)
+		orgs, resp, err := client.Organizations.List(ctx, "", orgOpt)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		allOrgs = append(allOrgs, orgs...)
 		if resp.NextPage == 0 {
@@ -77,13 +196,13 @@ func (b *backend) pathLogin(
 	}
 
 	for _, o := range allOrgs {
-		if *o.Login == config.Org {
-			org = &o
+		if strings.ToLower(*o.Login) == strings.ToLower(config.Organization) {
+			org = o
 			break
 		}
 	}
 	if org == nil {
-		return logical.ErrorResponse("user is not part of required org"), nil
+		return nil, logical.ErrorResponse("user is not part of required org"), nil
 	}
 
 	// Get the teams that this user is part of to determine the policies
@@ -93,11 +212,11 @@ func (b *backend) pathLogin(
 		PerPage: 100,
 	}
 
-	var allTeams []github.Team
+	var allTeams []*github.Team
 	for {
-		teams, resp, err := client.Organizations.ListUserTeams(teamOpt)
+		teams, resp, err := client.Organizations.ListUserTeams(ctx, teamOpt)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		allTeams = append(allTeams, teams...)
 		if resp.NextPage == 0 {
@@ -119,19 +238,29 @@ func (b *backend) pathLogin(
 		}
 	}
 
-	policiesList, err := b.Map.Policies(req.Storage, teamNames...)
+	groupPoliciesList, err := b.TeamMap.Policies(ctx, req.Storage, teamNames...)
+
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return &logical.Response{
-		Auth: &logical.Auth{
-			Policies: policiesList,
-			Metadata: map[string]string{
-				"username": *user.Login,
-				"org":      *org.Login,
-			},
-			DisplayName: *user.Login,
-		},
-	}, nil
+	userPoliciesList, err := b.UserMap.Policies(ctx, req.Storage, []string{*user.Login}...)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &verifyCredentialsResp{
+		User:      user,
+		Org:       org,
+		Policies:  append(groupPoliciesList, userPoliciesList...),
+		TeamNames: teamNames,
+	}, nil, nil
+}
+
+type verifyCredentialsResp struct {
+	User      *github.User
+	Org       *github.Organization
+	Policies  []string
+	TeamNames []string
 }

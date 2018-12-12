@@ -1,10 +1,10 @@
 package pki
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -27,8 +27,8 @@ valid; defaults to 72 hours`,
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.ReadOperation:  b.pathCRLRead,
-			logical.WriteOperation: b.pathCRLWrite,
+			logical.ReadOperation:   b.pathCRLRead,
+			logical.UpdateOperation: b.pathCRLWrite,
 		},
 
 		HelpSynopsis:    pathConfigCRLHelpSyn,
@@ -36,8 +36,8 @@ valid; defaults to 72 hours`,
 	}
 }
 
-func (b *backend) CRL(s logical.Storage) (*crlConfig, error) {
-	entry, err := s.Get("config/crl")
+func (b *backend) CRL(ctx context.Context, s logical.Storage) (*crlConfig, error) {
+	entry, err := s.Get(ctx, "config/crl")
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +53,8 @@ func (b *backend) CRL(s logical.Storage) (*crlConfig, error) {
 	return &result, nil
 }
 
-func (b *backend) pathCRLRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	config, err := b.CRL(req.Storage)
+func (b *backend) pathCRLRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	config, err := b.CRL(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +63,13 @@ func (b *backend) pathCRLRead(
 	}
 
 	return &logical.Response{
-		Data: structs.New(config).Map(),
+		Data: map[string]interface{}{
+			"expiry": config.Expiry,
+		},
 	}, nil
 }
 
-func (b *backend) pathCRLWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathCRLWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	expiry := d.Get("expiry").(string)
 
 	_, err := time.ParseDuration(expiry)
@@ -85,7 +85,7 @@ func (b *backend) pathCRLWrite(
 	if err != nil {
 		return nil, err
 	}
-	err = req.Storage.Put(entry)
+	err = req.Storage.Put(ctx, entry)
 	if err != nil {
 		return nil, err
 	}

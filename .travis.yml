@@ -1,10 +1,13 @@
-sudo: false
+sudo: required
+dist: trusty
 
 language: go
 
+services:
+  - docker
+
 go:
-  - 1.5.1
-  - tip
+  - "1.10.1"
 
 matrix:
   allow_failures:
@@ -13,9 +16,9 @@ matrix:
 branches:
   only:
     - master
-
-install:
-  - go get github.com/tools/godep
+    - travis-testing
 
 script:
-  - make test testrace
+  - make bootstrap
+  - travis_wait 75 make test
+  - travis_wait 75 make testrace

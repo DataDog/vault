@@ -1,19 +1,21 @@
 package consul
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
 func pathToken(b *backend) *framework.Path {
 	return &framework.Path{
-		Pattern: "creds/" + framework.GenericNameRegex("name"),
+		Pattern: "creds/" + framework.GenericNameRegex("role"),
 		Fields: map[string]*framework.FieldSchema{
-			"name": &framework.FieldSchema{
+			"role": &framework.FieldSchema{
 				Type:        framework.TypeString,
 				Description: "Name of the role",
 			},
@@ -25,16 +27,15 @@ func pathToken(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathTokenRead(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	name := d.Get("name").(string)
+func (b *backend) pathTokenRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	role := d.Get("role").(string)
 
-	entry, err := req.Storage.Get("policy/" + name)
+	entry, err := req.Storage.Get(ctx, "policy/"+role)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving role: %s", err)
+		return nil, errwrap.Wrapf("error retrieving role: {{err}}", err)
 	}
 	if entry == nil {
-		return logical.ErrorResponse(fmt.Sprintf("Role '%s' not found", name)), nil
+		return logical.ErrorResponse(fmt.Sprintf("role %q not found", role)), nil
 	}
 
 	var result roleConfig
@@ -42,18 +43,26 @@ func (b *backend) pathTokenRead(
 		return nil, err
 	}
 
-	// Get the consul client
-	c, err := client(req.Storage)
-	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+	if result.TokenType == "" {
+		result.TokenType = "client"
 	}
 
-	// Generate a random name for the token
-	tokenName := fmt.Sprintf("Vault %s %d", req.DisplayName, time.Now().Unix())
+	// Get the consul client
+	c, userErr, intErr := client(ctx, req.Storage)
+	if intErr != nil {
+		return nil, intErr
+	}
+	if userErr != nil {
+		return logical.ErrorResponse(userErr.Error()), nil
+	}
+
+	// Generate a name for the token
+	tokenName := fmt.Sprintf("Vault %s %s %d", role, req.DisplayName, time.Now().UnixNano())
+
 	// Create it
 	token, _, err := c.ACL().Create(&api.ACLEntry{
 		Name:  tokenName,
-		Type:  "client",
+		Type:  result.TokenType,
 		Rules: result.Policy,
 	}, nil)
 	if err != nil {
@@ -61,9 +70,13 @@ func (b *backend) pathTokenRead(
 	}
 
 	// Use the helper to create the secret
-	s := b.Secret(SecretTokenType)
-	s.DefaultDuration = result.Lease
-	return s.Response(map[string]interface{}{
+	s := b.Secret(SecretTokenType).Response(map[string]interface{}{
 		"token": token,
-	}, nil), nil
+	}, map[string]interface{}{
+		"token": token,
+		"role":  role,
+	})
+	s.Secret.TTL = result.Lease
+
+	return s, nil
 }

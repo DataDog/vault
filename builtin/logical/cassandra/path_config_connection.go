@@ -1,10 +1,11 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/tlsutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -40,6 +41,12 @@ set, this is automatically set to true`,
 effect if a CA certificate is provided`,
 			},
 
+			"tls_min_version": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "tls12",
+				Description: "Minimum TLS version to use. Accepted values are 'tls10', 'tls11' or 'tls12'. Defaults to 'tls12'",
+			},
+
 			"pem_bundle": &framework.FieldSchema{
 				Type: framework.TypeString,
 				Description: `PEM-format, concatenated unencrypted secret key
@@ -55,11 +62,22 @@ backend can be directly passed into this parameter.
 If both this and "pem_bundle" are specified, this will
 take precedence.`,
 			},
+
+			"protocol_version": &framework.FieldSchema{
+				Type:        framework.TypeInt,
+				Description: `The protocol version to use. Defaults to 2.`,
+			},
+
+			"connect_timeout": &framework.FieldSchema{
+				Type:        framework.TypeDurationSecond,
+				Default:     5,
+				Description: `The connection timeout to use. Defaults to 5.`,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.ReadOperation:  b.pathConnectionRead,
-			logical.WriteOperation: b.pathConnectionWrite,
+			logical.ReadOperation:   b.pathConnectionRead,
+			logical.UpdateOperation: b.pathConnectionWrite,
 		},
 
 		HelpSynopsis:    pathConfigConnectionHelpSyn,
@@ -67,9 +85,8 @@ take precedence.`,
 	}
 }
 
-func (b *backend) pathConnectionRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	entry, err := req.Storage.Get("config/connection")
+func (b *backend) pathConnectionRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	entry, err := req.Storage.Get(ctx, "config/connection")
 	if err != nil {
 		return nil, err
 	}
@@ -82,18 +99,23 @@ func (b *backend) pathConnectionRead(
 		return nil, err
 	}
 
-	config.Password = "**********"
-	if len(config.PrivateKey) > 0 {
-		config.PrivateKey = "**********"
+	resp := &logical.Response{
+		Data: map[string]interface{}{
+			"hosts":            config.Hosts,
+			"username":         config.Username,
+			"tls":              config.TLS,
+			"insecure_tls":     config.InsecureTLS,
+			"certificate":      config.Certificate,
+			"issuing_ca":       config.IssuingCA,
+			"protocol_version": config.ProtocolVersion,
+			"connect_timeout":  config.ConnectTimeout,
+			"tls_min_version":  config.TLSMinVersion,
+		},
 	}
-
-	return &logical.Response{
-		Data: structs.New(config).Map(),
-	}, nil
+	return resp, nil
 }
 
-func (b *backend) pathConnectionWrite(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathConnectionWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	hosts := data.Get("hosts").(string)
 	username := data.Get("username").(string)
 	password := data.Get("password").(string)
@@ -108,11 +130,24 @@ func (b *backend) pathConnectionWrite(
 	}
 
 	config := &sessionConfig{
-		Hosts:       hosts,
-		Username:    username,
-		Password:    password,
-		TLS:         data.Get("tls").(bool),
-		InsecureTLS: data.Get("insecure_tls").(bool),
+		Hosts:           hosts,
+		Username:        username,
+		Password:        password,
+		TLS:             data.Get("tls").(bool),
+		InsecureTLS:     data.Get("insecure_tls").(bool),
+		ProtocolVersion: data.Get("protocol_version").(int),
+		ConnectTimeout:  data.Get("connect_timeout").(int),
+	}
+
+	config.TLSMinVersion = data.Get("tls_min_version").(string)
+	if config.TLSMinVersion == "" {
+		return logical.ErrorResponse("failed to get 'tls_min_version' value"), nil
+	}
+
+	var ok bool
+	_, ok = tlsutil.TLSLookup[config.TLSMinVersion]
+	if !ok {
+		return logical.ErrorResponse("invalid 'tls_min_version'"), nil
 	}
 
 	if config.InsecureTLS {
@@ -166,7 +201,7 @@ func (b *backend) pathConnectionWrite(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
@@ -183,7 +218,7 @@ Configure the connection information to talk to Cassandra.
 const pathConfigConnectionHelpDesc = `
 This path configures the connection information used to connect to Cassandra.
 
-"hosts" is a comma-deliniated list of hostnames in the Cassandra cluster.
+"hosts" is a comma-delimited list of hostnames in the Cassandra cluster.
 
 "username" and "password" are self-explanatory, although the given user
 must have superuser access within Cassandra. Note that since this backend

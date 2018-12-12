@@ -3,7 +3,7 @@
 //-------------------------------------------------------------------
 
 variable "download-url" {
-    default = "https://dl.bintray.com/mitchellh/vault/vault_0.1.2_linux_amd64.zip"
+    default = "https://releases.hashicorp.com/vault/0.10.0-beta1/vault_0.10.0-beta1_linux_amd64.zip"
     description = "URL to download Vault"
 }
 
@@ -27,7 +27,7 @@ variable "ami" {
 
 variable "availability-zones" {
     default = "us-east-1a,us-east-1b"
-    description = "Availabilizy zones for launcing the Vault instances"
+    description = "Availability zones for launching the Vault instances"
 }
 
 variable "elb-health-check" {

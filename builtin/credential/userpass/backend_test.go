@@ -1,50 +1,98 @@
 package userpass
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	logicaltest "github.com/hashicorp/vault/logical/testing"
 	"github.com/mitchellh/mapstructure"
 )
 
-func TestBackend_TTLDurations(t *testing.T) {
-	sysTTL := time.Hour * 10
-	sysMaxTTL := time.Hour * 20
-	data1 := map[string]interface{}{
-		"password": "password",
-		"policies": "root",
-		"ttl":      "21h",
-		"max_ttl":  "11h",
+const (
+	testSysTTL    = time.Hour * 10
+	testSysMaxTTL = time.Hour * 20
+)
+
+func TestBackend_TTL(t *testing.T) {
+	var resp *logical.Response
+	var err error
+
+	storage := &logical.InmemStorage{}
+
+	config := logical.TestBackendConfig()
+	config.StorageView = storage
+
+	ctx := context.Background()
+
+	b, err := Factory(ctx, config)
+	if err != nil {
+		t.Fatal(err)
 	}
-	data2 := map[string]interface{}{
-		"password": "password",
-		"policies": "root",
-		"ttl":      "10h",
-		"max_ttl":  "21h",
+	if b == nil {
+		t.Fatalf("failed to create backend")
 	}
-	data3 := map[string]interface{}{
-		"password": "password",
-		"policies": "root",
-		"ttl":      "10h",
-		"max_ttl":  "10h",
+
+	resp, err = b.HandleRequest(ctx, &logical.Request{
+		Path:      "users/testuser",
+		Operation: logical.CreateOperation,
+		Storage:   storage,
+		Data: map[string]interface{}{
+			"password": "testpassword",
+		},
+	})
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("bad: resp: %#v\nerr: %v\n", resp, err)
 	}
-	data4 := map[string]interface{}{
-		"password": "password",
-		"policies": "root",
-		"ttl":      "11h",
-		"max_ttl":  "5h",
+
+	resp, err = b.HandleRequest(ctx, &logical.Request{
+		Path:      "users/testuser",
+		Operation: logical.ReadOperation,
+		Storage:   storage,
+	})
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("bad: resp: %#v\nerr: %v\n", resp, err)
 	}
-	data5 := map[string]interface{}{
-		"password": "password",
+	if resp.Data["ttl"].(float64) != 0 && resp.Data["max_ttl"].(float64) != 0 {
+		t.Fatalf("bad: ttl and max_ttl are not set correctly")
 	}
-	b, err := Factory(&logical.BackendConfig{
+
+	resp, err = b.HandleRequest(ctx, &logical.Request{
+		Path:      "users/testuser",
+		Operation: logical.UpdateOperation,
+		Storage:   storage,
+		Data: map[string]interface{}{
+			"ttl":     "5m",
+			"max_ttl": "10m",
+		},
+	})
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("bad: resp: %#v\nerr: %v\n", resp, err)
+	}
+
+	resp, err = b.HandleRequest(ctx, &logical.Request{
+		Path:      "users/testuser",
+		Operation: logical.ReadOperation,
+		Storage:   storage,
+	})
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("bad: resp: %#v\nerr: %v\n", resp, err)
+	}
+	if resp.Data["ttl"].(float64) != 300 && resp.Data["max_ttl"].(float64) != 600 {
+		t.Fatalf("bad: ttl and max_ttl are not set correctly")
+	}
+}
+
+func TestBackend_basic(t *testing.T) {
+	b, err := Factory(context.Background(), &logical.BackendConfig{
 		Logger: nil,
 		System: &logical.StaticSystemView{
-			DefaultLeaseTTLVal: sysTTL,
-			MaxLeaseTTLVal:     sysMaxTTL,
+			DefaultLeaseTTLVal: testSysTTL,
+			MaxLeaseTTLVal:     testSysMaxTTL,
 		},
 	})
 	if err != nil {
@@ -53,30 +101,26 @@ func TestBackend_TTLDurations(t *testing.T) {
 	logicaltest.Test(t, logicaltest.TestCase{
 		Backend: b,
 		Steps: []logicaltest.TestStep{
-			testUsersWrite(t, "test", data1, true),
-			testUsersWrite(t, "test", data2, true),
-			testUsersWrite(t, "test", data3, false),
-			testUsersWrite(t, "test", data4, false),
-			testLoginWrite(t, "test", data5, false),
-			testLoginWrite(t, "wrong", data5, true),
-		},
-	})
-}
-
-func TestBackend_basic(t *testing.T) {
-	b := Backend()
-
-	logicaltest.Test(t, logicaltest.TestCase{
-		Backend: b,
-		Steps: []logicaltest.TestStep{
 			testAccStepUser(t, "web", "password", "foo"),
-			testAccStepLogin(t, "web", "password"),
+			testAccStepUser(t, "web2", "password", "foo"),
+			testAccStepUser(t, "web3", "password", "foo"),
+			testAccStepList(t, []string{"web", "web2", "web3"}),
+			testAccStepLogin(t, "web", "password", []string{"default", "foo"}),
 		},
 	})
 }
 
 func TestBackend_userCrud(t *testing.T) {
-	b := Backend()
+	b, err := Factory(context.Background(), &logical.BackendConfig{
+		Logger: nil,
+		System: &logical.StaticSystemView{
+			DefaultLeaseTTLVal: testSysTTL,
+			MaxLeaseTTLVal:     testSysMaxTTL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Unable to create backend: %s", err)
+	}
 
 	logicaltest.Test(t, logicaltest.TestCase{
 		Backend: b,
@@ -89,15 +133,107 @@ func TestBackend_userCrud(t *testing.T) {
 	})
 }
 
+func TestBackend_userCreateOperation(t *testing.T) {
+	b, err := Factory(context.Background(), &logical.BackendConfig{
+		Logger: nil,
+		System: &logical.StaticSystemView{
+			DefaultLeaseTTLVal: testSysTTL,
+			MaxLeaseTTLVal:     testSysMaxTTL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Unable to create backend: %s", err)
+	}
+
+	logicaltest.Test(t, logicaltest.TestCase{
+		Backend: b,
+		Steps: []logicaltest.TestStep{
+			testUserCreateOperation(t, "web", "password", "foo"),
+			testAccStepLogin(t, "web", "password", []string{"default", "foo"}),
+		},
+	})
+}
+
+func TestBackend_passwordUpdate(t *testing.T) {
+	b, err := Factory(context.Background(), &logical.BackendConfig{
+		Logger: nil,
+		System: &logical.StaticSystemView{
+			DefaultLeaseTTLVal: testSysTTL,
+			MaxLeaseTTLVal:     testSysMaxTTL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Unable to create backend: %s", err)
+	}
+
+	logicaltest.Test(t, logicaltest.TestCase{
+		Backend: b,
+		Steps: []logicaltest.TestStep{
+			testAccStepUser(t, "web", "password", "foo"),
+			testAccStepReadUser(t, "web", "foo"),
+			testAccStepLogin(t, "web", "password", []string{"default", "foo"}),
+			testUpdatePassword(t, "web", "newpassword"),
+			testAccStepLogin(t, "web", "newpassword", []string{"default", "foo"}),
+		},
+	})
+
+}
+
+func TestBackend_policiesUpdate(t *testing.T) {
+	b, err := Factory(context.Background(), &logical.BackendConfig{
+		Logger: nil,
+		System: &logical.StaticSystemView{
+			DefaultLeaseTTLVal: testSysTTL,
+			MaxLeaseTTLVal:     testSysMaxTTL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Unable to create backend: %s", err)
+	}
+
+	logicaltest.Test(t, logicaltest.TestCase{
+		Backend: b,
+		Steps: []logicaltest.TestStep{
+			testAccStepUser(t, "web", "password", "foo"),
+			testAccStepReadUser(t, "web", "foo"),
+			testAccStepLogin(t, "web", "password", []string{"default", "foo"}),
+			testUpdatePolicies(t, "web", "foo,bar"),
+			testAccStepReadUser(t, "web", "bar,foo"),
+			testAccStepLogin(t, "web", "password", []string{"bar", "default", "foo"}),
+		},
+	})
+
+}
+
+func testUpdatePassword(t *testing.T, user, password string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.UpdateOperation,
+		Path:      "users/" + user + "/password",
+		Data: map[string]interface{}{
+			"password": password,
+		},
+	}
+}
+
+func testUpdatePolicies(t *testing.T, user, policies string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.UpdateOperation,
+		Path:      "users/" + user + "/policies",
+		Data: map[string]interface{}{
+			"policies": policies,
+		},
+	}
+}
+
 func testUsersWrite(t *testing.T, user string, data map[string]interface{}, expectError bool) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "users/" + user,
 		Data:      data,
 		ErrorOk:   true,
 		Check: func(resp *logical.Response) error {
 			if resp == nil && expectError {
-				return fmt.Errorf("Expected error but received nil")
+				return fmt.Errorf("expected error but received nil")
 			}
 			return nil
 		},
@@ -106,36 +242,66 @@ func testUsersWrite(t *testing.T, user string, data map[string]interface{}, expe
 
 func testLoginWrite(t *testing.T, user string, data map[string]interface{}, expectError bool) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "login/" + user,
 		Data:      data,
 		ErrorOk:   true,
 		Check: func(resp *logical.Response) error {
 			if resp == nil && expectError {
-				return fmt.Errorf("Expected error but received nil")
+				return fmt.Errorf("expected error but received nil")
 			}
 			return nil
 		},
 	}
 }
 
-func testAccStepLogin(t *testing.T, user string, pass string) logicaltest.TestStep {
+func testAccStepList(t *testing.T, users []string) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.ListOperation,
+		Path:      "users",
+		Check: func(resp *logical.Response) error {
+			if resp.IsError() {
+				return fmt.Errorf("got error response: %#v", *resp)
+			}
+
+			exp := []string{"web", "web2", "web3"}
+			if !reflect.DeepEqual(exp, resp.Data["keys"].([]string)) {
+				return fmt.Errorf("expected:\n%#v\ngot:\n%#v\n", exp, resp.Data["keys"])
+			}
+			return nil
+		},
+	}
+}
+
+func testAccStepLogin(t *testing.T, user string, pass string, policies []string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.UpdateOperation,
 		Path:      "login/" + user,
 		Data: map[string]interface{}{
 			"password": pass,
 		},
 		Unauthenticated: true,
 
-		Check: logicaltest.TestCheckAuth([]string{"foo"}),
+		Check: logicaltest.TestCheckAuth(policies),
+	}
+}
+
+func testUserCreateOperation(
+	t *testing.T, name string, password string, policies string) logicaltest.TestStep {
+	return logicaltest.TestStep{
+		Operation: logical.CreateOperation,
+		Path:      "users/" + name,
+		Data: map[string]interface{}{
+			"password": password,
+			"policies": policies,
+		},
 	}
 }
 
 func testAccStepUser(
 	t *testing.T, name string, password string, policies string) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "users/" + name,
 		Data: map[string]interface{}{
 			"password": password,
@@ -165,13 +331,13 @@ func testAccStepReadUser(t *testing.T, name string, policies string) logicaltest
 			}
 
 			var d struct {
-				Policies string `mapstructure:"policies"`
+				Policies []string `mapstructure:"policies"`
 			}
 			if err := mapstructure.Decode(resp.Data, &d); err != nil {
 				return err
 			}
 
-			if d.Policies != policies {
+			if !reflect.DeepEqual(d.Policies, policyutil.ParsePolicies(policies)) {
 				return fmt.Errorf("bad: %#v", resp)
 			}
 

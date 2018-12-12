@@ -2,10 +2,22 @@ package certutil
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	mathrand "math/rand"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/fatih/structs"
 	"github.com/hashicorp/vault/api"
@@ -13,18 +25,37 @@ import (
 
 // Tests converting back and forth between a CertBundle and a ParsedCertBundle.
 //
-// Also tests the GetSubjKeyID, GetOctalFormatted, and
+// Also tests the GetSubjKeyID, GetHexFormatted, and
 // ParsedCertBundle.getSigner functions.
 func TestCertBundleConversion(t *testing.T) {
 	cbuts := []*CertBundle{
 		refreshRSACertBundle(),
+		refreshRSACertBundleWithChain(),
+		refreshRSA8CertBundle(),
+		refreshRSA8CertBundleWithChain(),
 		refreshECCertBundle(),
+		refreshECCertBundleWithChain(),
+		refreshEC8CertBundle(),
+		refreshEC8CertBundleWithChain(),
 	}
 
-	for _, cbut := range cbuts {
+	for i, cbut := range cbuts {
 		pcbut, err := cbut.ToParsedCertBundle()
 		if err != nil {
-			t.Fatalf("Error converting to parsed cert bundle: %s", err)
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Errorf("Error converting to parsed cert bundle: %s", err)
+			continue
+		}
+
+		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Errorf(err.Error())
+		}
+
+		cbut, err := pcbut.ToCertBundle()
+		if err != nil {
+			t.Fatalf("Error converting to cert bundle: %s", err)
 		}
 
 		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
@@ -32,6 +63,276 @@ func TestCertBundleConversion(t *testing.T) {
 			t.Fatalf(err.Error())
 		}
 	}
+}
+
+func BenchmarkCertBundleParsing(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		cbuts := []*CertBundle{
+			refreshRSACertBundle(),
+			refreshRSACertBundleWithChain(),
+			refreshRSA8CertBundle(),
+			refreshRSA8CertBundleWithChain(),
+			refreshECCertBundle(),
+			refreshECCertBundleWithChain(),
+			refreshEC8CertBundle(),
+			refreshEC8CertBundleWithChain(),
+		}
+
+		for i, cbut := range cbuts {
+			pcbut, err := cbut.ToParsedCertBundle()
+			if err != nil {
+				b.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+				b.Errorf("Error converting to parsed cert bundle: %s", err)
+				continue
+			}
+
+			cbut, err = pcbut.ToCertBundle()
+			if err != nil {
+				b.Fatalf("Error converting to cert bundle: %s", err)
+			}
+		}
+	}
+}
+
+func TestCertBundleParsing(t *testing.T) {
+	cbuts := []*CertBundle{
+		refreshRSACertBundle(),
+		refreshRSACertBundleWithChain(),
+		refreshRSA8CertBundle(),
+		refreshRSA8CertBundleWithChain(),
+		refreshECCertBundle(),
+		refreshECCertBundleWithChain(),
+		refreshEC8CertBundle(),
+		refreshEC8CertBundleWithChain(),
+	}
+
+	for i, cbut := range cbuts {
+		jsonString, err := json.Marshal(cbut)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf("Error marshaling testing certbundle to JSON: %s", err)
+		}
+		pcbut, err := ParsePKIJSON(jsonString)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf("Error during JSON bundle handling: %s", err)
+		}
+		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf(err.Error())
+		}
+
+		secret := &api.Secret{
+			Data: structs.New(cbut).Map(),
+		}
+		pcbut, err = ParsePKIMap(secret.Data)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf("Error during JSON bundle handling: %s", err)
+		}
+		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf(err.Error())
+		}
+
+		pcbut, err = ParsePEMBundle(cbut.ToPEMBundle())
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf("Error during JSON bundle handling: %s", err)
+		}
+		err = compareCertBundleToParsedCertBundle(cbut, pcbut)
+		if err != nil {
+			t.Logf("Error occurred with bundle %d in test array (index %d).\n", i+1, i)
+			t.Fatalf(err.Error())
+		}
+	}
+}
+
+func compareCertBundleToParsedCertBundle(cbut *CertBundle, pcbut *ParsedCertBundle) error {
+	if cbut == nil {
+		return fmt.Errorf("got nil bundle")
+	}
+	if pcbut == nil {
+		return fmt.Errorf("got nil parsed bundle")
+	}
+
+	switch {
+	case pcbut.Certificate == nil:
+		return fmt.Errorf("parsed bundle has nil certificate")
+	case pcbut.PrivateKey == nil:
+		return fmt.Errorf("parsed bundle has nil private key")
+	}
+
+	switch cbut.PrivateKey {
+	case privRSAKeyPem:
+		if pcbut.PrivateKeyType != RSAPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong private key type: %v, should be 'rsa' (%v)", pcbut.PrivateKeyType, RSAPrivateKey)
+		}
+	case privRSA8KeyPem:
+		if pcbut.PrivateKeyType != RSAPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong pkcs8 private key type: %v, should be 'rsa' (%v)", pcbut.PrivateKeyType, RSAPrivateKey)
+		}
+	case privECKeyPem:
+		if pcbut.PrivateKeyType != ECPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong private key type: %v, should be 'ec' (%v)", pcbut.PrivateKeyType, ECPrivateKey)
+		}
+	case privEC8KeyPem:
+		if pcbut.PrivateKeyType != ECPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong pkcs8 private key type: %v, should be 'ec' (%v)", pcbut.PrivateKeyType, ECPrivateKey)
+		}
+	default:
+		return fmt.Errorf("parsed bundle has unknown private key type")
+	}
+
+	subjKeyID, err := GetSubjKeyID(pcbut.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("error when getting subject key id: %s", err)
+	}
+	if bytes.Compare(subjKeyID, pcbut.Certificate.SubjectKeyId) != 0 {
+		return fmt.Errorf("parsed bundle private key does not match subject key id\nGot\n%#v\nExpected\n%#v\nCert\n%#v", subjKeyID, pcbut.Certificate.SubjectKeyId, *pcbut.Certificate)
+	}
+
+	switch {
+	case len(pcbut.CAChain) > 0 && len(cbut.CAChain) == 0:
+		return fmt.Errorf("parsed bundle ca chain has certs when cert bundle does not")
+	case len(pcbut.CAChain) == 0 && len(cbut.CAChain) > 0:
+		return fmt.Errorf("cert bundle ca chain has certs when parsed cert bundle does not")
+	}
+
+	cb, err := pcbut.ToCertBundle()
+	if err != nil {
+		return fmt.Errorf("thrown error during parsed bundle conversion: %s\n\nInput was: %#v", err, *pcbut)
+	}
+
+	switch {
+	case len(cb.Certificate) == 0:
+		return fmt.Errorf("bundle has nil certificate")
+	case len(cb.PrivateKey) == 0:
+		return fmt.Errorf("bundle has nil private key")
+	case len(cb.CAChain[0]) == 0:
+		return fmt.Errorf("bundle has nil issuing CA")
+	}
+
+	switch pcbut.PrivateKeyType {
+	case RSAPrivateKey:
+		if cb.PrivateKey != privRSAKeyPem && cb.PrivateKey != privRSA8KeyPem {
+			return fmt.Errorf("bundle private key does not match")
+		}
+	case ECPrivateKey:
+		if cb.PrivateKey != privECKeyPem && cb.PrivateKey != privEC8KeyPem {
+			return fmt.Errorf("bundle private key does not match")
+		}
+	default:
+		return fmt.Errorf("certBundle has unknown private key type")
+	}
+
+	if cb.SerialNumber != GetHexFormatted(pcbut.Certificate.SerialNumber.Bytes(), ":") {
+		return fmt.Errorf("bundle serial number does not match")
+	}
+
+	switch {
+	case len(pcbut.CAChain) > 0 && len(cb.CAChain) == 0:
+		return fmt.Errorf("parsed bundle ca chain has certs when cert bundle does not")
+	case len(pcbut.CAChain) == 0 && len(cb.CAChain) > 0:
+		return fmt.Errorf("cert bundle ca chain has certs when parsed cert bundle does not")
+	case !reflect.DeepEqual(cbut.CAChain, cb.CAChain):
+		return fmt.Errorf("cert bundle ca chain does not match: %#v\n\n%#v", cbut.CAChain, cb.CAChain)
+	}
+
+	return nil
+}
+
+func TestCSRBundleConversion(t *testing.T) {
+	csrbuts := []*CSRBundle{
+		refreshRSACSRBundle(),
+		refreshECCSRBundle(),
+	}
+
+	for _, csrbut := range csrbuts {
+		pcsrbut, err := csrbut.ToParsedCSRBundle()
+		if err != nil {
+			t.Fatalf("Error converting to parsed CSR bundle: %v", err)
+		}
+
+		err = compareCSRBundleToParsedCSRBundle(csrbut, pcsrbut)
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+
+		csrbut, err = pcsrbut.ToCSRBundle()
+		if err != nil {
+			t.Fatalf("Error converting to CSR bundle: %v", err)
+		}
+
+		err = compareCSRBundleToParsedCSRBundle(csrbut, pcsrbut)
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+	}
+}
+
+func compareCSRBundleToParsedCSRBundle(csrbut *CSRBundle, pcsrbut *ParsedCSRBundle) error {
+	if csrbut == nil {
+		return fmt.Errorf("got nil bundle")
+	}
+	if pcsrbut == nil {
+		return fmt.Errorf("got nil parsed bundle")
+	}
+
+	switch {
+	case pcsrbut.CSR == nil:
+		return fmt.Errorf("parsed bundle has nil csr")
+	case pcsrbut.PrivateKey == nil:
+		return fmt.Errorf("parsed bundle has nil private key")
+	}
+
+	switch csrbut.PrivateKey {
+	case privRSAKeyPem:
+		if pcsrbut.PrivateKeyType != RSAPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong private key type")
+		}
+	case privECKeyPem:
+		if pcsrbut.PrivateKeyType != ECPrivateKey {
+			return fmt.Errorf("parsed bundle has wrong private key type")
+		}
+	default:
+		return fmt.Errorf("parsed bundle has unknown private key type")
+	}
+
+	csrb, err := pcsrbut.ToCSRBundle()
+	if err != nil {
+		return fmt.Errorf("Thrown error during parsed bundle conversion: %s\n\nInput was: %#v", err, *pcsrbut)
+	}
+
+	switch {
+	case len(csrb.CSR) == 0:
+		return fmt.Errorf("bundle has nil certificate")
+	case len(csrb.PrivateKey) == 0:
+		return fmt.Errorf("bundle has nil private key")
+	}
+
+	switch csrb.PrivateKeyType {
+	case "rsa":
+		if pcsrbut.PrivateKeyType != RSAPrivateKey {
+			return fmt.Errorf("bundle has wrong private key type")
+		}
+		if csrb.PrivateKey != privRSAKeyPem {
+			return fmt.Errorf("bundle rsa private key does not match\nGot\n%#v\nExpected\n%#v", csrb.PrivateKey, privRSAKeyPem)
+		}
+	case "ec":
+		if pcsrbut.PrivateKeyType != ECPrivateKey {
+			return fmt.Errorf("bundle has wrong private key type")
+		}
+		if csrb.PrivateKey != privECKeyPem {
+			return fmt.Errorf("bundle ec private key does not match")
+		}
+	default:
+		return fmt.Errorf("bundle has unknown private key type")
+	}
+
+	return nil
 }
 
 func TestTLSConfig(t *testing.T) {
@@ -77,21 +378,21 @@ func TestTLSConfig(t *testing.T) {
 
 		switch usage {
 		case TLSServer | TLSClient:
-			if len(tlsConfig.ClientCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.ClientCAs.Subjects()[0], pcbut.IssuingCA.RawSubject) != 0 {
+			if len(tlsConfig.ClientCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.ClientCAs.Subjects()[0], pcbut.CAChain[0].Certificate.RawSubject) != 0 {
 				t.Fatalf("CA certificate not in client cert pool as expected")
 			}
-			if len(tlsConfig.RootCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.RootCAs.Subjects()[0], pcbut.IssuingCA.RawSubject) != 0 {
+			if len(tlsConfig.RootCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.RootCAs.Subjects()[0], pcbut.CAChain[0].Certificate.RawSubject) != 0 {
 				t.Fatalf("CA certificate not in root cert pool as expected")
 			}
 		case TLSServer:
-			if len(tlsConfig.ClientCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.ClientCAs.Subjects()[0], pcbut.IssuingCA.RawSubject) != 0 {
+			if len(tlsConfig.ClientCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.ClientCAs.Subjects()[0], pcbut.CAChain[0].Certificate.RawSubject) != 0 {
 				t.Fatalf("CA certificate not in client cert pool as expected")
 			}
 			if tlsConfig.RootCAs != nil {
 				t.Fatalf("Found root pools in config object when not expected")
 			}
 		case TLSClient:
-			if len(tlsConfig.RootCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.RootCAs.Subjects()[0], pcbut.IssuingCA.RawSubject) != 0 {
+			if len(tlsConfig.RootCAs.Subjects()) != 1 || bytes.Compare(tlsConfig.RootCAs.Subjects()[0], pcbut.CAChain[0].Certificate.RawSubject) != 0 {
 				t.Fatalf("CA certificate not in root cert pool as expected")
 			}
 			if tlsConfig.ClientCAs != nil {
@@ -105,240 +406,304 @@ func TestTLSConfig(t *testing.T) {
 	}
 }
 
-func TestCertBundleParsing(t *testing.T) {
-	jsonBundle := refreshRSACertBundle()
-	jsonString, err := json.Marshal(jsonBundle)
-	if err != nil {
-		t.Fatalf("Error marshaling testing certbundle to JSON: %s", err)
-	}
-	pcbut, err := ParsePKIJSON(jsonString)
-	if err != nil {
-		t.Fatalf("Error during JSON bundle handling: %s", err)
-	}
-	err = compareCertBundleToParsedCertBundle(jsonBundle, pcbut)
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	secret := &api.Secret{
-		Data: structs.New(jsonBundle).Map(),
-	}
-	pcbut, err = ParsePKIMap(secret.Data)
-	if err != nil {
-		t.Fatalf("Error during JSON bundle handling: %s", err)
-	}
-	err = compareCertBundleToParsedCertBundle(jsonBundle, pcbut)
-	if err != nil {
-		t.Fatalf(err.Error())
-	}
-
-	pemBundle := strings.Join([]string{
-		jsonBundle.Certificate,
-		jsonBundle.IssuingCA,
-		jsonBundle.PrivateKey,
-	}, "\n")
-	pcbut, err = ParsePEMBundle(pemBundle)
-	if err != nil {
-		t.Fatalf("Error during JSON bundle handling: %s", err)
-	}
-	err = compareCertBundleToParsedCertBundle(jsonBundle, pcbut)
-	if err != nil {
-		t.Fatalf(err.Error())
+func refreshRSA8CertBundle() *CertBundle {
+	initTest.Do(setCerts)
+	return &CertBundle{
+		Certificate: certRSAPem,
+		PrivateKey:  privRSA8KeyPem,
+		CAChain:     []string{issuingCaChainPem[0]},
 	}
 }
 
-func compareCertBundleToParsedCertBundle(cbut *CertBundle, pcbut *ParsedCertBundle) error {
-	if cbut == nil {
-		return fmt.Errorf("Got nil bundle")
-	}
-	if pcbut == nil {
-		return fmt.Errorf("Got nil parsed bundle")
-	}
-
-	switch {
-	case pcbut.Certificate == nil:
-		return fmt.Errorf("Parsed bundle has nil certificate")
-	case pcbut.PrivateKey == nil:
-		return fmt.Errorf("Parsed bundle has nil private key")
-	case pcbut.IssuingCA == nil:
-		return fmt.Errorf("Parsed bundle has nil issuing CA")
-	}
-
-	switch cbut.PrivateKey {
-	case privRSAKeyPem:
-		if pcbut.PrivateKeyType != RSAPrivateKey {
-			return fmt.Errorf("Parsed bundle has wrong private key type")
-		}
-	case privECKeyPem:
-		if pcbut.PrivateKeyType != ECPrivateKey {
-			return fmt.Errorf("Parsed bundle has wrong private key type")
-		}
-	default:
-		return fmt.Errorf("Parsed bundle has unknown private key type")
-	}
-
-	subjKeyID, err := GetSubjKeyID(pcbut.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("Error when getting subject key id: %s", err)
-	}
-	if bytes.Compare(subjKeyID, pcbut.Certificate.SubjectKeyId) != 0 {
-		return fmt.Errorf("Parsed bundle private key does not match subject key id")
-	}
-
-	cb, err := pcbut.ToCertBundle()
-	if err != nil {
-		return fmt.Errorf("Thrown error during parsed bundle conversion: %s\n\nInput was: %#v", err, *pcbut)
-	}
-
-	switch {
-	case len(cb.Certificate) == 0:
-		return fmt.Errorf("Bundle has nil certificate")
-	case len(cb.PrivateKey) == 0:
-		return fmt.Errorf("Bundle has nil private key")
-	case len(cb.IssuingCA) == 0:
-		return fmt.Errorf("Bundle has nil issuing CA")
-	}
-
-	switch cb.PrivateKeyType {
-	case "rsa":
-		if pcbut.PrivateKeyType != RSAPrivateKey {
-			return fmt.Errorf("Bundle has wrong private key type")
-		}
-		if cb.PrivateKey != privRSAKeyPem {
-			return fmt.Errorf("Bundle private key does not match")
-		}
-	case "ec":
-		if pcbut.PrivateKeyType != ECPrivateKey {
-			return fmt.Errorf("Bundle has wrong private key type")
-		}
-		if cb.PrivateKey != privECKeyPem {
-			return fmt.Errorf("Bundle private key does not match")
-		}
-	default:
-		return fmt.Errorf("Bundle has unknown private key type")
-	}
-
-	if cb.SerialNumber != GetOctalFormatted(pcbut.Certificate.SerialNumber.Bytes(), ":") {
-		return fmt.Errorf("Bundle serial number does not match")
-	}
-
-	return nil
+func refreshRSA8CertBundleWithChain() *CertBundle {
+	initTest.Do(setCerts)
+	ret := refreshRSA8CertBundle()
+	ret.CAChain = issuingCaChainPem
+	return ret
 }
 
 func refreshRSACertBundle() *CertBundle {
+	initTest.Do(setCerts)
 	return &CertBundle{
 		Certificate: certRSAPem,
+		CAChain:     []string{issuingCaChainPem[0]},
 		PrivateKey:  privRSAKeyPem,
-		IssuingCA:   issuingCaPem,
 	}
+}
+
+func refreshRSACertBundleWithChain() *CertBundle {
+	initTest.Do(setCerts)
+	ret := refreshRSACertBundle()
+	ret.CAChain = issuingCaChainPem
+	return ret
 }
 
 func refreshECCertBundle() *CertBundle {
+	initTest.Do(setCerts)
 	return &CertBundle{
 		Certificate: certECPem,
+		CAChain:     []string{issuingCaChainPem[0]},
 		PrivateKey:  privECKeyPem,
-		IssuingCA:   issuingCaPem,
 	}
 }
 
-const (
-	privRSAKeyPem = `-----BEGIN RSA PRIVATE KEY-----
-MIIEowIBAAKCAQEAt3ZJUaztCRiVg87P0y8T7QMNFQi61BCSIKepxXXWc7zi5JJS
-MfQAstXJEqBYiShsSpYm6soiT6hX074t7wQAHGS3+u7qNogWpmTAUTUnNIM+QCxH
-2Nc/kzYxaWajupVzgGvLeiqU3d4tIUk/ZkftvWJryr2hZc8zEN3C4pGS/2F+RQ+z
-Ov+BpAI1BdbQGhF7m92vn6KS/iWsqmwHG9oChgvWeBHjWUI8qGauBc+it4S5RxfN
-8JJIBXUIZtbaqFZzgjv8kUDyqoQGvkY/4Ce1K0bFJsM7wmMPv+5QscIBF4KWgN0k
-TSMPPXfnn/QIAfhaYQkT9MjwGr6+B3SODNGCTQIDAQABAoIBAHtSwhprGbNhmS/P
-F5ioLsbFpEedZKkksnXM/qxDd/K45/Qp/6KgmM+eMdmZe6pHR/QjVunBEqtlSBSH
-5KykjcaIVbwSWdJqTH9xfm2YQ1BjYLcWjP1QQ+YbKb/mRO0phUiwLUlj0koKDWAw
-srN4anFB9Z+FNTcQvwz5ZQWUQbH0neQtWO1nDvLsScgu1kchoEzJEJaFOQ1+HfGe
-WxD766fZyqZQi5+cLrhOqHOGSlO+IFVe0hguiEHFr9LEPTXXkZtOR4wTf7j1Us8s
-1KQ/jv01sx9S7HEbZJurzIjS23OywEUdJd1EsIE2lJV2QUwSiAsPYZOSQZlgOGzP
-VRKVkGkCgYEA1u+pVP2r+xSxYy8KcdcRCdGGBh00VLx1yJRHWZ5YjF56hp0R0cG+
-xGLar5KCdBpr4jJnQGIrx8lw3SDCt4EXlxgJxitXlBtiKByM7/mYRRfURr9WMRr4
-88GQlWDbo2Xalnuac0qlkFqVIg0BaW+Z15A/E1L69aUxaR0ozlA9Jl8CgYEA2oNA
-5F2otqzo9eNYucNAjihVhATd11DECQvbIQp/0bEJe0Znnzq/QIGIOVapC0VKGBwB
-P5DuLL1P/nTPjjE/ZhjFuhMNM5PzC6obAjBh+gCpc+c+21Qerv7RKUTi2sGTzRHu
-lpccRDfuF8bhzD6lAo50FpSmPE/ovZzb9+IsXtMCgYBVnUdM9HKh47846870Q5+k
-0pHZM57ZtewQxoeZOgq5dxTFNCGZ9NvBLENBtlFCYBfjFQKt0azwutu7KUaGg+Ra
-qheSmUccVsAFjEHTgQ9XTkOfHq39h2ns5ohqCBfVAUhNstR14iEK3BoVYyrRzcNw
-6yNE1kPivzdsUFIlxC5nbwKBgDUUjT7sQX+eoTiZ8YOumo/t3Fglln4ncHeCGcj8
-8+/MQbFgeOuFKdBRpvXGx2mle0pAA02dtz3G/xeg6IpyDCSQ//cjiaFt3yyGNeli
-N2qznnY5RluhI5L+83BC+5iITY8TPBH4wzUPIRdFiLREw3DLigeyNG+SOcdVw1mD
-56NhAoGBALFh3sGkhvPiI/G/i/5tGZVA/dS/4DVXOoHW43+ZDHWEwqiN6vTf/VVi
-cm+8kcfLY1E5fSf/4e7mIQq7o5qVn9Y3HWsajS1FFeznJjPj4Jaa1HvegNcycAzs
-XOQ7xy23/8wUupgNeD1mFdSFCXQ3UedsJuVBHsElPc5W74q4F4+F
------END RSA PRIVATE KEY-----`
+func refreshECCertBundleWithChain() *CertBundle {
+	initTest.Do(setCerts)
+	ret := refreshECCertBundle()
+	ret.CAChain = issuingCaChainPem
+	return ret
+}
 
-	certRSAPem = `-----BEGIN CERTIFICATE-----
-MIID+jCCAuSgAwIBAgIUcFCL9ESWTKLE6RqSYV7iZ78f1KcwCwYJKoZIhvcNAQEL
-MBsxGTAXBgNVBAMMEFZhdWx0IFRlc3RpbmcgQ0EwHhcNMTUwNjE5MTcyMzA0WhcN
-MTUwNzAzMTcyMzA0WjBPMRIwEAYDVQQDEwlsb2NhbGhvc3QxOTA3BgNVBAUTMDY0
-MTIwMzIxNzY3NTk2MjQyMjU0OTg5MTUxMzAyMjg1NzQ0NTc0OTkzMjY3NjI2MzCC
-ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALd2SVGs7QkYlYPOz9MvE+0D
-DRUIutQQkiCnqcV11nO84uSSUjH0ALLVyRKgWIkobEqWJurKIk+oV9O+Le8EABxk
-t/ru6jaIFqZkwFE1JzSDPkAsR9jXP5M2MWlmo7qVc4Bry3oqlN3eLSFJP2ZH7b1i
-a8q9oWXPMxDdwuKRkv9hfkUPszr/gaQCNQXW0BoRe5vdr5+ikv4lrKpsBxvaAoYL
-1ngR41lCPKhmrgXPoreEuUcXzfCSSAV1CGbW2qhWc4I7/JFA8qqEBr5GP+AntStG
-xSbDO8JjD7/uULHCAReCloDdJE0jDz1355/0CAH4WmEJE/TI8Bq+vgd0jgzRgk0C
-AwEAAaOCAQQwggEAMA4GA1UdDwEB/wQEAwIAqDAdBgNVHSUEFjAUBggrBgEFBQcD
-AQYIKwYBBQUHAwIwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQUZHtkxSX5GVAYo3h8
-B8TGJ36vTH4wHwYDVR0jBBgwFoAU5JzeXhccaOWk5X6vhuGV7NwLMVkwTgYDVR0R
-BEcwRYIJbG9jYWxob3N0gg9mb28uZXhhbXBsZS5jb22CD2Jhci5leGFtcGxlLmNv
-bYcEgAMFBocQ/gEAAAAAAAAAAAAAAAAAATAxBgNVHR8EKjAoMCagJKAihiBodHRw
-Oi8vbG9jYWxob3N0OjgyMDAvdjEvcGtpL2NybDALBgkqhkiG9w0BAQsDggEBAAps
-W2ZDOAfwWufclmGPHt+YRXXSTWvPfF/cBeg5Oq/F8qUCVMHqdE/+EDWzh+Kz8jp0
-ggklnh76frROvHxygbVD2Hs9ACzgpnHPy8FYOdN+OblvAMtGlMyTq/5XheasmWdY
-FFH/ft6tReG7BjGgfdyH8yL/R6b/RtU/qPlowfrZgAzOv7/ou6yRlfjIhsWbne/S
-SQuGASRxRp3Txp7Cf3RcdCwVuiQhFLVeVHH+atTc8v2DO/CLfi9enQo96qUku8Bd
-b5QPKIV0sQdtwGV5fo2JGd25rWpCo6TkAM9EeNkcVze8wgArSRk8zLkvM/5z+5sn
-Qaka08px4wljGQ2Wc88=
------END CERTIFICATE-----`
+func refreshRSACSRBundle() *CSRBundle {
+	initTest.Do(setCerts)
+	return &CSRBundle{
+		CSR:        csrRSAPem,
+		PrivateKey: privRSAKeyPem,
+	}
+}
 
-	privECKeyPem = `-----BEGIN EC PRIVATE KEY-----
-MGgCAQEEHM3nuYLlrvawBN9hGVcu9mpaCEr7LMe44a7oQOygBwYFK4EEACGhPAM6
-AATBZ3VXwBE9oeSREpM5b25PW6WiuLb4EXWpKZyjj552QYKYe7QBuGe9wvvgOeCB
-ovN3tSuGKzTiUA==
------END EC PRIVATE KEY-----`
+func refreshECCSRBundle() *CSRBundle {
+	initTest.Do(setCerts)
+	return &CSRBundle{
+		CSR:        csrECPem,
+		PrivateKey: privECKeyPem,
+	}
+}
 
-	certECPem = `-----BEGIN CERTIFICATE-----
-MIIDJDCCAg6gAwIBAgIUM3J02tw0ZvpHUVHv6t8kcoft2/MwCwYJKoZIhvcNAQEL
-MBsxGTAXBgNVBAMMEFZhdWx0IFRlc3RpbmcgQ0EwHhcNMTUwNjE5MTcyODQyWhcN
-MTUwNzAzMTcyODQyWjBPMRIwEAYDVQQDEwlsb2NhbGhvc3QxOTA3BgNVBAUTMDI5
-MzcxMDk5Mzc2NDA3NDYyNjg3MTQzODcwMjc3Njg1OTkzMTkyMzkxNjM4MTE3MTBO
-MBAGByqGSM49AgEGBSuBBAAhAzoABMFndVfAET2h5JESkzlvbk9bpaK4tvgRdakp
-nKOPnnZBgph7tAG4Z73C++A54IGi83e1K4YrNOJQo4IBBDCCAQAwDgYDVR0PAQH/
-BAQDAgCoMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAMBgNVHRMBAf8E
-AjAAMB0GA1UdDgQWBBQiFoWDvInznUGjdJPjBAyoxIkQITAfBgNVHSMEGDAWgBTk
-nN5eFxxo5aTlfq+G4ZXs3AsxWTBOBgNVHREERzBFgglsb2NhbGhvc3SCD2Zvby5l
-eGFtcGxlLmNvbYIPYmFyLmV4YW1wbGUuY29thwSAAwUGhxD+AQAAAAAAAAAAAAAA
-AAABMDEGA1UdHwQqMCgwJqAkoCKGIGh0dHA6Ly9sb2NhbGhvc3Q6ODIwMC92MS9w
-a2kvY3JsMAsGCSqGSIb3DQEBCwOCAQEA0RU18OdSdt2k4FKWyUS7EhVFOybiUHof
-1n9EeBoxd7fEP/IuQnJGr3CPV5LRFdHRxkihf4N5bRjsst7cqczaIZZLWkAj+P/2
-JxBqv2Hm57dwaw2gtwt3GcYN/5j76fYaoZOgPMqas72vYgnBgdKQs8GYSoy7BVpC
-x3nTYHwlOF+sM4wuVSi78lwkcgADF5GIWXrM3tYilmcT9fNbUgSvcVWdNTRJ0W+m
-S2AF+4eby5PC9U8eIoCnZPRNmH0jZbNWzZyD0hDhBrDlaEbS2QXKRURPHzht/SqN
-nWWcpQG3B8EI7p749dP5L+idi3ajHIH8vm/PK+o5TRrcHB585MlErQ==
------END CERTIFICATE-----`
+func refreshEC8CertBundle() *CertBundle {
+	initTest.Do(setCerts)
+	return &CertBundle{
+		Certificate: certECPem,
+		PrivateKey:  privEC8KeyPem,
+		CAChain:     []string{issuingCaChainPem[0]},
+	}
+}
 
-	issuingCaPem = `-----BEGIN CERTIFICATE-----
-MIIDUTCCAjmgAwIBAgIJAKM+z4MSfw2mMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV
-BAMMEFZhdWx0IFRlc3RpbmcgQ0EwHhcNMTUwNjAxMjA1MTUzWhcNMjUwNTI5MjA1
-MTUzWjAbMRkwFwYDVQQDDBBWYXVsdCBUZXN0aW5nIENBMIIBIjANBgkqhkiG9w0B
-AQEFAAOCAQ8AMIIBCgKCAQEA1eKB2nFbRqTFs7KyZjbzB5VRCBbnLZfEXVP1c3bH
-e+YGjlfl34cy52dmancUzOf1/Jfo+VglocjTLVy5wHSGJwQYs8b6pEuuvAVo/6wU
-L5Z7ZlQDR4kDe5Q+xgoRT6Bi/Bs57E+fNYgyUq/YAUY5WLuC+ZliCbJkLnb15Itu
-P1yVUTDXTYORRE3qJS5RRol8D3QvteG9LyPEc7C+jsm5iBCagyxluzU0dnEOib5q
-7xwZncoMbQz+rZH3QnwOij41FOGRPazrD5Mv6xLBkFnE5VAJ+GIgvd4bpOwvYMuo
-fvF4PS7SFzxkGssMLlICap6PFpKz86DpAoDxPuoZeOhU4QIDAQABo4GXMIGUMB0G
-A1UdDgQWBBTknN5eFxxo5aTlfq+G4ZXs3AsxWTAfBgNVHSMEGDAWgBTknN5eFxxo
-5aTlfq+G4ZXs3AsxWTAxBgNVHR8EKjAoMCagJKAihiBodHRwOi8vbG9jYWxob3N0
-OjgyMDAvdjEvcGtpL2NybDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIB
-BjANBgkqhkiG9w0BAQsFAAOCAQEAsINcA4PZm+OyldgNrwRVgxoSrhV1I9zszhc9
-VV340ZWlpTTxFKVb/K5Hg+jMF9tv70X1HwlYdlutE6KdrsA3gks5zanh4/3zlrYk
-ABNBmSD6SSU2HKX1bFCBAAS3YHONE5o1K5tzwLsMl5uilNf+Wid3NjFnQ4KfuYI5
-loN/opnM6+a/O3Zua8RAuMMAv9wyqwn88aVuLvVzDNSMe5qC5kkuLGmRkNgY06rI
-S/fXIHIOldeQxgYCqhdVmcDWJ1PtVaDfBsKVpRg1GRU8LUGw2E4AY+twd+J2FBfa
-G/7g4koczXLoUM3OQXd5Aq2cs4SS1vODrYmgbioFsQ3eDHd1fg==
------END CERTIFICATE-----`
+func refreshEC8CertBundleWithChain() *CertBundle {
+	initTest.Do(setCerts)
+	ret := refreshEC8CertBundle()
+	ret.CAChain = issuingCaChainPem
+	return ret
+}
+
+func setCerts() {
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	subjKeyID, err := GetSubjKeyID(caKey)
+	if err != nil {
+		panic(err)
+	}
+	caCertTemplate := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName: "root.localhost",
+		},
+		SubjectKeyId:          subjKeyID,
+		DNSNames:              []string{"root.localhost"},
+		KeyUsage:              x509.KeyUsage(x509.KeyUsageCertSign | x509.KeyUsageCRLSign),
+		SerialNumber:          big.NewInt(mathrand.Int63()),
+		NotBefore:             time.Now().Add(-30 * time.Second),
+		NotAfter:              time.Now().Add(262980 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA: true,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caCertTemplate, caCertTemplate, caKey.Public(), caKey)
+	if err != nil {
+		panic(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		panic(err)
+	}
+	caCertPEMBlock := &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: caBytes,
+	}
+	caCertPEM := strings.TrimSpace(string(pem.EncodeToMemory(caCertPEMBlock)))
+
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	subjKeyID, err = GetSubjKeyID(intKey)
+	if err != nil {
+		panic(err)
+	}
+	intCertTemplate := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName: "int.localhost",
+		},
+		SubjectKeyId:          subjKeyID,
+		DNSNames:              []string{"int.localhost"},
+		KeyUsage:              x509.KeyUsage(x509.KeyUsageCertSign | x509.KeyUsageCRLSign),
+		SerialNumber:          big.NewInt(mathrand.Int63()),
+		NotBefore:             time.Now().Add(-30 * time.Second),
+		NotAfter:              time.Now().Add(262980 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA: true,
+	}
+	intBytes, err := x509.CreateCertificate(rand.Reader, intCertTemplate, caCert, intKey.Public(), caKey)
+	if err != nil {
+		panic(err)
+	}
+	intCert, err := x509.ParseCertificate(intBytes)
+	if err != nil {
+		panic(err)
+	}
+	intCertPEMBlock := &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: intBytes,
+	}
+	intCertPEM := strings.TrimSpace(string(pem.EncodeToMemory(intCertPEMBlock)))
+
+	// EC generation
+	{
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+		subjKeyID, err := GetSubjKeyID(key)
+		if err != nil {
+			panic(err)
+		}
+		certTemplate := &x509.Certificate{
+			Subject: pkix.Name{
+				CommonName: "localhost",
+			},
+			SubjectKeyId: subjKeyID,
+			DNSNames:     []string{"localhost"},
+			ExtKeyUsage: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageClientAuth,
+			},
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
+			SerialNumber: big.NewInt(mathrand.Int63()),
+			NotBefore:    time.Now().Add(-30 * time.Second),
+			NotAfter:     time.Now().Add(262980 * time.Hour),
+		}
+		csrTemplate := &x509.CertificateRequest{
+			Subject: pkix.Name{
+				CommonName: "localhost",
+			},
+			DNSNames: []string{"localhost"},
+		}
+		csrBytes, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+		if err != nil {
+			panic(err)
+		}
+		csrPEMBlock := &pem.Block{
+			Type:  "CERTIFICATE REQUEST",
+			Bytes: csrBytes,
+		}
+		csrECPem = strings.TrimSpace(string(pem.EncodeToMemory(csrPEMBlock)))
+		certBytes, err := x509.CreateCertificate(rand.Reader, certTemplate, intCert, key.Public(), intKey)
+		if err != nil {
+			panic(err)
+		}
+		certPEMBlock := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certBytes,
+		}
+		certECPem = strings.TrimSpace(string(pem.EncodeToMemory(certPEMBlock)))
+		marshaledKey, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			panic(err)
+		}
+		keyPEMBlock := &pem.Block{
+			Type:  "EC PRIVATE KEY",
+			Bytes: marshaledKey,
+		}
+		privECKeyPem = strings.TrimSpace(string(pem.EncodeToMemory(keyPEMBlock)))
+		marshaledKey, err = x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			panic(err)
+		}
+		keyPEMBlock = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: marshaledKey,
+		}
+		privEC8KeyPem = strings.TrimSpace(string(pem.EncodeToMemory(keyPEMBlock)))
+	}
+
+	// RSA generation
+	{
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		subjKeyID, err := GetSubjKeyID(key)
+		if err != nil {
+			panic(err)
+		}
+		certTemplate := &x509.Certificate{
+			Subject: pkix.Name{
+				CommonName: "localhost",
+			},
+			SubjectKeyId: subjKeyID,
+			DNSNames:     []string{"localhost"},
+			ExtKeyUsage: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageClientAuth,
+			},
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
+			SerialNumber: big.NewInt(mathrand.Int63()),
+			NotBefore:    time.Now().Add(-30 * time.Second),
+			NotAfter:     time.Now().Add(262980 * time.Hour),
+		}
+		csrTemplate := &x509.CertificateRequest{
+			Subject: pkix.Name{
+				CommonName: "localhost",
+			},
+			DNSNames: []string{"localhost"},
+		}
+		csrBytes, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+		if err != nil {
+			panic(err)
+		}
+		csrPEMBlock := &pem.Block{
+			Type:  "CERTIFICATE REQUEST",
+			Bytes: csrBytes,
+		}
+		csrRSAPem = strings.TrimSpace(string(pem.EncodeToMemory(csrPEMBlock)))
+		certBytes, err := x509.CreateCertificate(rand.Reader, certTemplate, intCert, key.Public(), intKey)
+		if err != nil {
+			panic(err)
+		}
+		certPEMBlock := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: certBytes,
+		}
+		certRSAPem = strings.TrimSpace(string(pem.EncodeToMemory(certPEMBlock)))
+		marshaledKey := x509.MarshalPKCS1PrivateKey(key)
+		keyPEMBlock := &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: marshaledKey,
+		}
+		privRSAKeyPem = strings.TrimSpace(string(pem.EncodeToMemory(keyPEMBlock)))
+		marshaledKey, err = x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			panic(err)
+		}
+		keyPEMBlock = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: marshaledKey,
+		}
+		privRSA8KeyPem = strings.TrimSpace(string(pem.EncodeToMemory(keyPEMBlock)))
+	}
+
+	issuingCaChainPem = []string{intCertPEM, caCertPEM}
+}
+
+var (
+	initTest          sync.Once
+	privRSA8KeyPem    string
+	privRSAKeyPem     string
+	csrRSAPem         string
+	certRSAPem        string
+	privECKeyPem      string
+	csrECPem          string
+	privEC8KeyPem     string
+	certECPem         string
+	issuingCaChainPem []string
 )

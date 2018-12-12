@@ -1,35 +1,43 @@
 package consul
 
 import (
+	"context"
+
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
-	return Backend().Setup(conf)
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
+	b := Backend()
+	if err := b.Setup(ctx, conf); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
-func Backend() *framework.Backend {
+func Backend() *backend {
 	var b backend
 	b.Backend = &framework.Backend{
 		PathsSpecial: &logical.Paths{
-			Root: []string{
-				"config/*",
+			SealWrapStorage: []string{
+				"config/access",
 			},
 		},
 
 		Paths: []*framework.Path{
 			pathConfigAccess(),
+			pathListRoles(&b),
 			pathRoles(),
 			pathToken(&b),
 		},
 
 		Secrets: []*framework.Secret{
-			secretToken(),
+			secretToken(&b),
 		},
+		BackendType: logical.TypeLogical,
 	}
 
-	return b.Backend
+	return &b
 }
 
 type backend struct {

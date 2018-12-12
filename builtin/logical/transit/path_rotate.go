@@ -1,13 +1,13 @@
 package transit
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func pathRotate() *framework.Path {
+func (b *backend) pathRotate() *framework.Path {
 	return &framework.Path{
 		Pattern: "keys/" + framework.GenericNameRegex("name") + "/rotate",
 		Fields: map[string]*framework.FieldSchema{
@@ -18,7 +18,7 @@ func pathRotate() *framework.Path {
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.WriteOperation: pathRotateWrite,
+			logical.UpdateOperation: b.pathRotateWrite,
 		},
 
 		HelpSynopsis:    pathRotateHelpSyn,
@@ -26,23 +26,23 @@ func pathRotate() *framework.Path {
 	}
 }
 
-func pathRotateWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRotateWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := d.Get("name").(string)
 
-	// Check if the policy already exists
-	policy, err := getPolicy(req, name)
+	// Get the policy
+	p, lock, err := b.lm.GetPolicyExclusive(ctx, req.Storage, name)
+	if lock != nil {
+		defer lock.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
-	if policy == nil {
-		return logical.ErrorResponse(
-				fmt.Sprintf("no existing role named %s could be found", name)),
-			logical.ErrInvalidRequest
+	if p == nil {
+		return logical.ErrorResponse("key not found"), logical.ErrInvalidRequest
 	}
 
-	// Generate the policy
-	err = policy.rotate(req.Storage)
+	// Rotate the policy
+	err = p.Rotate(ctx, req.Storage)
 
 	return nil, err
 }

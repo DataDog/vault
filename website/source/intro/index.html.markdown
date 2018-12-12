@@ -8,29 +8,28 @@ description: |-
 
 # Introduction to Vault
 
-Welcome to the intro guide to Vault! This guide is the best
-place to start with Vault. We cover what Vault is, what
-problems it can solve, how it compares to existing software,
-and contains a quick start for using Vault.
+Welcome to the introduction guide to HashiCorp Vault! This guide is the best
+place to get started with Vault. This guide covers what Vault is, what problems
+it can solve, how it compares to existing software, and contains a quick start
+for using Vault.
 
 If you are already familiar with the basics of Vault, the
-[documentation](/docs/index.html) provides a better reference
-guide for all available features as well as internals.
+[documentation](/docs/index.html) provides a better reference guide for all
+available features as well as internals.
 
 ## What is Vault?
 
-Vault is a tool for securely accessing _secrets_. A secret is anything
-that you want to tightly control access to, such as API keys, passwords,
-certificates, and more. Vault provides a unified interface to any
-secret, while providing tight access control and recording a detailed
-audit log.
+Vault is a tool for securely accessing _secrets_. A secret is anything that you
+want to tightly control access to, such as API keys, passwords, or certificates.
+Vault provides a unified interface to any secret, while providing tight access
+control and recording a detailed audit log.
 
-A modern system requires access to a multitude of secrets: database
-credentials, API keys for external services, credentials for
-service-oriented architecture communication, etc. Understanding who is
-accessing what secrets is already very difficult and platform-specific.
-Adding on key rolling, secure storage, and detailed audit logs is almost
-impossible without a custom solution. This is where Vault steps in.
+A modern system requires access to a multitude of secrets: database credentials,
+API keys for external services, credentials for service-oriented architecture
+communication, etc. Understanding who is accessing what secrets is already very
+difficult and platform-specific. Adding on key rolling, secure storage, and
+detailed audit logs is almost impossible without a custom solution. This is
+where Vault steps in.
 
 Examples work best to showcase Vault. Please see the
 [use cases](/intro/use-cases.html).
@@ -40,7 +39,7 @@ The key features of Vault are:
 * **Secure Secret Storage**: Arbitrary key/value secrets can be stored
   in Vault. Vault encrypts these secrets prior to writing them to persistent
   storage, so gaining access to the raw storage isn't enough to access
-  your secrets. Vault can write to disk, [Consul](http://www.consul.io),
+  your secrets. Vault can write to disk, [Consul](https://www.consul.io),
   and more.
 
 * **Dynamic Secrets**: Vault can generate secrets on-demand for some
@@ -56,7 +55,7 @@ The key features of Vault are:
   having to design their own encryption methods.
 
 * **Leasing and Renewal**: All secrets in Vault have a _lease_ associated
-  with it. At the end of the lease, Vault will automatically revoke that
+  with them. At the end of the lease, Vault will automatically revoke that
   secret. Clients are able to renew leases via built-in renew APIs.
 
 * **Revocation**: Vault has built-in support for secret revocation. Vault

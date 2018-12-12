@@ -1,22 +1,27 @@
 package testing
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 
+	log "github.com/hashicorp/go-hclog"
+
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/api"
+	"github.com/hashicorp/vault/helper/logging"
 	"github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
-	"github.com/hashicorp/vault/physical"
+	"github.com/hashicorp/vault/physical/inmem"
 	"github.com/hashicorp/vault/vault"
 )
 
 // TestEnvVar must be set to a non-empty value for acceptance tests to run.
-const TestEnvVar = "TF_ACC"
+const TestEnvVar = "VAULT_ACC"
 
 // TestCase is a single set of tests to run for a backend. A TestCase
 // should generally map 1:1 to each test method for your acceptance
@@ -42,6 +47,11 @@ type TestCase struct {
 	// in the case that the test can't guarantee all resources were
 	// properly cleaned up.
 	Teardown TestTeardownFunc
+
+	// AcceptanceTest, if set, the test case will be run only if
+	// the environment variable VAULT_ACC is set. If not this test case
+	// will be run as a unit test.
+	AcceptanceTest bool
 }
 
 // TestStep is a single step within a TestCase.
@@ -60,6 +70,10 @@ type TestStep struct {
 	// step will be called
 	Check TestCheckFunc
 
+	// PreFlight is called directly before execution of the request, allowing
+	// modification of the request parameters (e.g. Path) with dynamic values.
+	PreFlight PreFlightFunc
+
 	// ErrorOk, if true, will let erroneous responses through to the check
 	ErrorOk bool
 
@@ -69,19 +83,23 @@ type TestStep struct {
 	// RemoteAddr, if set, will set the remote addr on the request.
 	RemoteAddr string
 
-	// ConnState, if set, will set the tls conneciton state
+	// ConnState, if set, will set the tls connection state
 	ConnState *tls.ConnectionState
 }
 
 // TestCheckFunc is the callback used for Check in TestStep.
 type TestCheckFunc func(*logical.Response) error
 
+// PreFlightFunc is used to modify request parameters directly before execution
+// in each TestStep.
+type PreFlightFunc func(*logical.Request) error
+
 // TestTeardownFunc is the callback used for Teardown in TestCase.
 type TestTeardownFunc func() error
 
 // Test performs an acceptance test on a backend with the given test case.
 //
-// Tests are not run unless an environmental variable "TF_ACC" is
+// Tests are not run unless an environmental variable "VAULT_ACC" is
 // set to some non-empty value. This is to avoid test cases surprising
 // a user by creating real resources.
 //
@@ -89,19 +107,19 @@ type TestTeardownFunc func() error
 // the "-test.v" flag) is set. Because some acceptance tests take quite
 // long, we require the verbose flag so users are able to see progress
 // output.
-func Test(t TestT, c TestCase) {
+func Test(tt TestT, c TestCase) {
 	// We only run acceptance tests if an env var is set because they're
 	// slow and generally require some outside configuration.
-	if os.Getenv(TestEnvVar) == "" {
-		t.Skip(fmt.Sprintf(
+	if c.AcceptanceTest && os.Getenv(TestEnvVar) == "" {
+		tt.Skip(fmt.Sprintf(
 			"Acceptance tests skipped unless env '%s' set",
 			TestEnvVar))
 		return
 	}
 
 	// We require verbose mode so that the user knows what is going on.
-	if !testTesting && !testing.Verbose() {
-		t.Fatal("Acceptance tests must be run with the -v flag on tests")
+	if c.AcceptanceTest && !testTesting && !testing.Verbose() {
+		tt.Fatal("Acceptance tests must be run with the -v flag on tests")
 		return
 	}
 
@@ -112,42 +130,55 @@ func Test(t TestT, c TestCase) {
 
 	// Check that something is provided
 	if c.Backend == nil && c.Factory == nil {
-		t.Fatal("Must provide either Backend or Factory")
+		tt.Fatal("Must provide either Backend or Factory")
+		return
 	}
 
 	// Create an in-memory Vault core
+	logger := logging.NewVaultLogger(log.Trace)
+
+	phys, err := inmem.NewInmem(nil, logger)
+	if err != nil {
+		tt.Fatal(err)
+		return
+	}
+
 	core, err := vault.NewCore(&vault.CoreConfig{
-		Physical: physical.NewInmem(),
+		Physical: phys,
 		LogicalBackends: map[string]logical.Factory{
-			"test": func(conf *logical.BackendConfig) (logical.Backend, error) {
+			"test": func(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 				if c.Backend != nil {
 					return c.Backend, nil
 				}
-				return c.Factory(conf)
+				return c.Factory(ctx, conf)
 			},
 		},
 		DisableMlock: true,
 	})
 	if err != nil {
-		t.Fatal("error initializing core: ", err)
+		tt.Fatal("error initializing core: ", err)
 		return
 	}
 
 	// Initialize the core
-	init, err := core.Initialize(&vault.SealConfig{
-		SecretShares:    1,
-		SecretThreshold: 1,
+	init, err := core.Initialize(context.Background(), &vault.InitParams{
+		BarrierConfig: &vault.SealConfig{
+			SecretShares:    1,
+			SecretThreshold: 1,
+		},
+		RecoveryConfig: nil,
 	})
 	if err != nil {
-		t.Fatal("error initializing core: ", err)
+		tt.Fatal("error initializing core: ", err)
+		return
 	}
 
 	// Unseal the core
 	if unsealed, err := core.Unseal(init.SecretShares[0]); err != nil {
-		t.Fatal("error unsealing core: ", err)
+		tt.Fatal("error unsealing core: ", err)
 		return
 	} else if !unsealed {
-		t.Fatal("vault shouldn't be sealed")
+		tt.Fatal("vault shouldn't be sealed")
 		return
 	}
 
@@ -158,7 +189,7 @@ func Test(t TestT, c TestCase) {
 	clientConfig.Address = addr
 	client, err := api.NewClient(clientConfig)
 	if err != nil {
-		t.Fatal("error initializing HTTP client: ", err)
+		tt.Fatal("error initializing HTTP client: ", err)
 		return
 	}
 
@@ -167,27 +198,26 @@ func Test(t TestT, c TestCase) {
 
 	// Mount the backend
 	prefix := "mnt"
-	mountInfo := &api.Mount{
+	mountInfo := &api.MountInput{
 		Type:        "test",
 		Description: "acceptance test",
 	}
 	if err := client.Sys().Mount(prefix, mountInfo); err != nil {
-		t.Fatal("error mounting backend: ", err)
+		tt.Fatal("error mounting backend: ", err)
 		return
 	}
 
 	// Make requests
 	var revoke []*logical.Request
 	for i, s := range c.Steps {
-		log.Printf("[WARN] Executing test step %d", i+1)
-
-		// Make sure to prefix the path with where we mounted the thing
-		path := fmt.Sprintf("%s/%s", prefix, s.Path)
+		if logger.IsWarn() {
+			logger.Warn("Executing test step", "step_number", i+1)
+		}
 
 		// Create the request
 		req := &logical.Request{
 			Operation: s.Operation,
-			Path:      path,
+			Path:      s.Path,
 			Data:      s.Data,
 		}
 		if !s.Unauthenticated {
@@ -200,35 +230,63 @@ func Test(t TestT, c TestCase) {
 			req.Connection = &logical.Connection{ConnState: s.ConnState}
 		}
 
+		if s.PreFlight != nil {
+			ct := req.ClientToken
+			req.ClientToken = ""
+			if err := s.PreFlight(req); err != nil {
+				tt.Error(fmt.Sprintf("Failed preflight for step %d: %s", i+1, err))
+				break
+			}
+			req.ClientToken = ct
+		}
+
+		// Make sure to prefix the path with where we mounted the thing
+		req.Path = fmt.Sprintf("%s/%s", prefix, req.Path)
+
 		// Make the request
 		resp, err := core.HandleRequest(req)
 		if resp != nil && resp.Secret != nil {
 			// Revoke this secret later
 			revoke = append(revoke, &logical.Request{
-				Operation: logical.WriteOperation,
+				Operation: logical.UpdateOperation,
 				Path:      "sys/revoke/" + resp.Secret.LeaseID,
 			})
 		}
-		// If it's an error, but an error is expected, and one is also
-		// returned as a logical.ErrorResponse, let it go to the check
+
+		// Test step returned an error.
 		if err != nil {
-			if !resp.IsError() || (resp.IsError() && !s.ErrorOk) {
-				t.Error(fmt.Sprintf("Failed step %d: %s", i+1, err))
+			// But if an error is expected, do not fail the test step,
+			// regardless of whether the error is a 'logical.ErrorResponse'
+			// or not. Set the err to nil. If the error is a logical.ErrorResponse,
+			// it will be handled later.
+			if s.ErrorOk {
+				err = nil
+			} else {
+				// If the error is not expected, fail right away.
+				tt.Error(fmt.Sprintf("Failed step %d: %s", i+1, err))
 				break
 			}
-			// Set it to nil here as we're catching on the
-			// logical.ErrorResponse instead
-			err = nil
 		}
+
+		// If the error is a 'logical.ErrorResponse' and if error was not expected,
+		// set the error so that this can be caught below.
 		if resp.IsError() && !s.ErrorOk {
-			err = fmt.Errorf("Erroneous response:\n\n%#v", resp)
+			err = fmt.Errorf("erroneous response:\n\n%#v", resp)
 		}
+
+		// Either the 'err' was nil or if an error was expected, it was set to nil.
+		// Call the 'Check' function if there is one.
+		//
+		// TODO: This works perfectly for now, but it would be better if 'Check'
+		// function takes in both the response object and the error, and decide on
+		// the action on its own.
 		if err == nil && s.Check != nil {
 			// Call the test method
 			err = s.Check(resp)
 		}
+
 		if err != nil {
-			t.Error(fmt.Sprintf("Failed step %d: %s", i+1, err))
+			tt.Error(fmt.Sprintf("Failed step %d: %s", i+1, err))
 			break
 		}
 	}
@@ -236,37 +294,41 @@ func Test(t TestT, c TestCase) {
 	// Revoke any secrets we might have.
 	var failedRevokes []*logical.Secret
 	for _, req := range revoke {
-		log.Printf("[WARN] Revoking secret: %#v", req)
+		if logger.IsWarn() {
+			logger.Warn("Revoking secret", "secret", fmt.Sprintf("%#v", req))
+		}
 		req.ClientToken = client.Token()
 		resp, err := core.HandleRequest(req)
 		if err == nil && resp.IsError() {
-			err = fmt.Errorf("Erroneous response:\n\n%#v", resp)
+			err = fmt.Errorf("erroneous response:\n\n%#v", resp)
 		}
 		if err != nil {
 			failedRevokes = append(failedRevokes, req.Secret)
-			t.Error(fmt.Sprintf("[ERR] Revoke error: %s", err))
+			tt.Error(fmt.Sprintf("Revoke error: %s", err))
 		}
 	}
 
 	// Perform any rollbacks. This should no-op if there aren't any.
 	// We set the "immediate" flag here that any backend can pick up on
 	// to do all rollbacks immediately even if the WAL entries are new.
-	log.Printf("[WARN] Requesting RollbackOperation")
+	logger.Warn("Requesting RollbackOperation")
 	req := logical.RollbackRequest(prefix + "/")
 	req.Data["immediate"] = true
 	req.ClientToken = client.Token()
 	resp, err := core.HandleRequest(req)
 	if err == nil && resp.IsError() {
-		err = fmt.Errorf("Erroneous response:\n\n%#v", resp)
+		err = fmt.Errorf("erroneous response:\n\n%#v", resp)
 	}
-	if err != nil && err != logical.ErrUnsupportedOperation {
-		t.Error(fmt.Sprintf("[ERR] Rollback error: %s", err))
+	if err != nil {
+		if !errwrap.Contains(err, logical.ErrUnsupportedOperation.Error()) {
+			tt.Error(fmt.Sprintf("[ERR] Rollback error: %s", err))
+		}
 	}
 
 	// If we have any failed revokes, log it.
 	if len(failedRevokes) > 0 {
 		for _, s := range failedRevokes {
-			t.Error(fmt.Sprintf(
+			tt.Error(fmt.Sprintf(
 				"WARNING: Revoking the following secret failed. It may\n"+
 					"still exist. Please verify:\n\n%#v",
 				s))
@@ -299,8 +361,14 @@ func TestCheckAuth(policies []string) TestCheckFunc {
 		if resp == nil || resp.Auth == nil {
 			return fmt.Errorf("no auth in response")
 		}
-		if !reflect.DeepEqual(resp.Auth.Policies, policies) {
-			return fmt.Errorf("invalid policies: %#v", resp.Auth.Policies)
+		expected := make([]string, len(policies))
+		copy(expected, policies)
+		sort.Strings(expected)
+		ret := make([]string, len(resp.Auth.Policies))
+		copy(ret, resp.Auth.Policies)
+		sort.Strings(ret)
+		if !reflect.DeepEqual(ret, expected) {
+			return fmt.Errorf("invalid policies: expected %#v, got %#v", expected, ret)
 		}
 
 		return nil

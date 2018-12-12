@@ -34,7 +34,7 @@ encrypted storage, it couldn't be read without multiple keys which are generally
 distributed to multiple individuals. This is known as _unsealing_, and happens
 once whenever Vault starts.
 
-For an unsealed Vault, every interaction is logged in via the audit backends.
+For an unsealed Vault, every interaction is logged in via the audit devices.
 Even erroneous requests (invalid access tokens, for example) are logged.
 To access any data, an access token is required. This token is usually
 associated with an identity coming from a system such as GitHub, LDAP, etc.
@@ -43,3 +43,8 @@ This identity is also written to the audit log.
 Access tokens can be given fine-grained control over what secrets can be
 accessed. It is rare to have a single key that can access all secrets. This
 makes it easier to have fine-grained access for consumers of Vault.
+
+For tips on how to integrate Vault using configuration management, please see
+[Using HashiCorp's Vault with Chef](https://www.hashicorp.com/blog/using-hashicorp-vault-with-chef.html).
+Although this post is about Chef, the principles can be broadly applied to many
+of the tools listed here.

@@ -1,9 +1,10 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
-	"time"
 
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -26,54 +27,51 @@ func secretCreds(b *backend) *framework.Secret {
 			},
 		},
 
-		DefaultDuration:    1 * time.Hour,
-		DefaultGracePeriod: 10 * time.Minute,
-
 		Renew:  b.secretCredsRenew,
 		Revoke: b.secretCredsRevoke,
 	}
 }
 
-func (b *backend) secretCredsRenew(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) secretCredsRenew(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	// Get the lease information
 	roleRaw, ok := req.Secret.InternalData["role"]
 	if !ok {
-		return nil, fmt.Errorf("Secret is missing role internal data")
+		return nil, fmt.Errorf("secret is missing role internal data")
 	}
 	roleName, ok := roleRaw.(string)
 	if !ok {
-		return nil, fmt.Errorf("Error converting role internal data to string")
+		return nil, fmt.Errorf("error converting role internal data to string")
 	}
 
-	role, err := getRole(req.Storage, roleName)
+	role, err := getRole(ctx, req.Storage, roleName)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to load role: %s", err)
+		return nil, errwrap.Wrapf("unable to load role: {{err}}", err)
 	}
 
-	return framework.LeaseExtend(role.Lease, 0, false)(req, d)
+	resp := &logical.Response{Secret: req.Secret}
+	resp.Secret.TTL = role.Lease
+	return resp, nil
 }
 
-func (b *backend) secretCredsRevoke(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) secretCredsRevoke(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	// Get the username from the internal data
 	usernameRaw, ok := req.Secret.InternalData["username"]
 	if !ok {
-		return nil, fmt.Errorf("Secret is missing username internal data")
+		return nil, fmt.Errorf("secret is missing username internal data")
 	}
 	username, ok := usernameRaw.(string)
 	if !ok {
-		return nil, fmt.Errorf("Error converting username internal data to string")
+		return nil, fmt.Errorf("error converting username internal data to string")
 	}
 
-	session, err := b.DB(req.Storage)
+	session, err := b.DB(ctx, req.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("Error getting session")
+		return nil, fmt.Errorf("error getting session")
 	}
 
 	err = session.Query(fmt.Sprintf("DROP USER '%s'", username)).Exec()
 	if err != nil {
-		return nil, fmt.Errorf("Error removing user %s", username)
+		return nil, fmt.Errorf("error removing user %q", username)
 	}
 
 	return nil, nil

@@ -1,11 +1,17 @@
-Vault [![Build Status](https://travis-ci.org/hashicorp/vault.svg)](https://travis-ci.org/hashicorp/vault)
-=========
+# Vault [![Build Status](https://travis-ci.org/hashicorp/vault.svg)](https://travis-ci.org/hashicorp/vault) [![Join the chat at https://gitter.im/hashicorp-vault/Lobby](https://badges.gitter.im/hashicorp-vault/Lobby.svg)](https://gitter.im/hashicorp-vault/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge) [![vault enterprise](https://img.shields.io/badge/vault-enterprise-yellow.svg?colorB=7c8797&colorA=000000)](https://www.hashicorp.com/products/vault/?utm_source=github&utm_medium=banner&utm_campaign=github-vault-enterprise)
+
+----
+
+**Please note**: We take Vault's security and our users' trust very seriously. If you believe you have found a security issue in Vault, _please responsibly disclose_ by contacting us at [security@hashicorp.com](mailto:security@hashicorp.com).
+
+----
 
 -	Website: https://www.vaultproject.io
 -	IRC: `#vault-tool` on Freenode
--	Mailing list: [Google Groups](https://groups.google.com/group/vault-tool)
+-	Announcement list: [Google Groups](https://groups.google.com/group/hashicorp-announce)
+-	Discussion list: [Google Groups](https://groups.google.com/group/vault-tool)
 
-![Vault](https://raw.githubusercontent.com/hashicorp/vault/master/website/source/assets/images/logo-big.png?token=AAAFE8XmW6YF5TNuk3cosDGBK-sUGPEjks5VSAa2wA%3D%3D)
+<img width="300" alt="Vault Logo" src="https://cloud.githubusercontent.com/assets/416727/24112835/03b57de4-0d58-11e7-81f5-9056cac5b427.png">
 
 Vault is a tool for securely accessing secrets. A secret is anything that you want to tightly control access to, such as API keys, passwords, certificates, and more. Vault provides a unified interface to any secret, while providing tight access control and recording a detailed audit log.
 
@@ -52,36 +58,35 @@ All documentation is available on the [Vault website](https://www.vaultproject.i
 Developing Vault
 --------------------
 
-If you wish to work on Vault itself or any of its built-in systems,
-you'll first need [Go](https://www.golang.org) installed on your
-machine (version 1.4+ is *required*).
+If you wish to work on Vault itself or any of its built-in systems, you'll
+first need [Go](https://www.golang.org) installed on your machine (version
+1.10.1+ is *required*).
 
 For local dev first make sure Go is properly installed, including setting up a
-[GOPATH](https://golang.org/doc/code.html#GOPATH). After setting up Go, you can
-download the required build tools such as vet, cover, godep etc by bootstrapping
-your environment. 
+[GOPATH](https://golang.org/doc/code.html#GOPATH). Next, clone this repository
+into `$GOPATH/src/github.com/hashicorp/vault`. You can then download any
+required build tools by bootstrapping your environment:
 
 ```sh
 $ make bootstrap
 ...
 ```
 
-Next, clone this repository into `$GOPATH/src/github.com/hashicorp/vault`.
-Then type `make`. This will run the tests. If this exits with exit status 0,
-then everything is working!
-
-```sh
-$ make
-...
-```
-
-To compile a development version of Vault, run `make dev`. This will put the
-Vault binary in the `bin` and `$GOPATH/bin` folders:
+To compile a development version of Vault, run `make` or `make dev`. This will
+put the Vault binary in the `bin` and `$GOPATH/bin` folders:
 
 ```sh
 $ make dev
 ...
 $ bin/vault
+...
+```
+
+To run tests, type `make test`. Note: this requires Docker to be installed. If
+this exits with exit status 0, then everything is working!
+
+```sh
+$ make test
 ...
 ```
 
@@ -97,9 +102,9 @@ $ make test TEST=./vault
 ### Acceptance Tests
 
 Vault has comprehensive [acceptance tests](https://en.wikipedia.org/wiki/Acceptance_testing)
-covering most of the features of the secret and auth backends.
+covering most of the features of the secret and auth methods.
 
-If you're working on a feature of a secret or auth backend and want to
+If you're working on a feature of a secret or auth method and want to
 verify it is functioning (and also hasn't broken anything else), we recommend
 running the acceptance tests.
 
@@ -125,3 +130,5 @@ long time.
 Acceptance tests typically require other environment variables to be set for
 things such as access keys. The test itself should error early and tell
 you what to set, so it is not documented here.
+
+For more information on Vault Enterprise features, visit the [Vault Enterprise site](https://www.hashicorp.com/products/vault/?utm_source=github&utm_medium=referral&utm_campaign=github-vault-enterprise).

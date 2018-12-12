@@ -1,37 +1,50 @@
 ---
 layout: "docs"
-page_title: "Audit Backend: Syslog"
+page_title: "Syslog - Audit Devices"
 sidebar_current: "docs-audit-syslog"
 description: |-
-  The "syslog" audit backend writes audit logs to syslog.
+  The "syslog" audit device writes audit logs to syslog.
 ---
 
-# Audit Backend: Syslog
+# Syslog Audit Device
 
-Name: `syslog`
+The `syslog` audit device writes audit logs to syslog.
 
-The "syslog" audit backend writes audit logs to syslog.
-
-It currently does not support a configurable syslog destination, and
-always sends to the local agent. This backend is only supported on Unix systems,
+It currently does not support a configurable syslog destination, and always
+sends to the local agent. This device is only supported on Unix systems,
 and should not be enabled if any standby Vault instances do not support it.
 
-## Options
+## Examples
 
-When enabling this backend, the following options are accepted:
+Audit `syslog` device can be enabled by the following command:
 
- * `facility` (optional) - The syslog facility to use. Defaults to "AUTH".
- * `tag` (optional) - The syslog tag to use. Defaults to "vault".
- * `log_raw` (optional) Should security sensitive information be logged raw. Defaults to "false".
+```text
+$ vault audit enable syslog
+```
 
-## Format
+Supply configuration parameters via K=V pairs:
 
-Each line in the audit log is a JSON object. The "type" field specifies
-what type of object it is. Currently, only two types exist: "request" and
-"response".
+```text
+$ vault audit enable syslog tag="vault" facility="AUTH"
+```
 
-The line contains all of the information for any given request and response.
+## Configuration
 
-If `log_raw` if false, as is default, all sensitive information is first hashed
-before logging. If explicitly enabled, all values are logged raw without hashing.
+- `facility` `(string: "AUTH")` - The syslog facility to use.
 
+- `tag` `(string: "vault")` - The syslog tag to use.
+
+- `log_raw` `(bool: false)` - If enabled, logs the security sensitive
+  information without hashing, in the raw format.
+
+- `hmac_accessor` `(bool: true)` - If enabled, enables the hashing of token
+  accessor.
+
+- `mode` `(string: "0600")` - A string containing an octal number representing
+  the bit pattern for the file mode, similar to `chmod`.
+
+- `format` `(string: "json")` - Allows selecting the output format. Valid values
+  are `"json"` and `"jsonx"`, which formats the normal log entries as XML.
+
+- `prefix` `(string: "")` - A customizable string prefix to write before the
+  actual log line.

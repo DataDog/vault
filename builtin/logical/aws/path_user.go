@@ -1,10 +1,12 @@
 package aws
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 	"github.com/mitchellh/mapstructure"
@@ -29,14 +31,13 @@ func pathUser(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathUserRead(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathUserRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	policyName := d.Get("name").(string)
 
 	// Read the policy
-	policy, err := req.Storage.Get("policy/" + policyName)
+	policy, err := req.Storage.Get(ctx, "policy/"+policyName)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving role: %s", err)
+		return nil, errwrap.Wrapf("error retrieving role: {{err}}", err)
 	}
 	if policy == nil {
 		return logical.ErrorResponse(fmt.Sprintf(
@@ -45,10 +46,10 @@ func (b *backend) pathUserRead(
 
 	// Use the helper to create the secret
 	return b.secretAccessKeysCreate(
-		req.Storage, req.DisplayName, policyName, string(policy.Value))
+		ctx, req.Storage, req.DisplayName, policyName, string(policy.Value))
 }
 
-func pathUserRollback(req *logical.Request, _kind string, data interface{}) error {
+func pathUserRollback(ctx context.Context, req *logical.Request, _kind string, data interface{}) error {
 	var entry walUser
 	if err := mapstructure.Decode(data, &entry); err != nil {
 		return err
@@ -56,7 +57,7 @@ func pathUserRollback(req *logical.Request, _kind string, data interface{}) erro
 	username := entry.UserName
 
 	// Get the client
-	client, err := clientIAM(req.Storage)
+	client, err := clientIAM(ctx, req.Storage)
 	if err != nil {
 		return err
 	}
@@ -71,6 +72,7 @@ func pathUserRollback(req *logical.Request, _kind string, data interface{}) erro
 	}
 	groups := groupsResp.Groups
 
+	// Inline (user) policies
 	policiesResp, err := client.ListUserPolicies(&iam.ListUserPoliciesInput{
 		UserName: aws.String(username),
 		MaxItems: aws.Int64(1000),
@@ -79,6 +81,16 @@ func pathUserRollback(req *logical.Request, _kind string, data interface{}) erro
 		return err
 	}
 	policies := policiesResp.PolicyNames
+
+	// Attached managed policies
+	manPoliciesResp, err := client.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String(username),
+		MaxItems: aws.Int64(1000),
+	})
+	if err != nil {
+		return err
+	}
+	manPolicies := manPoliciesResp.AttachedPolicies
 
 	keysResp, err := client.ListAccessKeys(&iam.ListAccessKeysInput{
 		UserName: aws.String(username),
@@ -100,7 +112,18 @@ func pathUserRollback(req *logical.Request, _kind string, data interface{}) erro
 		}
 	}
 
-	// Delete any policies
+	// Detach managed policies
+	for _, p := range manPolicies {
+		_, err = client.DetachUserPolicy(&iam.DetachUserPolicyInput{
+			UserName:  aws.String(username),
+			PolicyArn: p.PolicyArn,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// Delete any inline (user) policies
 	for _, p := range policies {
 		_, err = client.DeleteUserPolicy(&iam.DeleteUserPolicyInput{
 			UserName:   aws.String(username),

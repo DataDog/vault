@@ -14,21 +14,21 @@ compromise. It is useful to first understand the
 [high-level architecture](/docs/internals/architecture.html) before learning about key rotation.
 
 As a review, Vault starts in a _sealed_ state. Vault is unsealed by providing the unseal keys.
-By default, Vault uses a technique known as [Shamir's secret sharing algorithm](http://en.wikipedia.org/wiki/Shamir's_Secret_Sharing)
+By default, Vault uses a technique known as [Shamir's secret sharing algorithm](https://en.wikipedia.org/wiki/Shamir's_Secret_Sharing)
 to split the master key into 5 shares, any 3 of which are required to reconstruct the master
 key. The master key is used to protect the encryption key, which is ultimately used to protect
 data written to the storage backend.
 
-![Keys](/assets/images/keys.png)
+[![Vault Shamir Secret Sharing Algorithm](/assets/images/vault-shamir-secret-sharing.svg)](/assets/images/vault-shamir-secret-sharing.svg)
 
 To support key rotation, we need to support changing the unseal keys, master key, and the
-backend encryption key. We split this into two seperate operations, `rekey` and `rotate`.
+backend encryption key. We split this into two separate operations, `rekey` and `rotate`.
 
 The `rekey` operation is used to generate a new master key. When this is being done,
 it is possible to change the parameters of the key splitting, so that the number of shares
 and the threshold required to unseal can be changed. To perform a rekey a threshold of the
 current unseal keys must be provided. This is to prevent a single malicious operator from
-performing a rekey and invaliding the existing master key.
+performing a rekey and invalidating the existing master key.
 
 Performing a rekey is fairly straightforward. The rekey operation must be initialized with
 the new parameters for the split and threshold. Once initialized, the current unseal keys
@@ -52,7 +52,6 @@ but standby instances can still assume an active role after either operation. Th
 done by providing an online upgrade path for standby instances. If the current encryption
 key is `N` and a rotation installs `N+1`, Vault creates a special "upgrade" key, which
 provides the `N+1` encryption key protected by the `N` key. This upgrade key is only available
-for a few minutes enabling standby instances do a periodic check for upgrades.
+for a few minutes enabling standby instances to do a periodic check for upgrades.
 This allows standby instances to update their keys and stay in-sync with the active Vault
 without requiring operators to perform another unseal.
-

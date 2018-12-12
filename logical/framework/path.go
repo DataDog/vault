@@ -1,17 +1,25 @@
 package framework
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/logical"
 )
 
 // Helper which returns a generic regex string for creating endpoint patterns
 // that are identified by the given name in the backends
 func GenericNameRegex(name string) string {
-	return fmt.Sprintf("(?P<%s>\\w[\\w-]+\\w)", name)
+	return fmt.Sprintf("(?P<%s>\\w(([\\w-.]+)?\\w)?)", name)
+}
+
+// Helper which returns a regex string for optionally accepting the a field
+// from the API URL
+func OptionalParamRegex(name string) string {
+	return fmt.Sprintf("(/(?P<%s>.+))?", name)
 }
 
 // PathAppend is a helper for appending lists of paths into a single
@@ -40,7 +48,7 @@ type Path struct {
 	// priority.
 	//
 	// Note that only named capture fields are available in every operation,
-	// whereas all fields are avaiable in the Write operation.
+	// whereas all fields are available in the Write operation.
 	Fields map[string]*FieldSchema
 
 	// Callbacks are the set of callbacks that are called for a given
@@ -52,6 +60,14 @@ type Path struct {
 	// field is set and there is a callback registered here, then the
 	// callback will be called.
 	Callbacks map[logical.Operation]OperationFunc
+
+	// ExistenceCheck, if implemented, is used to query whether a given
+	// resource exists or not. This is used for ACL purposes: if an Update
+	// action is specified, and the existence check returns false, the action
+	// is not allowed since the resource must first be created. The reverse is
+	// also true. If not specified, the Update action is forced and the user
+	// must have UpdateCapability on the path.
+	ExistenceCheck ExistenceFunc
 
 	// Help is text describing how to use this path. This will be used
 	// to auto-generate the help operation. The Path will automatically
@@ -68,49 +84,50 @@ type Path struct {
 	HelpDescription string
 }
 
-func (p *Path) helpCallback(
-	req *logical.Request, data *FieldData) (*logical.Response, error) {
-	var tplData pathTemplateData
-	tplData.Request = req.Path
-	tplData.RoutePattern = p.Pattern
-	tplData.Synopsis = strings.TrimSpace(p.HelpSynopsis)
-	if tplData.Synopsis == "" {
-		tplData.Synopsis = "<no synopsis>"
-	}
-	tplData.Description = strings.TrimSpace(p.HelpDescription)
-	if tplData.Description == "" {
-		tplData.Description = "<no description>"
-	}
-
-	// Alphabetize the fields
-	fieldKeys := make([]string, 0, len(p.Fields))
-	for k, _ := range p.Fields {
-		fieldKeys = append(fieldKeys, k)
-	}
-	sort.Strings(fieldKeys)
-
-	// Build the field help
-	tplData.Fields = make([]pathTemplateFieldData, len(fieldKeys))
-	for i, k := range fieldKeys {
-		schema := p.Fields[k]
-		description := strings.TrimSpace(schema.Description)
-		if description == "" {
-			description = "<no description>"
+func (p *Path) helpCallback() OperationFunc {
+	return func(ctx context.Context, req *logical.Request, data *FieldData) (*logical.Response, error) {
+		var tplData pathTemplateData
+		tplData.Request = req.Path
+		tplData.RoutePattern = p.Pattern
+		tplData.Synopsis = strings.TrimSpace(p.HelpSynopsis)
+		if tplData.Synopsis == "" {
+			tplData.Synopsis = "<no synopsis>"
+		}
+		tplData.Description = strings.TrimSpace(p.HelpDescription)
+		if tplData.Description == "" {
+			tplData.Description = "<no description>"
 		}
 
-		tplData.Fields[i] = pathTemplateFieldData{
-			Key:         k,
-			Type:        schema.Type.String(),
-			Description: description,
+		// Alphabetize the fields
+		fieldKeys := make([]string, 0, len(p.Fields))
+		for k, _ := range p.Fields {
+			fieldKeys = append(fieldKeys, k)
 		}
-	}
+		sort.Strings(fieldKeys)
 
-	help, err := executeTemplate(pathHelpTemplate, &tplData)
-	if err != nil {
-		return nil, fmt.Errorf("error executing template: %s", err)
-	}
+		// Build the field help
+		tplData.Fields = make([]pathTemplateFieldData, len(fieldKeys))
+		for i, k := range fieldKeys {
+			schema := p.Fields[k]
+			description := strings.TrimSpace(schema.Description)
+			if description == "" {
+				description = "<no description>"
+			}
 
-	return logical.HelpResponse(help, nil), nil
+			tplData.Fields[i] = pathTemplateFieldData{
+				Key:         k,
+				Type:        schema.Type.String(),
+				Description: description,
+			}
+		}
+
+		help, err := executeTemplate(pathHelpTemplate, &tplData)
+		if err != nil {
+			return nil, errwrap.Wrapf("error executing template: {{err}}", err)
+		}
+
+		return logical.HelpResponse(help, nil), nil
+	}
 }
 
 type pathTemplateData struct {
@@ -134,11 +151,12 @@ Matching Route: {{.RoutePattern}}
 
 {{.Synopsis}}
 
+{{ if .Fields -}}
 ## PARAMETERS
 {{range .Fields}}
 {{indent 4 .Key}} ({{.Type}})
 {{indent 8 .Description}}
-{{end}}
+{{end}}{{end}}
 ## DESCRIPTION
 
 {{.Description}}

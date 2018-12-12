@@ -6,27 +6,47 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/hashicorp/go-cleanhttp"
+	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
 func testHttpGet(t *testing.T, token string, addr string) *http.Response {
-	t.Logf("Token is %s", token)
-	return testHttpData(t, "GET", token, addr, nil)
+	loggedToken := token
+	if len(token) == 0 {
+		loggedToken = "<empty>"
+	}
+	t.Logf("Token is %s", loggedToken)
+	return testHttpData(t, "GET", token, addr, nil, false)
 }
 
 func testHttpDelete(t *testing.T, token string, addr string) *http.Response {
-	return testHttpData(t, "DELETE", token, addr, nil)
+	return testHttpData(t, "DELETE", token, addr, nil, false)
+}
+
+// Go 1.8+ clients redirect automatically which breaks our 307 standby testing
+func testHttpDeleteDisableRedirect(t *testing.T, token string, addr string) *http.Response {
+	return testHttpData(t, "DELETE", token, addr, nil, true)
 }
 
 func testHttpPost(t *testing.T, token string, addr string, body interface{}) *http.Response {
-	return testHttpData(t, "POST", token, addr, body)
+	return testHttpData(t, "POST", token, addr, body, false)
 }
 
 func testHttpPut(t *testing.T, token string, addr string, body interface{}) *http.Response {
-	return testHttpData(t, "PUT", token, addr, body)
+	return testHttpData(t, "PUT", token, addr, body, false)
 }
 
-func testHttpData(t *testing.T, method string, token string, addr string, body interface{}) *http.Response {
+// Go 1.8+ clients redirect automatically which breaks our 307 standby testing
+func testHttpPutDisableRedirect(t *testing.T, token string, addr string, body interface{}) *http.Response {
+	return testHttpData(t, "PUT", token, addr, body, true)
+}
+
+func testHttpData(t *testing.T, method string, token string, addr string, body interface{}, disableRedirect bool) *http.Response {
 	bodyReader := new(bytes.Buffer)
 	if body != nil {
 		enc := json.NewEncoder(bodyReader)
@@ -40,18 +60,27 @@ func testHttpData(t *testing.T, method string, token string, addr string, body i
 		t.Fatalf("err: %s", err)
 	}
 
+	// Get the address of the local listener in order to attach it to an Origin header.
+	// This will allow for the testing of requests that require CORS, without using a browser.
+	hostURLRegexp, _ := regexp.Compile("http[s]?://.+:[0-9]+")
+	req.Header.Set("Origin", hostURLRegexp.FindString(addr))
+
 	req.Header.Set("Content-Type", "application/json")
 
 	if len(token) != 0 {
 		req.Header.Set("X-Vault-Token", token)
 	}
 
-	client := http.DefaultClient
+	client := cleanhttp.DefaultClient()
+	client.Timeout = 60 * time.Second
 
 	// From https://github.com/michiwend/gomusicbrainz/pull/4/files
 	defaultRedirectLimit := 30
 
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if disableRedirect {
+			return fmt.Errorf("checkRedirect disabled for test")
+		}
 		if len(via) > defaultRedirectLimit {
 			return fmt.Errorf("%d consecutive requests(redirects)", len(via))
 		}
@@ -67,7 +96,7 @@ func testHttpData(t *testing.T, method string, token string, addr string, body i
 	}
 
 	resp, err := client.Do(req)
-	if err != nil {
+	if err != nil && !strings.Contains(err.Error(), "checkRedirect disabled for test") {
 		t.Fatalf("err: %s", err)
 	}
 
@@ -89,8 +118,7 @@ func testResponseStatus(t *testing.T, resp *http.Response, code int) {
 func testResponseBody(t *testing.T, resp *http.Response, out interface{}) {
 	defer resp.Body.Close()
 
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(out); err != nil {
+	if err := jsonutil.DecodeJSONFromReader(resp.Body, out); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 }

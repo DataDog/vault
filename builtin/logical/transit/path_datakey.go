@@ -1,16 +1,17 @@
 package transit
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 
-	"github.com/hashicorp/vault/helper/certutil"
+	"github.com/hashicorp/vault/helper/errutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func pathDatakey() *framework.Path {
+func (b *backend) pathDatakey() *framework.Path {
 	return &framework.Path{
 		Pattern: "datakey/" + framework.GenericNameRegex("plaintext") + "/" + framework.GenericNameRegex("name"),
 		Fields: map[string]*framework.FieldSchema{
@@ -30,16 +31,29 @@ ciphertext; "wrapped" will return the ciphertext only.`,
 				Description: "Context for key derivation. Required for derived keys.",
 			},
 
+			"nonce": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Description: "Nonce for when convergent encryption v1 is used (only in Vault 0.6.1)",
+			},
+
 			"bits": &framework.FieldSchema{
 				Type: framework.TypeInt,
 				Description: `Number of bits for the key; currently 128, 256,
 and 512 bits are supported. Defaults to 256.`,
 				Default: 256,
 			},
+
+			"key_version": &framework.FieldSchema{
+				Type: framework.TypeInt,
+				Description: `The version of the Vault key to use for
+encryption of the data key. Must be 0 (for latest)
+or a value greater than or equal to the
+min_encryption_version configured on the key.`,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.WriteOperation: pathDatakeyWrite,
+			logical.UpdateOperation: b.pathDatakeyWrite,
 		},
 
 		HelpSynopsis:    pathDatakeyHelpSyn,
@@ -47,9 +61,9 @@ and 512 bits are supported. Defaults to 256.`,
 	}
 }
 
-func pathDatakeyWrite(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathDatakeyWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	name := d.Get("name").(string)
+	ver := d.Get("key_version").(int)
 
 	plaintext := d.Get("plaintext").(string)
 	plaintextAllowed := false
@@ -61,26 +75,38 @@ func pathDatakeyWrite(
 		return logical.ErrorResponse("Invalid path, must be 'plaintext' or 'wrapped'"), logical.ErrInvalidRequest
 	}
 
+	var err error
+
 	// Decode the context if any
 	contextRaw := d.Get("context").(string)
 	var context []byte
 	if len(contextRaw) != 0 {
-		var err error
 		context, err = base64.StdEncoding.DecodeString(contextRaw)
 		if err != nil {
-			return logical.ErrorResponse("failed to decode context as base64"), logical.ErrInvalidRequest
+			return logical.ErrorResponse("failed to base64-decode context"), logical.ErrInvalidRequest
+		}
+	}
+
+	// Decode the nonce if any
+	nonceRaw := d.Get("nonce").(string)
+	var nonce []byte
+	if len(nonceRaw) != 0 {
+		nonce, err = base64.StdEncoding.DecodeString(nonceRaw)
+		if err != nil {
+			return logical.ErrorResponse("failed to base64-decode nonce"), logical.ErrInvalidRequest
 		}
 	}
 
 	// Get the policy
-	p, err := getPolicy(req, name)
+	p, lock, err := b.lm.GetPolicyShared(ctx, req.Storage, name)
+	if lock != nil {
+		defer lock.RUnlock()
+	}
 	if err != nil {
 		return nil, err
 	}
-
-	// Error if invalid policy
 	if p == nil {
-		return logical.ErrorResponse("policy not found"), logical.ErrInvalidRequest
+		return logical.ErrorResponse("encryption key not found"), logical.ErrInvalidRequest
 	}
 
 	newKey := make([]byte, 32)
@@ -99,12 +125,12 @@ func pathDatakeyWrite(
 		return nil, err
 	}
 
-	ciphertext, err := p.Encrypt(context, base64.StdEncoding.EncodeToString(newKey))
+	ciphertext, err := p.Encrypt(ver, context, nonce, base64.StdEncoding.EncodeToString(newKey))
 	if err != nil {
 		switch err.(type) {
-		case certutil.UserError:
+		case errutil.UserError:
 			return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
-		case certutil.InternalError:
+		case errutil.InternalError:
 			return nil, err
 		default:
 			return nil, err

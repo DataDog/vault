@@ -1,252 +1,95 @@
 ---
 layout: "docs"
-page_title: "Secret Backend: Consul"
+page_title: "Consul - Secrets Engines"
 sidebar_current: "docs-secrets-consul"
 description: |-
-  The Consul secret backend for Vault generates tokens for Consul dynamically.
+  The Consul secrets engine for Vault generates tokens for Consul dynamically.
 ---
 
-# Consul Secret Backend
+# Consul Secrets Engine
 
-Name: `consul`
+The Consul secrets engine generates [Consul](https://www.consul.io) API tokens
+dynamically based on Consul ACL policies.
 
-The Consul secret backend for Vault generates
-[Consul](http://consul.io)
-API tokens dynamically based on Consul ACL policies.
+## Setup
 
-This page will show a quick start for this backend. For detailed documentation
-on every path, use `vault path-help` after mounting the backend.
+Most secrets engines must be configured in advance before they can perform their
+functions. These steps are usually completed by an operator or configuration
+management tool.
 
-## Quick Start
+1. Enable the Consul secrets engine:
 
-The first step to using the consul backend is to mount it.
-Unlike the `generic` backend, the `consul` backend is not mounted by default.
+    ```text
+    $ vault secrets enable consul
+    Success! Enabled the consul secrets engine at: consul/
+    ```
 
-```
-$ vault mount consul
-Successfully mounted 'consul' at 'consul'!
-```
+    By default, the secrets engine will mount at the name of the engine. To
+    enable the secrets engine at a different path, use the `-path` argument.
 
-Next, we must configure Vault to know how to contact Consul.
-This is done by writing the access information:
+1. Acquire a [management token][consul-mgmt-token] from Consul, using the
+`acl_master_token` from your Consul configuration file or another management
+token:
 
-```
-$ vault write consul/config/access address=127.0.0.1:8500 token=root
-Success! Data written to: consul/config/access
-```
+    ```sh
+    $ curl \
+        --header "X-Consul-Token: my-management-token" \
+        --request PUT \
+        --data '{"Name": "sample", "Type": "management"}' \
+        https://consul.rocks/v1/acl/create
+    ```
 
-In this case, we've configured Vault to connect to Consul
-on the default port with the loopback address. We've also provided
-an ACL token to use with the `token` parameter. Vault must have a management
-type token so that it can create and revoke ACL tokens.
+    Vault must have a management type token so that it can create and revoke ACL
+    tokens. The response will return a new token:
 
-The next step is to configure a role. A role is a logical name that maps
-to a role used to generated those credentials. For example, lets create
-a "readonly" role:
+    ```json
+    {
+      "ID": "7652ba4c-0f6e-8e75-5724-5e083d72cfe4"
+    }
+    ```
 
-```
-POLICY='key "" { policy = "read" }'
-$ echo $POLICY | base64 | vault write consul/roles/readonly policy=-
-Success! Data written to: consul/roles/readonly
-```
+1. Configure Vault to connect and authenticate to Consul:
 
-The backend expects the policy to be base64 encoded, so we need to encode
-it properly before writing. The policy language is
-[documented by Consul](https://consul.io/docs/internals/acl.html), but we've defined a read-only policy.
+    ```text
+    $ vault write consul/config/access \
+        address=127.0.0.1:8500 \
+        token=7652ba4c-0f6e-8e75-5724-5e083d72cfe4
+    Success! Data written to: consul/config/access
+    ```
 
-To generate a new set Consul ACL token, we simply read from that role:
+1. Configure a role that maps a name in Vault to a Consul ACL policy.
+When users generate credentials, they are generated against this role:
 
-```
-$ vault read consul/creds/readonly
-Key           	Value
-lease_id      	consul/creds/readonly/c7a3bd77-e9af-cfc4-9cba-377f0ef10e6c
-lease_duration	3600
-token         	973a31ea-1ec4-c2de-0f63-623f477c2510
-```
+    ```text
+    $ vault write consul/roles/my-role policy=$(base64 <<< 'key "" { policy = "read" }')
+    Success! Data written to: consul/roles/my-role
+    ```
 
-Here we can see that Vault has generated a new Consul ACL token for us.
-We can test this token out, and verify that it is read-only:
+    The policy must be base64-encoded. The policy language is [documented by
+    Consul](https://www.consul.io/docs/internals/acl.html).
 
-```
-$ curl 127.0.0.1:8500/v1/kv/foo?token=973a31ea-1ec4-c2de-0f63-623f477c25100
-[{"CreateIndex":12,"ModifyIndex":53,"LockIndex":4,"Key":"foo","Flags":3304740253564472344,"Value":"YmF6"}]
+## Usage
 
-$ curl -X PUT -d 'test' 127.0.0.1:8500/v1/kv/foo?token=973a31ea-1ec4-c2de-0f63-623f477c2510
-Permission denied
-```
+After the secrets engine is configured and a user/machine has a Vault token with
+the proper permission, it can generate credentials.
+
+Generate a new credential by reading from the `/creds` endpoint with the name
+of the role:
+
+```text
+$ vault read consul/creds/my-role
+Key                Value
+---                -----
+lease_id           consul/creds/my-role/b2469121-f55f-53c5-89af-a3ba52b1d6d8
+lease_duration     768h
+lease_renewable    true
+token              642783bf-1540-526f-d4de-fe1ac1aed6f0
+    ```
 
 ## API
 
-### /consul/config/access
-#### POST
+The Consul secrets engine has a full HTTP API. Please see the
+[Consul secrets engine API](/api/secret/consul/index.html) for more
+details.
 
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Configures the access information for Consul.
-    This is a root protected endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/consul/config/access`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">address</span>
-        <span class="param-flags">required</span>
-        The address of the Consul instance, provided as host:port
-      </li>
-      <li>
-        <span class="param">scheme</span>
-        <span class="param-flags">optional</span>
-        The URL scheme to use. Defaults to HTTP, as Consul does not expose HTTPS by default.
-      </li>
-      <li>
-        <span class="param">token</span>
-        <span class="param-flags">required</span>
-        The Consul ACL token to use. Must be a management type token.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
-
-### /consul/roles/
-#### POST
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Creates or updates the Consul role definition.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/consul/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">policy</span>
-        <span class="param-flags">required</span>
-        The base64 encoded Consul ACL policy. This is documented in [more detail here](https://consul.io/docs/internals/acl.html).
-      </li>
-      <li>
-        <span class="param">lease</span>
-        <span class="param-flags">optional</span>
-        The lease value provided as a string duration with time suffix. Hour is the largest suffix.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
-
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Queries a Consul role definition.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/consul/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```javascript
-    {
-        "data": {
-            "policy": "abcdef="
-        }
-    }
-    ```
-
-  </dd>
-</dl>
-
-#### Delete
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Deletes a Consul role definition.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>DELETE</dd>
-
-  <dt>URL</dt>
-  <dd>`/consul/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
-
-### /consul/creds/
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Generates a dynamic Consul token based on the role definition.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/consul/creds/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```javascript
-    {
-        "data": {
-            "token": "973a31ea-1ec4-c2de-0f63-623f477c2510"
-        }
-    }
-    ```
-
-  </dd>
-</dl>
-
-
+[consul-mgmt-token]: https://www.consul.io/docs/agent/http/acl.html#acl_create

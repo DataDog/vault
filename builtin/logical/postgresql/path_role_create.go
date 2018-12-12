@@ -1,10 +1,13 @@
 package postgresql
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/hashicorp/vault/helper/uuid"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 	_ "github.com/lib/pq"
@@ -29,12 +32,11 @@ func pathRoleCreate(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathRoleCreateRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRoleCreateRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	// Get the role
-	role, err := b.Role(req.Storage, name)
+	role, err := b.Role(ctx, req.Storage, name)
 	if err != nil {
 		return nil, err
 	}
@@ -43,12 +45,17 @@ func (b *backend) pathRoleCreateRead(
 	}
 
 	// Determine if we have a lease
-	lease, err := b.Lease(req.Storage)
+	lease, err := b.Lease(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
+	// Unlike some other backends we need a lease here (can't leave as 0 and
+	// let core fill it in) because Postgres also expires users as a safety
+	// measure, so cannot be zero
 	if lease == nil {
-		lease = &configLease{Lease: 1 * time.Hour}
+		lease = &configLease{
+			Lease: b.System().DefaultLeaseTTL(),
+		}
 	}
 
 	// Generate the username, password and expiration. PG limits user to 63 characters
@@ -56,17 +63,29 @@ func (b *backend) pathRoleCreateRead(
 	if len(displayName) > 26 {
 		displayName = displayName[:26]
 	}
-	username := fmt.Sprintf("%s-%s", displayName, uuid.GenerateUUID())
+	userUUID, err := uuid.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	username := fmt.Sprintf("%s-%s", displayName, userUUID)
 	if len(username) > 63 {
 		username = username[:63]
 	}
-	password := uuid.GenerateUUID()
-	expiration := time.Now().UTC().
-		Add(lease.Lease + time.Duration((float64(lease.Lease) * 0.1))).
+	password, err := uuid.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+
+	ttl, _, err := framework.CalculateTTL(b.System(), 0, lease.Lease, 0, lease.LeaseMax, 0, time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	expiration := time.Now().
+		Add(ttl).
 		Format("2006-01-02 15:04:05-0700")
 
-	// Get our connection
-	db, err := b.DB(req.Storage)
+	// Get our handle
+	db, err := b.DB(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +95,18 @@ func (b *backend) pathRoleCreateRead(
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		tx.Rollback()
+	}()
 
 	// Execute each query
-	for _, query := range SplitSQL(role.SQL) {
-		stmt, err := db.Prepare(Query(query, map[string]string{
+	for _, query := range strutil.ParseArbitraryStringSlice(role.SQL, ";") {
+		query = strings.TrimSpace(query)
+		if len(query) == 0 {
+			continue
+		}
+
+		stmt, err := tx.Prepare(Query(query, map[string]string{
 			"name":       username,
 			"password":   password,
 			"expiration": expiration,
@@ -88,24 +114,29 @@ func (b *backend) pathRoleCreateRead(
 		if err != nil {
 			return nil, err
 		}
+		defer stmt.Close()
 		if _, err := stmt.Exec(); err != nil {
 			return nil, err
 		}
 	}
 
 	// Commit the transaction
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 
 	// Return the secret
+
 	resp := b.Secret(SecretCredsType).Response(map[string]interface{}{
 		"username": username,
 		"password": password,
 	}, map[string]interface{}{
 		"username": username,
+		"role":     name,
 	})
 	resp.Secret.TTL = lease.Lease
+	resp.Secret.MaxTTL = lease.LeaseMax
 	return resp, nil
 }
 

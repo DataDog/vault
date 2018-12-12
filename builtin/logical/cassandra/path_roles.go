@@ -1,10 +1,12 @@
 package cassandra
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/fatih/structs"
+	"github.com/gocql/gocql"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -55,17 +57,16 @@ template values are '{{username}}' and
 				Description: "The lease length; defaults to 4 hours",
 			},
 
-			"lease_grace_period": &framework.FieldSchema{
-				Type:    framework.TypeString,
-				Default: "1h",
-				Description: `Grace period for secret renewal; defaults to
-one hour`,
+			"consistency": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "Quorum",
+				Description: "The consistency level for the operations; defaults to Quorum.",
 			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
 			logical.ReadOperation:   b.pathRoleRead,
-			logical.WriteOperation:  b.pathRoleCreate,
+			logical.UpdateOperation: b.pathRoleCreate,
 			logical.DeleteOperation: b.pathRoleDelete,
 		},
 
@@ -74,8 +75,8 @@ one hour`,
 	}
 }
 
-func getRole(s logical.Storage, n string) (*roleEntry, error) {
-	entry, err := s.Get("role/" + n)
+func getRole(ctx context.Context, s logical.Storage, n string) (*roleEntry, error) {
+	entry, err := s.Get(ctx, "role/"+n)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +92,8 @@ func getRole(s logical.Storage, n string) (*roleEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathRoleDelete(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("role/" + data.Get("name").(string))
+func (b *backend) pathRoleDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "role/"+data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +101,8 @@ func (b *backend) pathRoleDelete(
 	return nil, nil
 }
 
-func (b *backend) pathRoleRead(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	role, err := getRole(req.Storage, data.Get("name").(string))
+func (b *backend) pathRoleRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	role, err := getRole(ctx, req.Storage, data.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +115,7 @@ func (b *backend) pathRoleRead(
 	}, nil
 }
 
-func (b *backend) pathRoleCreate(
-	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	name := data.Get("name").(string)
 
 	creationCQL := data.Get("creation_cql").(string)
@@ -131,18 +129,18 @@ func (b *backend) pathRoleCreate(
 			"Error parsing lease value of %s: %s", leaseRaw, err)), nil
 	}
 
-	leaseGracePeriodRaw := data.Get("lease_grace_period").(string)
-	leaseGracePeriod, err := time.ParseDuration(leaseGracePeriodRaw)
+	consistencyStr := data.Get("consistency").(string)
+	_, err = gocql.ParseConsistencyWrapper(consistencyStr)
 	if err != nil {
 		return logical.ErrorResponse(fmt.Sprintf(
-			"Error parsing lease_grace value of %s: %s", leaseGracePeriodRaw, err)), nil
+			"Error parsing consistency value of %q: %v", consistencyStr, err)), nil
 	}
 
 	entry := &roleEntry{
-		Lease:            lease,
-		LeaseGracePeriod: leaseGracePeriod,
-		CreationCQL:      creationCQL,
-		RollbackCQL:      rollbackCQL,
+		Lease:       lease,
+		CreationCQL: creationCQL,
+		RollbackCQL: rollbackCQL,
+		Consistency: consistencyStr,
 	}
 
 	// Store it
@@ -150,7 +148,7 @@ func (b *backend) pathRoleCreate(
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entryJSON); err != nil {
+	if err := req.Storage.Put(ctx, entryJSON); err != nil {
 		return nil, err
 	}
 
@@ -158,10 +156,10 @@ func (b *backend) pathRoleCreate(
 }
 
 type roleEntry struct {
-	CreationCQL      string        `json:"creation_cql" structs:"creation_cql"`
-	Lease            time.Duration `json:"lease" structs:"lease"`
-	LeaseGracePeriod time.Duration `json:"lease_grace_period" structs:"lease_grace_period"`
-	RollbackCQL      string        `json:"rollback_cql" structs:"rollback_cql"`
+	CreationCQL string        `json:"creation_cql" structs:"creation_cql"`
+	Lease       time.Duration `json:"lease" structs:"lease"`
+	RollbackCQL string        `json:"rollback_cql" structs:"rollback_cql"`
+	Consistency string        `json:"consistency" structs:"consistency"`
 }
 
 const pathRoleHelpSyn = `
@@ -188,12 +186,11 @@ If no "creation_cql" parameter is given, a default will be used:
 This default should be suitable for Cassandra installations using the password
 authenticator but not configured to use authorization.
 
-Similarly, the "rollback_cql" is used if user creation fails, in the absense of
+Similarly, the "rollback_cql" is used if user creation fails, in the absence of
 Cassandra transactions. The default should be suitable for almost any
 instance of Cassandra:
 
 ` + defaultRollbackCQL + `
 
-"lease" and "lease_grace_period" control the lease time and the allowed grace
-period past lease expiration, respectively.
+"lease" the lease time; if not set the mount/system defaults are used.
 `

@@ -1,11 +1,12 @@
 package mfa
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hashicorp/vault/logical"
-	logicaltest "github.com/hashicorp/vault/logical/testing"
 	"github.com/hashicorp/vault/logical/framework"
+	logicaltest "github.com/hashicorp/vault/logical/testing"
 )
 
 // MakeTestBackend creates a simple MFA enabled backend.
@@ -28,23 +29,22 @@ func MakeTestBackend() *framework.Backend {
 	return b
 }
 
-func testPathLogin() *framework.Path { 
+func testPathLogin() *framework.Path {
 	return &framework.Path{
 		Pattern: `login`,
 		Fields: map[string]*framework.FieldSchema{
 			"username": &framework.FieldSchema{
-				Type:        framework.TypeString,
+				Type: framework.TypeString,
 			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
-			logical.WriteOperation: testPathLoginHandler,
+			logical.UpdateOperation: testPathLoginHandler,
 		},
 	}
 }
 
-func testPathLoginHandler(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func testPathLoginHandler(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	username := d.Get("username").(string)
 
 	return &logical.Response{
@@ -57,7 +57,7 @@ func testPathLoginHandler(
 	}, nil
 }
 
-func testMFAHandler(req *logical.Request, d *framework.FieldData, resp *logical.Response) (
+func testMFAHandler(ctx context.Context, req *logical.Request, d *framework.FieldData, resp *logical.Response) (
 	*logical.Response, error) {
 	if d.Get("method").(string) != "accept" {
 		return logical.ErrorResponse("Deny access"), nil
@@ -70,7 +70,8 @@ func TestMFALogin(t *testing.T) {
 	b := MakeTestBackend()
 
 	logicaltest.Test(t, logicaltest.TestCase{
-		Backend: b,
+		AcceptanceTest: true,
+		Backend:        b,
 		Steps: []logicaltest.TestStep{
 			testAccStepEnableMFA(t),
 			testAccStepLogin(t, "user"),
@@ -82,7 +83,8 @@ func TestMFALoginDenied(t *testing.T) {
 	b := MakeTestBackend()
 
 	logicaltest.Test(t, logicaltest.TestCase{
-		Backend: b,
+		AcceptanceTest: true,
+		Backend:        b,
 		Steps: []logicaltest.TestStep{
 			testAccStepEnableMFA(t),
 			testAccStepLoginDenied(t, "user"),
@@ -92,8 +94,8 @@ func TestMFALoginDenied(t *testing.T) {
 
 func testAccStepEnableMFA(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
-		Path: "mfa_config",
+		Operation: logical.UpdateOperation,
+		Path:      "mfa_config",
 		Data: map[string]interface{}{
 			"type": "test",
 		},
@@ -102,26 +104,26 @@ func testAccStepEnableMFA(t *testing.T) logicaltest.TestStep {
 
 func testAccStepLogin(t *testing.T, username string) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
-		Path: "login",
+		Operation: logical.UpdateOperation,
+		Path:      "login",
 		Data: map[string]interface{}{
-			"method": "accept",
+			"method":   "accept",
 			"username": username,
 		},
 		Unauthenticated: true,
-		Check: logicaltest.TestCheckAuth([]string{"foo"}),
+		Check:           logicaltest.TestCheckAuth([]string{"foo"}),
 	}
 }
 
 func testAccStepLoginDenied(t *testing.T, username string) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
-		Path: "login",
+		Operation: logical.UpdateOperation,
+		Path:      "login",
 		Data: map[string]interface{}{
-			"method": "deny",
+			"method":   "deny",
 			"username": username,
 		},
 		Unauthenticated: true,
-		Check: logicaltest.TestCheckError(),
+		Check:           logicaltest.TestCheckError(),
 	}
 }

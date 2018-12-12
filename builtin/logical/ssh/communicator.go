@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
+
+	"github.com/hashicorp/errwrap"
+	log "github.com/hashicorp/go-hclog"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -38,6 +40,9 @@ type SSHCommConfig struct {
 
 	// DisableAgent, if true, will not forward the SSH agent.
 	DisableAgent bool
+
+	// Logger for output
+	Logger log.Logger
 }
 
 // Creates a new communicator implementation over SSH. This takes
@@ -57,12 +62,22 @@ func SSHCommNew(address string, config *SSHCommConfig) (result *comm, err error)
 	return
 }
 
+func (c *comm) Close() error {
+	var err error
+	if c.conn != nil {
+		err = c.conn.Close()
+	}
+	c.conn = nil
+	c.client = nil
+	return err
+}
+
 func (c *comm) Upload(path string, input io.Reader, fi *os.FileInfo) error {
 	// The target directory and file for talking the SCP protocol
 	target_dir := filepath.Dir(path)
 	target_file := filepath.Base(path)
 
-	// On windows, filepath.Dir uses backslash seperators (ie. "\tmp").
+	// On windows, filepath.Dir uses backslash separators (ie. "\tmp").
 	// This does not work when the target host is unix.  Switch to forward slash
 	// which works for unix and windows
 	target_dir = filepath.ToSlash(target_dir)
@@ -74,7 +89,7 @@ func (c *comm) Upload(path string, input io.Reader, fi *os.FileInfo) error {
 	return c.scpSession("scp -vt "+target_dir, scpFunc)
 }
 
-func (c *comm) newSession() (session *ssh.Session, err error) {
+func (c *comm) NewSession() (session *ssh.Session, err error) {
 	if c.client == nil {
 		err = errors.New("client not available")
 	} else {
@@ -82,8 +97,9 @@ func (c *comm) newSession() (session *ssh.Session, err error) {
 	}
 
 	if err != nil {
-		log.Printf("ssh session open error: '%s', attempting reconnect", err)
+		c.config.Logger.Error("ssh session open error, attempting reconnect", "error", err)
 		if err := c.reconnect(); err != nil {
+			c.config.Logger.Error("reconnect attempt failed", "error", err)
 			return nil, err
 		}
 
@@ -93,15 +109,13 @@ func (c *comm) newSession() (session *ssh.Session, err error) {
 	return session, nil
 }
 
-func (c *comm) reconnect() (err error) {
+func (c *comm) reconnect() error {
+	// Close previous connection.
 	if c.conn != nil {
-		c.conn.Close()
+		c.Close()
 	}
 
-	// Set the conn and client to nil since we'll recreate it
-	c.conn = nil
-	c.client = nil
-
+	var err error
 	c.conn, err = c.config.Connection()
 	if err != nil {
 		// Explicitly set this to the REAL nil. Connection() can return
@@ -111,20 +125,22 @@ func (c *comm) reconnect() (err error) {
 		//
 		// http://golang.org/doc/faq#nil_error
 		c.conn = nil
-		log.Printf("reconnection error: %s", err)
-		return
+		c.config.Logger.Error("reconnection error", "error", err)
+		return err
 	}
 
 	sshConn, sshChan, req, err := ssh.NewClientConn(c.conn, c.address, c.config.SSHConfig)
 	if err != nil {
-		log.Printf("handshake error: %s", err)
+		c.config.Logger.Error("handshake error", "error", err)
+		c.Close()
+		return err
 	}
 	if sshConn != nil {
 		c.client = ssh.NewClient(sshConn, sshChan, req)
 	}
 	c.connectToAgent()
 
-	return
+	return nil
 }
 
 func (c *comm) connectToAgent() {
@@ -143,15 +159,15 @@ func (c *comm) connectToAgent() {
 	}
 	agentConn, err := net.Dial("unix", socketLocation)
 	if err != nil {
-		log.Printf("[ERROR] could not connect to local agent socket: %s", socketLocation)
+		c.config.Logger.Error("could not connect to local agent socket", "socket_path", socketLocation)
 		return
 	}
+	defer agentConn.Close()
 
 	// create agent and add in auth
 	forwardingAgent := agent.NewClient(agentConn)
 	if forwardingAgent == nil {
-		log.Printf("[ERROR] Could not create agent client")
-		agentConn.Close()
+		c.config.Logger.Error("could not create agent client")
 		return
 	}
 
@@ -162,7 +178,7 @@ func (c *comm) connectToAgent() {
 	agent.ForwardToAgent(c.client, forwardingAgent)
 
 	// Setup a session to request agent forwarding
-	session, err := c.newSession()
+	session, err := c.NewSession()
 	if err != nil {
 		return
 	}
@@ -170,14 +186,14 @@ func (c *comm) connectToAgent() {
 
 	err = agent.RequestAgentForwarding(session)
 	if err != nil {
-		log.Printf("[ERROR] RequestAgentForwarding: %#v", err)
+		c.config.Logger.Error("error requesting agent forwarding", "error", err)
 		return
 	}
 	return
 }
 
 func (c *comm) scpSession(scpCommand string, f func(io.Writer, *bufio.Reader) error) error {
-	session, err := c.newSession()
+	session, err := c.NewSession()
 	if err != nil {
 		return err
 	}
@@ -233,7 +249,7 @@ func (c *comm) scpSession(scpCommand string, f func(io.Writer, *bufio.Reader) er
 		if exitErr, ok := err.(*ssh.ExitError); ok {
 			// Otherwise, we have an ExitErorr, meaning we can just read
 			// the exit status
-			log.Printf("non-zero exit status: %d", exitErr.ExitStatus())
+			c.config.Logger.Error("got non-zero exit status", "exit_status", exitErr.ExitStatus())
 
 			// If we exited with status 127, it means SCP isn't available.
 			// Return a more descriptive error for that.
@@ -262,7 +278,7 @@ func checkSCPStatus(r *bufio.Reader) error {
 		// Treat any non-zero (really 1 and 2) as fatal errors
 		message, _, err := r.ReadLine()
 		if err != nil {
-			return fmt.Errorf("Error reading error message: %s", err)
+			return errwrap.Wrapf("error reading error message: {{err}}", err)
 		}
 
 		return errors.New(string(message))
@@ -283,7 +299,7 @@ func scpUploadFile(dst string, src io.Reader, w io.Writer, r *bufio.Reader, fi *
 		// so that we can determine the length, since SCP is length-prefixed.
 		tf, err := ioutil.TempFile("", "vault-ssh-upload")
 		if err != nil {
-			return fmt.Errorf("Error creating temporary file for upload: %s", err)
+			return errwrap.Wrapf("error creating temporary file for upload: {{err}}", err)
 		}
 		defer os.Remove(tf.Name())
 		defer tf.Close()
@@ -297,17 +313,17 @@ func scpUploadFile(dst string, src io.Reader, w io.Writer, r *bufio.Reader, fi *
 		// Sync the file so that the contents are definitely on disk, then
 		// read the length of it.
 		if err := tf.Sync(); err != nil {
-			return fmt.Errorf("Error creating temporary file for upload: %s", err)
+			return errwrap.Wrapf("error creating temporary file for upload: {{err}}", err)
 		}
 
 		// Seek the file to the beginning so we can re-read all of it
 		if _, err := tf.Seek(0, 0); err != nil {
-			return fmt.Errorf("Error creating temporary file for upload: %s", err)
+			return errwrap.Wrapf("error creating temporary file for upload: {{err}}", err)
 		}
 
 		tfi, err := tf.Stat()
 		if err != nil {
-			return fmt.Errorf("Error creating temporary file for upload: %s", err)
+			return errwrap.Wrapf("error creating temporary file for upload: {{err}}", err)
 		}
 
 		size = tfi.Size()

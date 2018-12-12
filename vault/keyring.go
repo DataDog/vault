@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/vault/helper/jsonutil"
 )
 
 // Keyring is used to manage multiple encryption keys used by
@@ -37,15 +40,14 @@ type Key struct {
 
 // Serialize is used to create a byte encoded key
 func (k *Key) Serialize() ([]byte, error) {
-	buf, err := json.Marshal(k)
-	return buf, err
+	return json.Marshal(k)
 }
 
 // DeserializeKey is used to deserialize and return a new key
 func DeserializeKey(buf []byte) (*Key, error) {
 	k := new(Key)
-	if err := json.Unmarshal(buf, k); err != nil {
-		return nil, fmt.Errorf("deserialization failed: %v", err)
+	if err := jsonutil.DecodeJSON(buf, k); err != nil {
+		return nil, errwrap.Wrapf("deserialization failed: {{err}}", err)
 	}
 	return k, nil
 }
@@ -74,10 +76,10 @@ func (k *Keyring) Clone() *Keyring {
 
 // AddKey adds a new key to the keyring
 func (k *Keyring) AddKey(key *Key) (*Keyring, error) {
-	// Ensure there is no confict
+	// Ensure there is no conflict
 	if exist, ok := k.keys[key.Term]; ok {
 		if !bytes.Equal(key.Value, exist.Value) {
-			return nil, fmt.Errorf("Conflicting key for term %d already installed", key.Term)
+			return nil, fmt.Errorf("conflicting key for term %d already installed", key.Term)
 		}
 		return k, nil
 	}
@@ -104,7 +106,7 @@ func (k *Keyring) AddKey(key *Key) (*Keyring, error) {
 func (k *Keyring) RemoveKey(term uint32) (*Keyring, error) {
 	// Ensure this is not the active key
 	if term == k.activeTerm {
-		return nil, fmt.Errorf("Cannot remove active key")
+		return nil, fmt.Errorf("cannot remove active key")
 	}
 
 	// Check if this term does not exist
@@ -166,8 +168,8 @@ func (k *Keyring) Serialize() ([]byte, error) {
 func DeserializeKeyring(buf []byte) (*Keyring, error) {
 	// Deserialize the keyring
 	var enc EncodedKeyring
-	if err := json.Unmarshal(buf, &enc); err != nil {
-		return nil, fmt.Errorf("deserialization failed: %v", err)
+	if err := jsonutil.DecodeJSON(buf, &enc); err != nil {
+		return nil, errwrap.Wrapf("deserialization failed: {{err}}", err)
 	}
 
 	// Create a new keyring
@@ -180,4 +182,22 @@ func DeserializeKeyring(buf []byte) (*Keyring, error) {
 		}
 	}
 	return k, nil
+}
+
+// N.B.:
+// Since Go 1.5 these are not reliable; see the documentation around the memzero
+// function. These are best-effort.
+func (k *Keyring) Zeroize(keysToo bool) {
+	if k == nil {
+		return
+	}
+	if k.masterKey != nil {
+		memzero(k.masterKey)
+	}
+	if !keysToo || k.keys == nil {
+		return
+	}
+	for _, key := range k.keys {
+		memzero(key.Value)
+	}
 }

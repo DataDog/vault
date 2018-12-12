@@ -1,16 +1,23 @@
 package framework
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/hashicorp/errwrap"
+	log "github.com/hashicorp/go-hclog"
+
 	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/vault/helper/errutil"
+	"github.com/hashicorp/vault/helper/logging"
+	"github.com/hashicorp/vault/helper/parseutil"
 	"github.com/hashicorp/vault/logical"
 )
 
@@ -42,41 +49,115 @@ type Backend struct {
 	// and ease specifying callbacks for revocation, renewal, etc.
 	Secrets []*Secret
 
-	// Rollback is called when a WAL entry (see wal.go) has to be rolled
+	// PeriodicFunc is the callback, which if set, will be invoked when the
+	// periodic timer of RollbackManager ticks. This can be used by
+	// backends to do anything it wishes to do periodically.
+	//
+	// PeriodicFunc can be invoked to, say to periodically delete stale
+	// entries in backend's storage, while the backend is still being used.
+	// (Note the different of this action from what `Clean` does, which is
+	// invoked just before the backend is unmounted).
+	PeriodicFunc periodicFunc
+
+	// WALRollback is called when a WAL entry (see wal.go) has to be rolled
 	// back. It is called with the data from the entry.
 	//
-	// RollbackMinAge is the minimum age of a WAL entry before it is attempted
+	// WALRollbackMinAge is the minimum age of a WAL entry before it is attempted
 	// to be rolled back. This should be longer than the maximum time it takes
 	// to successfully create a secret.
-	Rollback       RollbackFunc
-	RollbackMinAge time.Duration
+	WALRollback       WALRollbackFunc
+	WALRollbackMinAge time.Duration
 
 	// Clean is called on unload to clean up e.g any existing connections
 	// to the backend, if required.
 	Clean CleanupFunc
+
+	// Invalidate is called when a keys is modified if required
+	Invalidate InvalidateFunc
 
 	// AuthRenew is the callback to call when a RenewRequest for an
 	// authentication comes in. By default, renewal won't be allowed.
 	// See the built-in AuthRenew helpers in lease.go for common callbacks.
 	AuthRenew OperationFunc
 
-	logger  *log.Logger
+	// Type is the logical.BackendType for the backend implementation
+	BackendType logical.BackendType
+
+	logger  log.Logger
 	system  logical.SystemView
 	once    sync.Once
 	pathsRe []*regexp.Regexp
 }
 
-// OperationFunc is the callback called for an operation on a path.
-type OperationFunc func(*logical.Request, *FieldData) (*logical.Response, error)
+// periodicFunc is the callback called when the RollbackManager's timer ticks.
+// This can be utilized by the backends to do anything it wants.
+type periodicFunc func(context.Context, *logical.Request) error
 
-// RollbackFunc is the callback for rollbacks.
-type RollbackFunc func(*logical.Request, string, interface{}) error
+// OperationFunc is the callback called for an operation on a path.
+type OperationFunc func(context.Context, *logical.Request, *FieldData) (*logical.Response, error)
+
+// ExistenceFunc is the callback called for an existence check on a path.
+type ExistenceFunc func(context.Context, *logical.Request, *FieldData) (bool, error)
+
+// WALRollbackFunc is the callback for rollbacks.
+type WALRollbackFunc func(context.Context, *logical.Request, string, interface{}) error
 
 // CleanupFunc is the callback for backend unload.
-type CleanupFunc func()
+type CleanupFunc func(context.Context)
 
-// logical.Backend impl.
-func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error) {
+// InvalidateFunc is the callback for backend key invalidation.
+type InvalidateFunc func(context.Context, string)
+
+// HandleExistenceCheck is the logical.Backend implementation.
+func (b *Backend) HandleExistenceCheck(ctx context.Context, req *logical.Request) (checkFound bool, exists bool, err error) {
+	b.once.Do(b.init)
+
+	// Ensure we are only doing this when one of the correct operations is in play
+	switch req.Operation {
+	case logical.CreateOperation:
+	case logical.UpdateOperation:
+	default:
+		return false, false, fmt.Errorf("incorrect operation type %v for an existence check", req.Operation)
+	}
+
+	// Find the matching route
+	path, captures := b.route(req.Path)
+	if path == nil {
+		return false, false, logical.ErrUnsupportedPath
+	}
+
+	if path.ExistenceCheck == nil {
+		return false, false, nil
+	}
+
+	checkFound = true
+
+	// Build up the data for the route, with the URL taking priority
+	// for the fields over the PUT data.
+	raw := make(map[string]interface{}, len(path.Fields))
+	for k, v := range req.Data {
+		raw[k] = v
+	}
+	for k, v := range captures {
+		raw[k] = v
+	}
+
+	fd := FieldData{
+		Raw:    raw,
+		Schema: path.Fields}
+
+	err = fd.Validate()
+	if err != nil {
+		return false, false, errutil.UserError{Err: err.Error()}
+	}
+
+	// Call the callback with the request and the data
+	exists, err = path.ExistenceCheck(ctx, req, &fd)
+	return
+}
+
+// HandleRequest is the logical.Backend implementation.
+func (b *Backend) HandleRequest(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	b.once.Do(b.init)
 
 	// Check for special cased global operations. These don't route
@@ -85,9 +166,9 @@ func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error)
 	case logical.RenewOperation:
 		fallthrough
 	case logical.RevokeOperation:
-		return b.handleRevokeRenew(req)
+		return b.handleRevokeRenew(ctx, req)
 	case logical.RollbackOperation:
-		return b.handleRollback(req)
+		return b.handleRollback(ctx, req)
 	}
 
 	// If the path is empty and it is a help operation, handle that.
@@ -119,7 +200,7 @@ func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error)
 	}
 	if !ok {
 		if req.Operation == logical.HelpOperation {
-			callback = path.helpCallback
+			callback = path.helpCallback()
 			ok = true
 		}
 	}
@@ -139,72 +220,53 @@ func (b *Backend) HandleRequest(req *logical.Request) (*logical.Response, error)
 	}
 
 	// Call the callback with the request and the data
-	return callback(req, &fd)
+	return callback(ctx, req, &fd)
 }
 
-// logical.Backend impl.
+// SpecialPaths is the logical.Backend implementation.
 func (b *Backend) SpecialPaths() *logical.Paths {
 	return b.PathsSpecial
 }
 
-// Setup is used to initialize the backend with the initial backend configuration
-func (b *Backend) Setup(config *logical.BackendConfig) (logical.Backend, error) {
-	b.logger = config.Logger
-	b.system = config.System
-	return b, nil
+// Cleanup is used to release resources and prepare to stop the backend
+func (b *Backend) Cleanup(ctx context.Context) {
+	if b.Clean != nil {
+		b.Clean(ctx)
+	}
 }
 
-func (b *Backend) Cleanup() {
-	if b.Clean != nil {
-		b.Clean()
+// InvalidateKey is used to clear caches and reset internal state on key changes
+func (b *Backend) InvalidateKey(ctx context.Context, key string) {
+	if b.Invalidate != nil {
+		b.Invalidate(ctx, key)
 	}
+}
+
+// Setup is used to initialize the backend with the initial backend configuration
+func (b *Backend) Setup(ctx context.Context, config *logical.BackendConfig) error {
+	b.logger = config.Logger
+	b.system = config.System
+	return nil
 }
 
 // Logger can be used to get the logger. If no logger has been set,
 // the logs will be discarded.
-func (b *Backend) Logger() *log.Logger {
+func (b *Backend) Logger() log.Logger {
 	if b.logger != nil {
 		return b.logger
 	}
 
-	return log.New(ioutil.Discard, "", 0)
+	return logging.NewVaultLoggerWithWriter(ioutil.Discard, log.NoLevel)
 }
 
+// System returns the backend's system view.
 func (b *Backend) System() logical.SystemView {
 	return b.system
 }
 
-// This method takes in the TTL and MaxTTL values provided by the user, compares
-// those with the SystemView values. If they are empty default values are set.
-// If they are set, their boundaries are validated.
-func (b *Backend) SanitizeTTL(ttlStr, maxTTLStr string) (ttl, maxTTL time.Duration, err error) {
-	sysMaxTTL := b.System().MaxLeaseTTL()
-	if len(ttlStr) == 0 {
-		ttl = b.System().DefaultLeaseTTL()
-	} else {
-		ttl, err = time.ParseDuration(ttlStr)
-		if err != nil {
-			return 0, 0, fmt.Errorf("Invalid ttl: %s", err)
-		}
-		if ttl > sysMaxTTL {
-			return 0, 0, fmt.Errorf("\"ttl\" value must be less than allowed max lease TTL value '%s'", sysMaxTTL.String())
-		}
-	}
-	if len(maxTTLStr) == 0 {
-		maxTTL = sysMaxTTL
-	} else {
-		maxTTL, err = time.ParseDuration(maxTTLStr)
-		if err != nil {
-			return 0, 0, fmt.Errorf("Invalid max_ttl: %s", err)
-		}
-		if maxTTL > sysMaxTTL {
-			return 0, 0, fmt.Errorf("\"max_ttl\" value must be less than allowed max lease TTL value '%s'", sysMaxTTL.String())
-		}
-	}
-	if ttl > maxTTL {
-		ttl = maxTTL
-	}
-	return
+// Type returns the backend type
+func (b *Backend) Type() logical.BackendType {
+	return b.BackendType
 }
 
 // Route looks up the path that would be used for a given path string.
@@ -301,11 +363,10 @@ func (b *Backend) handleRootHelp() (*logical.Response, error) {
 	return logical.HelpResponse(help, nil), nil
 }
 
-func (b *Backend) handleRevokeRenew(
-	req *logical.Request) (*logical.Response, error) {
+func (b *Backend) handleRevokeRenew(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	// Special case renewal of authentication for credential backends
 	if req.Operation == logical.RenewOperation && req.Auth != nil {
-		return b.handleAuthRenew(req)
+		return b.handleAuthRenew(ctx, req)
 	}
 
 	if req.Secret == nil {
@@ -328,31 +389,41 @@ func (b *Backend) handleRevokeRenew(
 
 	switch req.Operation {
 	case logical.RenewOperation:
-		return secret.HandleRenew(req)
+		return secret.HandleRenew(ctx, req)
 	case logical.RevokeOperation:
-		return secret.HandleRevoke(req)
+		return secret.HandleRevoke(ctx, req)
 	default:
-		return nil, fmt.Errorf(
-			"invalid operation for revoke/renew: %s", req.Operation)
+		return nil, fmt.Errorf("invalid operation for revoke/renew: %q", req.Operation)
 	}
 }
 
-func (b *Backend) handleAuthRenew(req *logical.Request) (*logical.Response, error) {
+// handleRollback invokes the PeriodicFunc set on the backend. It also does a WAL rollback operation.
+func (b *Backend) handleRollback(ctx context.Context, req *logical.Request) (*logical.Response, error) {
+	// Response is not expected from the periodic operation.
+	if b.PeriodicFunc != nil {
+		if err := b.PeriodicFunc(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+
+	return b.handleWALRollback(ctx, req)
+}
+
+func (b *Backend) handleAuthRenew(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	if b.AuthRenew == nil {
 		return logical.ErrorResponse("this auth type doesn't support renew"), nil
 	}
 
-	return b.AuthRenew(req, nil)
+	return b.AuthRenew(ctx, req, nil)
 }
 
-func (b *Backend) handleRollback(
-	req *logical.Request) (*logical.Response, error) {
-	if b.Rollback == nil {
+func (b *Backend) handleWALRollback(ctx context.Context, req *logical.Request) (*logical.Response, error) {
+	if b.WALRollback == nil {
 		return nil, logical.ErrUnsupportedOperation
 	}
 
 	var merr error
-	keys, err := ListWAL(req.Storage)
+	keys, err := ListWAL(ctx, req.Storage)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
@@ -362,17 +433,17 @@ func (b *Backend) handleRollback(
 
 	// Calculate the minimum time that the WAL entries could be
 	// created in order to be rolled back.
-	age := b.RollbackMinAge
+	age := b.WALRollbackMinAge
 	if age == 0 {
 		age = 10 * time.Minute
 	}
-	minAge := time.Now().UTC().Add(-1 * age)
+	minAge := time.Now().Add(-1 * age)
 	if _, ok := req.Data["immediate"]; ok {
-		minAge = time.Now().UTC().Add(1000 * time.Hour)
+		minAge = time.Now().Add(1000 * time.Hour)
 	}
 
 	for _, k := range keys {
-		entry, err := GetWAL(req.Storage, k)
+		entry, err := GetWAL(ctx, req.Storage, k)
 		if err != nil {
 			merr = multierror.Append(merr, err)
 			continue
@@ -386,14 +457,13 @@ func (b *Backend) handleRollback(
 			continue
 		}
 
-		// Attempt a rollback
-		err = b.Rollback(req, entry.Kind, entry.Data)
+		// Attempt a WAL rollback
+		err = b.WALRollback(ctx, req, entry.Kind, entry.Data)
 		if err != nil {
-			err = fmt.Errorf(
-				"Error rolling back '%s' entry: %s", entry.Kind, err)
+			err = errwrap.Wrapf(fmt.Sprintf("error rolling back %q entry: {{err}}", entry.Kind), err)
 		}
 		if err == nil {
-			err = DeleteWAL(req.Storage, k)
+			err = DeleteWAL(ctx, req.Storage, k)
 		}
 		if err != nil {
 			merr = multierror.Append(merr, err)
@@ -418,14 +488,50 @@ type FieldSchema struct {
 // the zero value of the type.
 func (s *FieldSchema) DefaultOrZero() interface{} {
 	if s.Default != nil {
-		return s.Default
+		switch s.Type {
+		case TypeDurationSecond:
+			var result int
+			switch inp := s.Default.(type) {
+			case nil:
+				return s.Type.Zero()
+			case int:
+				result = inp
+			case int64:
+				result = int(inp)
+			case float32:
+				result = int(inp)
+			case float64:
+				result = int(inp)
+			case string:
+				dur, err := parseutil.ParseDurationSecond(inp)
+				if err != nil {
+					return s.Type.Zero()
+				}
+				result = int(dur.Seconds())
+			case json.Number:
+				valInt64, err := inp.Int64()
+				if err != nil {
+					return s.Type.Zero()
+				}
+				result = int(valInt64)
+			default:
+				return s.Type.Zero()
+			}
+			return result
+
+		default:
+			return s.Default
+		}
 	}
 
 	return s.Type.Zero()
 }
 
+// Zero returns the correct zero-value for a specific FieldType
 func (t FieldType) Zero() interface{} {
 	switch t {
+	case TypeNameString:
+		return ""
 	case TypeString:
 		return ""
 	case TypeInt:
@@ -434,8 +540,16 @@ func (t FieldType) Zero() interface{} {
 		return false
 	case TypeMap:
 		return map[string]interface{}{}
+	case TypeKVPairs:
+		return map[string]string{}
 	case TypeDurationSecond:
 		return 0
+	case TypeSlice:
+		return []interface{}{}
+	case TypeStringSlice, TypeCommaStringSlice:
+		return []string{}
+	case TypeCommaIntSlice:
+		return []int{}
 	default:
 		panic("unknown type: " + t.String())
 	}

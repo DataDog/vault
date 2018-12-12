@@ -1,24 +1,66 @@
 package appId
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/hashicorp/vault/helper/salt"
 	"github.com/hashicorp/vault/logical"
 	logicaltest "github.com/hashicorp/vault/logical/testing"
 )
 
 func TestBackend_basic(t *testing.T) {
+	var b *backend
+	var err error
+	var storage logical.Storage
+	factory := func(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
+		b, err = Backend(conf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storage = conf.StorageView
+		if err := b.Setup(ctx, conf); err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
 	logicaltest.Test(t, logicaltest.TestCase{
-		Factory: Factory,
+		Factory: factory,
 		Steps: []logicaltest.TestStep{
 			testAccStepMapAppId(t),
 			testAccStepMapUserId(t),
 			testAccLogin(t, ""),
+			testAccLoginAppIDInPath(t, ""),
 			testAccLoginInvalid(t),
 			testAccStepDeleteUserId(t),
 			testAccLoginDeleted(t),
 		},
 	})
+
+	req := &logical.Request{
+		Path:      "map/app-id",
+		Operation: logical.ListOperation,
+		Storage:   storage,
+	}
+	resp, err := b.HandleRequest(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("nil response")
+	}
+	keys := resp.Data["keys"].([]string)
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	bSalt, err := b.Salt(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys[0] != "s"+bSalt.SaltIDHashFunc("foo", salt.SHA256Hash) {
+		t.Fatal("value was improperly salted")
+	}
 }
 
 func TestBackend_cidr(t *testing.T) {
@@ -41,6 +83,7 @@ func TestBackend_displayName(t *testing.T) {
 			testAccStepMapAppIdDisplayName(t),
 			testAccStepMapUserId(t),
 			testAccLogin(t, "tubbin"),
+			testAccLoginAppIDInPath(t, "tubbin"),
 			testAccLoginInvalid(t),
 			testAccStepDeleteUserId(t),
 			testAccLoginDeleted(t),
@@ -48,69 +91,9 @@ func TestBackend_displayName(t *testing.T) {
 	})
 }
 
-// Verify that we are able to update from non-salted (<0.2) to
-// using a Salt for the paths
-func TestBackend_upgradeToSalted(t *testing.T) {
-	inm := new(logical.InmemStorage)
-
-	// Create some fake keys
-	se, _ := logical.StorageEntryJSON("struct/map/app-id/foo",
-		map[string]string{"value": "test"})
-	inm.Put(se)
-	se, _ = logical.StorageEntryJSON("struct/map/user-id/bar",
-		map[string]string{"value": "foo"})
-	inm.Put(se)
-
-	// Initialize the backend, this should do the automatic upgrade
-	conf := &logical.BackendConfig{
-		StorageView: inm,
-	}
-	backend, err := Factory(conf)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	// Check the keys have been upgraded
-	out, err := inm.Get("struct/map/app-id/foo")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if out != nil {
-		t.Fatalf("unexpected key")
-	}
-	out, err = inm.Get("struct/map/user-id/bar")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if out != nil {
-		t.Fatalf("unexpected key")
-	}
-
-	// Backend should still be able to resolve
-	req := logical.TestRequest(t, logical.ReadOperation, "map/app-id/foo")
-	req.Storage = inm
-	resp, err := backend.HandleRequest(req)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if resp.Data["value"] != "test" {
-		t.Fatalf("bad: %#v", resp)
-	}
-
-	req = logical.TestRequest(t, logical.ReadOperation, "map/user-id/bar")
-	req.Storage = inm
-	resp, err = backend.HandleRequest(req)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if resp.Data["value"] != "foo" {
-		t.Fatalf("bad: %#v", resp)
-	}
-}
-
 func testAccStepMapAppId(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "map/app-id/foo",
 		Data: map[string]interface{}{
 			"value": "foo,bar",
@@ -120,7 +103,7 @@ func testAccStepMapAppId(t *testing.T) logicaltest.TestStep {
 
 func testAccStepMapAppIdDisplayName(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "map/app-id/foo",
 		Data: map[string]interface{}{
 			"display_name": "tubbin",
@@ -131,7 +114,7 @@ func testAccStepMapAppIdDisplayName(t *testing.T) logicaltest.TestStep {
 
 func testAccStepMapUserId(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "map/user-id/42",
 		Data: map[string]interface{}{
 			"value": "foo",
@@ -148,7 +131,7 @@ func testAccStepDeleteUserId(t *testing.T) logicaltest.TestStep {
 
 func testAccStepMapUserIdCidr(t *testing.T, cidr string) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "map/user-id/42",
 		Data: map[string]interface{}{
 			"value":      "foo",
@@ -158,8 +141,14 @@ func testAccStepMapUserIdCidr(t *testing.T, cidr string) logicaltest.TestStep {
 }
 
 func testAccLogin(t *testing.T, display string) logicaltest.TestStep {
+	checkTTL := func(resp *logical.Response) error {
+		if resp.Auth.LeaseOptions.TTL.String() != "768h0m0s" {
+			return fmt.Errorf("invalid TTL: got %s", resp.Auth.LeaseOptions.TTL)
+		}
+		return nil
+	}
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "login",
 		Data: map[string]interface{}{
 			"app_id":  "foo",
@@ -168,8 +157,32 @@ func testAccLogin(t *testing.T, display string) logicaltest.TestStep {
 		Unauthenticated: true,
 
 		Check: logicaltest.TestCheckMulti(
-			logicaltest.TestCheckAuth([]string{"bar", "foo"}),
+			logicaltest.TestCheckAuth([]string{"bar", "default", "foo"}),
 			logicaltest.TestCheckAuthDisplayName(display),
+			checkTTL,
+		),
+	}
+}
+
+func testAccLoginAppIDInPath(t *testing.T, display string) logicaltest.TestStep {
+	checkTTL := func(resp *logical.Response) error {
+		if resp.Auth.LeaseOptions.TTL.String() != "768h0m0s" {
+			return fmt.Errorf("invalid TTL: got %s", resp.Auth.LeaseOptions.TTL)
+		}
+		return nil
+	}
+	return logicaltest.TestStep{
+		Operation: logical.UpdateOperation,
+		Path:      "login/foo",
+		Data: map[string]interface{}{
+			"user_id": "42",
+		},
+		Unauthenticated: true,
+
+		Check: logicaltest.TestCheckMulti(
+			logicaltest.TestCheckAuth([]string{"bar", "default", "foo"}),
+			logicaltest.TestCheckAuthDisplayName(display),
+			checkTTL,
 		),
 	}
 }
@@ -177,11 +190,11 @@ func testAccLogin(t *testing.T, display string) logicaltest.TestStep {
 func testAccLoginCidr(t *testing.T, ip string, err bool) logicaltest.TestStep {
 	check := logicaltest.TestCheckError()
 	if !err {
-		check = logicaltest.TestCheckAuth([]string{"bar", "foo"})
+		check = logicaltest.TestCheckAuth([]string{"bar", "default", "foo"})
 	}
 
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "login",
 		Data: map[string]interface{}{
 			"app_id":  "foo",
@@ -197,7 +210,7 @@ func testAccLoginCidr(t *testing.T, ip string, err bool) logicaltest.TestStep {
 
 func testAccLoginInvalid(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "login",
 		Data: map[string]interface{}{
 			"app_id":  "foo",
@@ -212,7 +225,7 @@ func testAccLoginInvalid(t *testing.T) logicaltest.TestStep {
 
 func testAccLoginDeleted(t *testing.T) logicaltest.TestStep {
 	return logicaltest.TestStep{
-		Operation: logical.WriteOperation,
+		Operation: logical.UpdateOperation,
 		Path:      "login",
 		Data: map[string]interface{}{
 			"app_id":  "foo",

@@ -1,652 +1,680 @@
 ---
 layout: "docs"
-page_title: "Secret Backend: PKI"
+page_title: "PKI - Secrets Engines"
 sidebar_current: "docs-secrets-pki"
 description: |-
-  The PKI secret backend for Vault generates TLS certificates.
+  The PKI secrets engine for Vault generates TLS certificates.
 ---
 
-# PKI Secret Backend
+# PKI Secrets Engine
 
-Name: `pki`
+The PKI secrets engine generates dynamic X.509 certificates. With this secrets
+engine, services can get certificates without going through the usual manual
+process of generating a private key and CSR, submitting to a CA, and waiting for
+a verification and signing process to complete. Vault's built-in authentication
+and authorization mechanisms provide the verification functionality.
 
-The PKI secret backend for Vault generates X.509 certificates dynamically based on configured roles. This means services can get certificates needed for both client and server authentication without going through the usual manual process of generating a private key and CSR, submitting to a CA, and waiting for a verification and signing process to complete. Vault's built-in authentication and authorization mechanisms provide the verification functionality.
+By keeping TTLs relatively short, revocations are less likely to be needed,
+keeping CRLs short and helping the secrets engine scale to large workloads. This
+in turn allows each instance of a running application to have a unique
+certificate, eliminating sharing and the accompanying pain of revocation and
+rollover.
 
-By keeping TTLs relatively short, revocations are less likely to be needed, keeping CRLs short and helping the backend scale to large workloads. This in turn allows each instance of a running application to have a unique certificate, eliminating sharing and the accompanying pain of revocation and rollover.
+In addition, by allowing revocation to mostly be forgone, this secrets engine
+allows for ephemeral certificates. Certificates can be fetched and stored in
+memory upon application startup and discarded upon shutdown, without ever being
+written to disk.
 
-In addition, by allowing revocation to mostly be forgone, this backend allows for ephemeral certificates; certificates can be fetched and stored in memory upon application startup and discarded upon shutdown, without ever being written to disk.
+## Setup
 
-This page will show a quick start for this backend. For detailed documentation on every path, use `vault path-help` after mounting the backend.
+Most secrets engines must be configured in advance before they can perform their
+functions. These steps are usually completed by an operator or configuration
+management tool.
+
+1. Enable the PKI secrets engine:
+
+    ```text
+    $ vault secrets enable pki
+    Success! Enabled the pki secrets engine at: pki/
+    ```
+
+    By default, the secrets engine will mount at the name of the engine. To
+    enable the secrets engine at a different path, use the `-path` argument.
+
+
+1. Increase the TTL by tuning the secrets engine. The default value of 30 days may be too short, so increase it to 1 year:
+
+    ```text
+    $ vault secrets tune -max-lease-ttl=8760h pki
+    Success! Tuned the secrets engine at: pki/
+    ```
+
+    Note that individual roles can restrict this value to be shorter on a
+    per-certificate basis. This just configures the global maximum for this
+    secrets engine.
+
+1. Configure a CA certificate and private key. Vault can accept an existing key
+pair, or it can generate its own self-signed root. In general, we recommend
+maintaining your root CA outside of Vault and providing Vault a signed
+intermediate CA.
+
+    ```text
+    $ vault write pki/root/generate/internal \
+        common_name=my-website.com \
+        ttl=8760h
+
+    Key              Value
+    ---              -----
+    certificate      -----BEGIN CERTIFICATE-----...
+    expiration       1536807433
+    issuing_ca       -----BEGIN CERTIFICATE-----...
+    serial_number    7c:f1:fb:2c:6e:4d:99:0e:82:1b:08:0a:81:ed:61:3e:1d:fa:f5:29
+    ```
+
+    The returned certificate is purely informative. The private key is safely
+    stored internally in Vault.
+
+1. Update the CRL location and issuing certificates. These values can be updated
+in the future.
+
+    ```text
+    $ vault write pki/config/urls \
+        issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
+        crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"
+    Success! Data written to: pki/config/urls
+    ```
+
+1. Configure a role that maps a name in Vault to a procedure for generating a
+certificate. When users or machines generate credentials, they are generated
+against this role:
+
+    ```text
+    $ vault write pki/roles/my-role \
+        allowed_domains=my-website.com \
+        allow_subdomains=true \
+        max_ttl=72h
+    Success! Data written to: pki/roles/my-role
+    ```
+
+## Usage
+
+After the secrets engine is configured and a user/machine has a Vault token with
+the proper permission, it can generate credentials.
+
+1. Generate a new credential by writing to the `/issue` endpoint with the name
+of the role:
+
+    ```text
+    $ vault write pki/issue/my-role \
+        common_name=www.my-website.com
+
+    Key                 Value
+    ---                 -----
+    certificate         -----BEGIN CERTIFICATE-----...
+    issuing_ca          -----BEGIN CERTIFICATE-----...
+    private_key         -----BEGIN RSA PRIVATE KEY-----...
+    private_key_type    rsa
+    serial_number       1d:2e:c6:06:45:18:60:0e:23:d6:c5:17:43:c0:fe:46:ed:d1:50:be
+    ```
+
+    The output will include a dynamically generated private key and certificate
+    which corresponds to the given role and expires in 72h (as dictated by our
+    role definition). The issuing CA and trust chain is also returned for
+    automation simplicity.
 
 ## Considerations
 
-To successfully deploy this backend, there are a number of important considerations to be aware of, as well as some preparatory steps that should be undertaken. You should read all of these *before* using this backend or generating the CA to use with this backend.
+To successfully deploy this secrets engine, there are a number of important
+considerations to be aware of, as well as some preparatory steps that should be
+undertaken. You should read all of these *before* using this secrets engine or
+generating the CA to use with this secrets engine.
 
-### Never use root CAs
+### Be Careful with Root CAs
 
-Vault storage is secure, but not as secure as a piece of paper in a bank vault. It is, after all, networked software. Your long-lived self-signed root CA's private key should instead be used to issue a shorter-lived intermediate CA certificate, and this is what you should put into Vault. This aligns with industry best practices.
+Vault storage is secure, but not as secure as a piece of paper in a bank vault.
+It is, after all, networked software. If your root CA is hosted outside of
+Vault, don't put it in Vault as well; instead, issue a shorter-lived
+intermediate CA certificate and put this into Vault. This aligns with industry
+best practices.
 
-### One CA Certificate, One Backend
+Since 0.4, the secrets engine supports generating self-signed root CAs and
+creating and signing CSRs for intermediate CAs. In each instance, for security
+reasons, the private key can *only* be exported at generation time, and the
+ability to do so is part of the command path (so it can be put into ACL
+policies).
 
-In order to vastly simplify both the configuration and codebase of the PKI backend, only one CA certificate is allowed per backend. If you want to issue certificates from multiple CAs, mount the PKI backend at multiple mount points with separate CA certificates in each.
+If you plan on using intermediate CAs with Vault, it is suggested that you let
+Vault create CSRs and do not export the private key, then sign those with your
+root CA (which may be a second mount of the `pki` secrets engine).
 
-This also provides a convenient method of switching to a new CA certificate while keeping CRLs valid from the old CA certificate; simply mount a new backend and issue from there.
+### One CA Certificate, One Secrets Engine
+
+In order to vastly simplify both the configuration and codebase of the PKI
+secrets engine, only one CA certificate is allowed per secrets engine. If you
+want to issue certificates from multiple CAs, mount the PKI secrets engine at
+multiple mount points with separate CA certificates in each.
+
+This also provides a convenient method of switching to a new CA certificate
+while keeping CRLs valid from the old CA certificate; simply mount a new secrets
+engine and issue from there.
+
+A common pattern is to have one mount act as your root CA and to use this CA
+only to sign intermediate CA CSRs from other PKI secrets engines.
 
 ### Keep certificate lifetimes short, for CRL's sake
 
-This backend aligns with Vault's philosophy of short-lived secrets. As such it is not expected that CRLs will grow large; the only place a private key is ever returned is to the requesting client (this backend does *not* store generated private keys). In most cases, if the key is lost, the certificate can simply be ignored, as it will expire shortly.
+This secrets engine aligns with Vault's philosophy of short-lived secrets. As
+such it is not expected that CRLs will grow large; the only place a private key
+is ever returned is to the requesting client (this secrets engine does *not*
+store generated private keys, except for CA certificates). In most cases, if the
+key is lost, the certificate can simply be ignored, as it will expire shortly.
 
-If a certificate must truly be revoked, the normal Vault revocation function can be used; alternately a root token can be used to revoke the certificate using the certificate's serial number. Any revocation action will cause the CRL to be regenerated. When the CRL is regenerated, any expired certificates are removed from the CRL (and any revoked, expired certificate are removed from backend storage).
+If a certificate must truly be revoked, the normal Vault revocation function can
+be used; alternately a root token can be used to revoke the certificate using
+the certificate's serial number. Any revocation action will cause the CRL to be
+regenerated. When the CRL is regenerated, any expired certificates are removed
+from the CRL (and any revoked, expired certificate are removed from secrets
+engine storage).
 
-This backend does not support multiple CRL endpoints with sliding date windows; often such mechanisms will have the transition point a few days apart, but this gets into the expected realm of the actual certificate validity periods issued from this backend. A good rule of thumb for this backend would be to simply not issue certificates with a validity period greater than your maximum comfortable CRL lifetime. Alternately, you can control CRL caching behavior on the client to ensure that checks happen more often.
+This secrets engine does not support multiple CRL endpoints with sliding date
+windows; often such mechanisms will have the transition point a few days apart,
+but this gets into the expected realm of the actual certificate validity periods
+issued from this secrets engine. A good rule of thumb for this secrets engine
+would be to simply not issue certificates with a validity period greater than
+your maximum comfortable CRL lifetime. Alternately, you can control CRL caching
+behavior on the client to ensure that checks happen more often.
 
-Often multiple endpoints are used in case a single CRL endpoint is down so that clients don't have to figure out what to do with a lack of response. Run Vault in HA mode, and the CRL endpoint should be available even if a particular node is down.
+Often multiple endpoints are used in case a single CRL endpoint is down so that
+clients don't have to figure out what to do with a lack of response. Run Vault in HA mode, and the CRL endpoint should be available even if a particular node
+is down.
 
-### You must configure CRL information *in advance*
+### You must configure issuing/CRL/OCSP information *in advance*
 
-This backend serves CRLs from a predictable location. That location must be encoded into your CA certificate if you want to allow applications to use the CRL endpoint encoded in certificates to find the CRL. Instructions for doing so are below. If you need to adjust this later, you will have to generate a new CA certificate using the same private key if you want to keep validity for already-issued certificates.
+This secrets engine serves CRLs from a predictable location, but it is not
+possible for the secrets engine to know where it is running. Therefore, you must
+configure desired URLs for the issuing certificate, CRL distribution points, and
+OCSP servers manually using the `config/urls` endpoint. It is supported to have
+more than one of each of these by passing in the multiple URLs as a
+comma-separated string parameter.
 
-### No OCSP support, yet
+### Safe Minimums
 
-Vault's architecture does not currently allow for a binary protocol such as OCSP to be supported by a backend. As such, you should configure your software to use CRLs for revocation information, with a caching lifetime that feels good to you. Since you are following the advice above about keeping lifetimes short (right?), CRLs should not grow too large.
+Since its inception, this secrets engine has enforced SHA256 for signature
+hashes rather than SHA1. As of 0.5.1, a minimum of 2048 bits for RSA keys is
+also enforced. Software that can handle SHA256 signatures should also be able to
+handle 2048-bit keys, and 1024-bit keys are considered unsafe and are disallowed
+in the Internet PKI.
+
+### Token Lifetimes and Revocation
+
+When a token expires, it revokes all leases associated with it. This means that
+long-lived CA certs need correspondingly long-lived tokens, something that is
+easy to forget. Starting with 0.6, root and intermediate CA certs no longer have
+associated leases, to prevent unintended revocation when not using a token with
+a long enough lifetime. To revoke these certificates, use the `pki/revoke`
+endpoint.
 
 ## Quick Start
 
-### CA certificate
+#### Mount the backend
 
-In order for this backend to serve CRL information at the expected location, you will need to generate your CA certificate with this information. For OpenSSL, this means putting a value in the CA section with the appropriate URL; in this example the PKI backend is mounted at `pki`:
-
-```text
-crlDistributionPoints = URI:https://vault.example.com:8200/v1/pki/crl
-```
-
-Adjust the URI as appropriate.
-
-### Vault
-
-The first step to using the PKI backend is to mount it. Unlike the `generic` backend, the `pki` backend is not mounted by default.
+The first step to using the PKI backend is to mount it. Unlike the `kv`
+backend, the `pki` backend is not mounted by default.
 
 ```text
-$ vault mount pki
+$ vault secrets enable pki
 Successfully mounted 'pki' at 'pki'!
 ```
 
-Next, Vault must be configured with a root certificate and associated private key. This is done by writing the contents of a file or *stdin*:
+#### Configure a CA certificate
+
+Next, Vault must be configured with a CA certificate and associated private
+key. We'll take advantage of the backend's self-signed root generation support,
+but Vault also supports generating an intermediate CA (with a CSR for signing)
+or setting a PEM-encoded certificate and private key bundle directly into the
+backend.
+
+Generally you'll want a root certificate to only be used to sign CA
+intermediate certificates, but for this example we'll proceed as if you will
+issue certificates directly from the root. As it's a root, we'll want to set a
+long maximum life time for the certificate; since it honors the maximum mount
+TTL, first we adjust that:
 
 ```text
-$ vault write pki/config/ca pem_bundle="@ca_bundle.pem"
-Success! Data written to: pki/config/ca
+$ vault secrets tune -max-lease-ttl=87600h pki
+Successfully tuned mount 'pki'!
 ```
 
-or
+That sets the maximum TTL for secrets issued from the mount to 10 years. (Note
+that roles can further restrict the maximum TTL.)
 
+Now, we generate our root certificate:
+
+```text
+$ vault write pki/root/generate/internal common_name=myvault.com ttl=87600h
+Key             Value
+---             -----
+certificate     -----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIUJqrw/9EDZbp4DExaLjh0vSAHyBgwDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMjA4MTkyMzIwWhcNMjcx
+MjA2MTkyMzQ5WjAWMRQwEgYDVQQDEwtteXZhdWx0LmNvbTCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBAKY/vJ6sRFym+yFYUneoVtDmOCaDKAQiGzQw0IXL
+wgMBBb82iKpYj5aQjXZGIl+VkVnCi+M2AQ/iYXWZf1kTAdle4A6OC4+VefSIa2b4
+eB7R8aiGTce62jB95+s5/YgrfIqk6igfpCSXYLE8ubNDA2/+cqvjhku1UzlvKBX2
+hIlgWkKlrsnybHN+B/3Usw9Km/87rzoDR3OMxLV55YPHiq6+olIfSSwKAPjH8LZm
+uM1ITLG3WQUl8ARF17Dj+wOKqbUG38PduVwKL5+qPksrvNwlmCP7Kmjncc6xnYp6
+5lfr7V4DC/UezrJYCIb0g/SvtxoN1OuqmmvSTKiEE7hVOAcCAwEAAaN7MHkwDgYD
+VR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFECKdYM4gDbM
+kxRZA2wR4f/yNhQUMB8GA1UdIwQYMBaAFECKdYM4gDbMkxRZA2wR4f/yNhQUMBYG
+A1UdEQQPMA2CC215dmF1bHQuY29tMA0GCSqGSIb3DQEBCwUAA4IBAQCCJKZPcjjn
+7mvD2+sr6lx4DW/vJwVSW8eTuLtOLNu6/aFhcgTY/OOB8q4n6iHuLrEt8/RV7RJI
+obRx74SfK9BcOLt4+DHGnFXqu2FNVnhDMOKarj41yGyXlJaQRUPYf6WJJLF+ZphN
+nNsZqHJHBfZtpJpE5Vywx3pah08B5yZHk1ItRPEz7EY3uwBI/CJoBb+P5Ahk6krc
+LZ62kFwstkVuFp43o3K7cRNexCIsZGx2tsyZ0nyqDUFsBr66xwUfn3C+/1CDc9YL
+zjq+8nI2ooIrj4ZKZCOm2fKd1KeGN/CZD7Ob6uNhXrd0Tjwv00a7nffvYQkl/1V5
+BT55jevSPVVu
+-----END CERTIFICATE-----
+expiration      1828121029
+issuing_ca      -----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIUJqrw/9EDZbp4DExaLjh0vSAHyBgwDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMjA4MTkyMzIwWhcNMjcx
+MjA2MTkyMzQ5WjAWMRQwEgYDVQQDEwtteXZhdWx0LmNvbTCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBAKY/vJ6sRFym+yFYUneoVtDmOCaDKAQiGzQw0IXL
+wgMBBb82iKpYj5aQjXZGIl+VkVnCi+M2AQ/iYXWZf1kTAdle4A6OC4+VefSIa2b4
+eB7R8aiGTce62jB95+s5/YgrfIqk6igfpCSXYLE8ubNDA2/+cqvjhku1UzlvKBX2
+hIlgWkKlrsnybHN+B/3Usw9Km/87rzoDR3OMxLV55YPHiq6+olIfSSwKAPjH8LZm
+uM1ITLG3WQUl8ARF17Dj+wOKqbUG38PduVwKL5+qPksrvNwlmCP7Kmjncc6xnYp6
+5lfr7V4DC/UezrJYCIb0g/SvtxoN1OuqmmvSTKiEE7hVOAcCAwEAAaN7MHkwDgYD
+VR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFECKdYM4gDbM
+kxRZA2wR4f/yNhQUMB8GA1UdIwQYMBaAFECKdYM4gDbMkxRZA2wR4f/yNhQUMBYG
+A1UdEQQPMA2CC215dmF1bHQuY29tMA0GCSqGSIb3DQEBCwUAA4IBAQCCJKZPcjjn
+7mvD2+sr6lx4DW/vJwVSW8eTuLtOLNu6/aFhcgTY/OOB8q4n6iHuLrEt8/RV7RJI
+obRx74SfK9BcOLt4+DHGnFXqu2FNVnhDMOKarj41yGyXlJaQRUPYf6WJJLF+ZphN
+nNsZqHJHBfZtpJpE5Vywx3pah08B5yZHk1ItRPEz7EY3uwBI/CJoBb+P5Ahk6krc
+LZ62kFwstkVuFp43o3K7cRNexCIsZGx2tsyZ0nyqDUFsBr66xwUfn3C+/1CDc9YL
+zjq+8nI2ooIrj4ZKZCOm2fKd1KeGN/CZD7Ob6uNhXrd0Tjwv00a7nffvYQkl/1V5
+BT55jevSPVVu
+-----END CERTIFICATE-----
+serial_number   26:aa:f0:ff:d1:03:65:ba:78:0c:4c:5a:2e:38:74:bd:20:07:c8:18
 ```
-$ cat bundle.pem | vault write pki/config/ca pem_bundle="-"
-Success! Data written to: pki/config/ca
+
+The returned certificate is purely informational; it and its private key are
+safely stored in the backend mount.
+
+#### Set URL configuration
+
+Generated certificates can have the CRL location and the location of the
+issuing certificate encoded. These values must be set manually and typically to FQDN associated to the Vault server, but can be changed at any time.
+
+```text
+$ vault write pki/config/urls issuing_certificates="http://vault.example.com:8200/v1/pki/ca" crl_distribution_points="http://vault.example.com:8200/v1/pki/crl"
+Success! Data written to: pki/ca/urls
 ```
 
-Although in this example the value being piped into *stdin* could be passed directly into the Vault CLI command, a more complex usage might be to use [Ansible](http://www.ansible.com) to securely store the certificate and private key in an `ansible-vault` file, then have an `ansible-playbook` command decrypt this value and pass it in to Vault.
+#### Configure a role
 
-The next step is to configure a role. A role is a logical name that maps to a policy used to generated those credentials. For example, let's create an "example-dot-com" role:
+The next step is to configure a role. A role is a logical name that maps to a
+policy used to generate those credentials. For example, let's create an
+"example-dot-com" role:
 
 ```text
 $ vault write pki/roles/example-dot-com \
-    allowed_base_domain="example.com" \
-    allow_subdomains="true" max_ttl="72h"
+    allowed_domains=example.com \
+    allow_subdomains=true max_ttl=72h
 Success! Data written to: pki/roles/example-dot-com
 ```
 
-By writing to the `roles/example-dot-com` path we are defining the `example-dot-com` role. To generate a new set of credentials, we simply write to the `issue` endpoint with that role name: Vault is now configured to create and manage certificates!
+#### Issue Certificates
+
+By writing to the `roles/example-dot-com` path we are defining the
+`example-dot-com` role. To generate a new certificate, we simply write
+to the `issue` endpoint with that role name: Vault is now configured to create
+and manage certificates!
 
 ```text
-$ vault write pki/issue/example-dot-com common_name=blah.example.com
-Key            	Value
-lease_id       	pki/issue/example-dot-com/819393b5-e1a1-9efd-b72f-4dc3a1972e31
-lease_duration 	259200
-lease_renewable	false
-certificate    	-----BEGIN CERTIFICATE-----
-MIIECDCCAvKgAwIBAgIUXmLrLkTdBIOOIYg2/BXO7docKfUwCwYJKoZIhvcNAQEL
-...
-az3gfwlOqVTdgi/ZVAtIzhSEJ0OY136bq4NOaw==
+$ vault write pki/issue/example-dot-com \
+    common_name=blah.example.com
+Key                 Value
+---                 -----
+certificate         -----BEGIN CERTIFICATE-----
+MIIDvzCCAqegAwIBAgIUWQuvpMpA2ym36EoiYyf3Os5UeIowDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMjA4MTkyNDA1WhcNMTcx
+MjExMTkyNDM1WjAbMRkwFwYDVQQDExBibGFoLmV4YW1wbGUuY29tMIIBIjANBgkq
+hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1CU93lVgcLXGPxRGTRT3GM5wqytCo7Z6
+gjfoHyKoPCAqjRdjsYgp1FMvumNQKjUat5KTtr2fypbOnAURDCh4bN/omcj7eAqt
+ldJ8mf8CtKUaaJ1kp3R6RRFY/u96BnmKUG8G7oDeEDsKlXuEuRcNbGlGF8DaM/O1
+HFa57cM/8yFB26Nj5wBoG5Om6ee5+W+14Qee8AB6OJbsf883Z+zvhJTaB0QM4ZUq
+uAMoMVEutWhdI5EFm5OjtMeMu2U+iJl2XqqgQ/JmLRjRdMn1qd9TzTaVSnjoZ97s
+jHK444Px1m45einLqKUJ+Ia2ljXYkkItJj9Ut6ZSAP9fHlAtX84W3QIDAQABo4H/
+MIH8MA4GA1UdDwEB/wQEAwIDqDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH
+AwIwHQYDVR0OBBYEFH/YdObW6T94U0zuU5hBfTfU5pt1MB8GA1UdIwQYMBaAFECK
+dYM4gDbMkxRZA2wR4f/yNhQUMDsGCCsGAQUFBwEBBC8wLTArBggrBgEFBQcwAoYf
+aHR0cDovLzEyNy4wLjAuMTo4MjAwL3YxL3BraS9jYTAbBgNVHREEFDASghBibGFo
+LmV4YW1wbGUuY29tMDEGA1UdHwQqMCgwJqAkoCKGIGh0dHA6Ly8xMjcuMC4wLjE6
+ODIwMC92MS9wa2kvY3JsMA0GCSqGSIb3DQEBCwUAA4IBAQCDXbHV68VayweB2tkb
+KDdCaveaTULjCeJUnm9UT/6C0YqC/RxTAjdKFrilK49elOA3rAtEL6dmsDP2yH25
+ptqi2iU+y99HhZgu0zkS/p8elYN3+l+0O7pOxayYXBkFf5t0TlEWSTb7cW+Etz/c
+MvSqx6vVvspSjB0PsA3eBq0caZnUJv2u/TEiUe7PPY0UmrZxp/R/P/kE54yI3nWN
+4Cwto6yUwScOPbVR1d3hE2KU2toiVkEoOk17UyXWTokbG8rG0KLj99zu7my+Fyre
+sjV5nWGDSMZODEsGxHOC+JgNAC1z3n14/InFNOsHICnA5AnJzQdSQQjvcZHN2NyW
++t4f
 -----END CERTIFICATE-----
-issuing_ca      -----BEGIN CERTIFICATE-----
-MIIDUTCCAjmgAwIBAgIJAKM+z4MSfw2mMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV
-...
+issuing_ca          -----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIUJqrw/9EDZbp4DExaLjh0vSAHyBgwDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMjA4MTkyMzIwWhcNMjcx
+MjA2MTkyMzQ5WjAWMRQwEgYDVQQDEwtteXZhdWx0LmNvbTCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBAKY/vJ6sRFym+yFYUneoVtDmOCaDKAQiGzQw0IXL
+wgMBBb82iKpYj5aQjXZGIl+VkVnCi+M2AQ/iYXWZf1kTAdle4A6OC4+VefSIa2b4
+eB7R8aiGTce62jB95+s5/YgrfIqk6igfpCSXYLE8ubNDA2/+cqvjhku1UzlvKBX2
+hIlgWkKlrsnybHN+B/3Usw9Km/87rzoDR3OMxLV55YPHiq6+olIfSSwKAPjH8LZm
+uM1ITLG3WQUl8ARF17Dj+wOKqbUG38PduVwKL5+qPksrvNwlmCP7Kmjncc6xnYp6
+5lfr7V4DC/UezrJYCIb0g/SvtxoN1OuqmmvSTKiEE7hVOAcCAwEAAaN7MHkwDgYD
+VR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFECKdYM4gDbM
+kxRZA2wR4f/yNhQUMB8GA1UdIwQYMBaAFECKdYM4gDbMkxRZA2wR4f/yNhQUMBYG
+A1UdEQQPMA2CC215dmF1bHQuY29tMA0GCSqGSIb3DQEBCwUAA4IBAQCCJKZPcjjn
+7mvD2+sr6lx4DW/vJwVSW8eTuLtOLNu6/aFhcgTY/OOB8q4n6iHuLrEt8/RV7RJI
+obRx74SfK9BcOLt4+DHGnFXqu2FNVnhDMOKarj41yGyXlJaQRUPYf6WJJLF+ZphN
+nNsZqHJHBfZtpJpE5Vywx3pah08B5yZHk1ItRPEz7EY3uwBI/CJoBb+P5Ahk6krc
+LZ62kFwstkVuFp43o3K7cRNexCIsZGx2tsyZ0nyqDUFsBr66xwUfn3C+/1CDc9YL
+zjq+8nI2ooIrj4ZKZCOm2fKd1KeGN/CZD7Ob6uNhXrd0Tjwv00a7nffvYQkl/1V5
+BT55jevSPVVu
 -----END CERTIFICATE-----
-private_key    	-----BEGIN RSA PRIVATE KEY-----
-MIIEowIBAAKCAQEA0cczc7Y2yIu7aD/IaDi23Io+tvvDS9XaXXDUFW1kqd58P83r
-...
-3xhCNnZ3CMQaM2I48sloVK/XoikMLb5MZwOUQn/V+TrhWP4Lu7qD
+private_key         -----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA1CU93lVgcLXGPxRGTRT3GM5wqytCo7Z6gjfoHyKoPCAqjRdj
+sYgp1FMvumNQKjUat5KTtr2fypbOnAURDCh4bN/omcj7eAqtldJ8mf8CtKUaaJ1k
+p3R6RRFY/u96BnmKUG8G7oDeEDsKlXuEuRcNbGlGF8DaM/O1HFa57cM/8yFB26Nj
+5wBoG5Om6ee5+W+14Qee8AB6OJbsf883Z+zvhJTaB0QM4ZUquAMoMVEutWhdI5EF
+m5OjtMeMu2U+iJl2XqqgQ/JmLRjRdMn1qd9TzTaVSnjoZ97sjHK444Px1m45einL
+qKUJ+Ia2ljXYkkItJj9Ut6ZSAP9fHlAtX84W3QIDAQABAoIBAQCf5YIANfF+gkNt
+/+YM6yRi+hZJrU2I/1zPETxPW1vaFZR8y4hEoxCEDD8JCRm+9k+w1TWoorvxgkEv
+r1HuDALYbNtwLd/71nCHYCKyH1b2uQpyl07qOAyASlb9r5oVjz4E6eobkd3N9fJA
+QN0EdK+VarN968mLJsD3Hxb8chGdObBCQ+LO+zdqQLaz+JwhfnK98rm6huQtYK3w
+ccd0OwoVmtZz2eJl11TJkB9fi4WqJyxl4wST7QC80LstB1deR78oDmN5WUKU12+G
+4Mrgc1hRwUSm18HTTgAhaA4A3rjPyirBohb5Sf+jJxusnnay7tvWeMnIiRI9mqCE
+dr3tLrcxAoGBAPL+jHVUF6sxBqm6RTe8Ewg/8RrGmd69oB71QlVUrLYyC96E2s56
+19dcyt5U2z+F0u9wlwR1rMb2BJIXbxlNk+i87IHmpOjCMS38SPZYWLHKj02eGfvA
+MjKKqEjNY/md9eVAVZIWSEy63c4UcBK1qUH3/5PNlyjk53gCOI/4OXX/AoGBAN+A
+Alyd6A/pyHWq8WMyAlV18LnzX8XktJ07xrNmjbPGD5sEHp+Q9V33NitOZpu3bQL+
+gCNmcrodrbr9LBV83bkAOVJrf82SPaBesV+ATY7ZiWpqvHTmcoS7nglM2XTr+uWR
+Y9JGdpCE9U5QwTc6qfcn7Eqj7yNvvHMrT+1SHwsjAoGBALQyQEbhzYuOF7rV/26N
+ci+z+0A39vNO++b5Se+tk0apZlPlgb2NK3LxxR+LHevFed9GRzdvbGk/F7Se3CyP
+cxgswdazC6fwGjhX1mOYsG1oIU0V6X7f0FnaqWETrwf1M9yGEO78xzDfgozIazP0
+s0fQeR9KXsZcuaotO3TIRxRRAoGAMFIDsLRvDKm1rkL0B0czm/hwwDMu/KDyr5/R
+2M2OS1TB4PjmCgeUFOmyq3A63OWuStxtJboribOK8Qd1dXvWj/3NZtVY/z/j1P1E
+Ceq6We0MOZa0Ae4kyi+p/kbAKPgv+VwSoc6cKailRHZPH7quLoJSIt0IgbfRnXC6
+ygtcLNMCgYBwiPw2mTYvXDrAcO17NhK/r7IL7BEdFdx/w8vNJQp+Ub4OO3Iw6ARI
+vXxu6A+Qp50jra3UUtnI+hIirMS+XEeWqJghK1js3ZR6wA/ZkYZw5X1RYuPexb/4
+6befxmnEuGSbsgvGqYYTf5Z0vgsw4tAHfNS7TqSulYH06CjeG1F8DQ==
 -----END RSA PRIVATE KEY-----
-serial         	5e:62:eb:2e:44:dd:04:83:8e:21:88:36:fc:15:ce:ed:da:1c:29:f5
+private_key_type    rsa
+serial_number       59:0b:af:a4:ca:40:db:29:b7:e8:4a:22:63:27:f7:3a:ce:54:78:8a
 ```
 
-Note that this is a write, not a read, to allow values to be passed in at request time.
+Vault has now generated a new set of credentials using the `example-dot-com`
+role configuration. Here we see the dynamically generated private key and
+certificate.
 
-Vault has now generated a new set of credentials using the `example-dot-com` role configuration. Here we see the dynamically generated private key and certificate. The issuing CA certificate is returned as well.
+Using ACLs, it is possible to restrict using the pki backend such that trusted
+operators can manage the role definitions, and both users and applications are
+restricted in the credentials they are allowed to read.
 
-Using ACLs, it is possible to restrict using the pki backend such that trusted operators can manage the role definitions, and both users and applications are restricted in the credentials they are allowed to read.
+If you get stuck at any time, simply run `vault path-help pki` or with a
+subpath for interactive help output.
 
-If you get stuck at any time, simply run `vault path-help pki` or with a subpath for interactive help output.
+## Setting Up Intermediate CA
+
+In the Quick Start guide, certificates were issued directly from the root
+certificate authority. As described in the example, this is not a recommended
+practice. This guide builds on the previous guide's root certificate authority
+and creates an intermediate authority using the root authority to sign the
+intermediate's certificate.
+
+#### Mount the backend
+
+To add another certificate authority to our Vault instance, we have to mount it
+at a different path.
+
+```text
+$ vault secrets enable -path=pki_int pki
+Successfully mounted 'pki' at 'pki_int'!
+```
+
+#### Configure an Intermediate CA
+
+```text
+$ vault secrets tune -max-lease-ttl=43800h pki_int
+Successfully tuned mount 'pki_int'!
+```
+
+That sets the maximum TTL for secrets issued from the mount to 5 years. This
+value should be less than or equal to the root certificate authority.
+
+Now, we generate our intermediate certificate signing request:
+
+```text
+$ vault write pki_int/intermediate/generate/internal common_name="myvault.com Intermediate Authority" ttl=43800h
+Key Value
+csr -----BEGIN CERTIFICATE REQUEST-----
+MIICsjCCAZoCAQAwLTErMCkGA1UEAxMibXl2YXVsdC5jb20gSW50ZXJtZWRpYXRl
+IEF1dGhvcml0eTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJU1Qh8l
+BW16WHAu34Fy92FnSy4219WVlKw1xwpKxjd95xH6WcxXozOs6oHFQ9c592bz51F8
+KK3FFJYraUrGONI5Cz9qHbzC1mFCmjnXVXCoeNKIzEBG0Y+ehH7MQ1SvDCyvaJPX
+ItFXaGf6zENiGsApw3Y3lFr0MjPzZDBH1p4Nq3aA6L2BaxvO5vczdQl5tE2ud/zs
+GIdCWnl1ThDEeiX1Ppduos/dx3gaZa9ly3iCuDMKIL9yK5XTBTgKB6ALPApekLQB
+kcUFbOuMzjrDSBe9ytu65yICYp26iAPPA8aKTj5cUgscgzEvQS66rSAVG/unrWxb
+wbl8b7eQztCmp60CAwEAAaBAMD4GCSqGSIb3DQEJDjExMC8wLQYDVR0RBCYwJIIi
+bXl2YXVsdC5jb20gSW50ZXJtZWRpYXRlIEF1dGhvcml0eTANBgkqhkiG9w0BAQsF
+AAOCAQEAZA9A1QvTdAd45+Ay55FmKNWnis1zLjbmWNJURUoDei6i6SCJg0YGX1cZ
+WkD0ibxPYihSsKRaIUwC2bE8cxZM57OSs7ISUmyPQAT2IHTHvuGK72qlFRBlFOzg
+SHEG7gfyKdrALphyF8wM3u4gXhcnY3CdltjabL3YakZqd3Ey4870/0XXeo5c4k7w
+/+n9M4xED4TnXYCGfLAlu5WWKSeCvu9mHXnJcLo1MiYjX7KGey/xYYbfxHSPm4ul
+tI6Vf59zDRscfNmq37fERD3TiKP0QZNGTSRvnrxrx2RUQGXFywM8l4doG8nS5BxU
+2jP20cdv0lJFvHr9663/8B/+F5L6Yw==
+-----END CERTIFICATE REQUEST-----
+```
+
+Take the signing request from the intermediate authority and sign it using
+another certificate authority, in this case the root certificate authority
+generated in the first example.
+
+```text
+$ vault write pki/root/sign-intermediate csr=@pki_int.csr format=pem_bundle
+Key             Value
+certificate     -----BEGIN CERTIFICATE-----
+MIIDZTCCAk2gAwIBAgIUENxQD7KIJi1zE/jEiYqAG1VC4NwwDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMTI4MTcwNzIzWhcNMjIx
+MTI3MTcwNzUzWjAtMSswKQYDVQQDEyJteXZhdWx0LmNvbSBJbnRlcm1lZGlhdGUg
+QXV0aG9yaXR5MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5seNV4Yd
+uCMX0POUUuSzCBiR3Cyf9b9tGsCX7UfvZmjPs+Fl/X+Ovq6UtHM9RuTGlyfFrCWy
+pflO7mc0H8PBzlvhv1WQet5aRyUOXkG6iYmooG9iobIY8z/TZCaCF605pgygfOaS
+DIlwOdJkfiXxGpQ00pfIwe/Y2OK2I5e36u0E2EA6kXvcfexLjQGFPbod+H0R29Ro
+/GwOJ6MpSHqB77mF025x1y08EtqT1z1kFCiDzFSkzNZEZYWljhDS6ZRY9ctzKufm
+5CkUwmvCVRI2CivDJvmfhXyv0DRoq4IhYdJHo179RSObq3BY9f9LQ0balNLiM0Ft
+O8f0urTqUAbySwIDAQABo4GTMIGQMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8E
+BTADAQH/MB0GA1UdDgQWBBSQgTfcMrKYzyckP6t/0iVQkl0ZBDAfBgNVHSMEGDAW
+gBRccsCARqs3wQDjW7JMNXS6pWlFSDAtBgNVHREEJjAkgiJteXZhdWx0LmNvbSBJ
+bnRlcm1lZGlhdGUgQXV0aG9yaXR5MA0GCSqGSIb3DQEBCwUAA4IBAQABNg2HxccY
+DwRpsJ+sxA0BgDyF+tYtOlXViVNv6Z+nOU0nNhQSCjfzjYWmBg25nfKaFhQSC3b7
+fIW+e7it/FLVrCgaqdysoxljqhR0gXMAy8S/ubmskPWjJiKauJB5bfB59Uf2GP6j
+zimZDu6WjWvvgkKcJqJEbOOS9DWBvCTdmmml1NMXZtcytpod2Y7mxninqNRx3qpx
+Pst4vgAbyM/3zLSzkyUD+MXIyRXwxktFlyEYBHvMd9OoHzLO6WLxk22FyQQ+w4by
+NfXJY4r5pj6a4lJ6pPuqyfBhidYMTdY3AI7w/QRGk4qQv1iDmnZspk2AxdbR5Lwe
+YmChIML/f++S
+-----END CERTIFICATE-----
+expiration      1669568873
+issuing_ca      -----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIUdR44qhhyh3CZjnCtflGKQlTI8NswDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAxMLbXl2YXVsdC5jb20wHhcNMTcxMTI4MTYxODA2WhcNMjcx
+MTI2MTYxODM1WjAWMRQwEgYDVQQDEwtteXZhdWx0LmNvbTCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBANTPnQ2CUkuLrYT4V6/IIK/gWFZXFG4lWTmgM5Zh
+PDquMhLEikZCbZKbupouBI8MOr5i8tycENaTnSs9dBwVEOWAHbLkliVgvCKgLi0F
+PfPM87FnBoKVctO2ip8AdmYcAt/wc096dWBG6eKLVP5xsAe7NcYDtF/inHgEZ22q
+ZjGVEyC6WntIASgULoHGgHakPp1AHLhGm8nL5YbusWY7RgZIlNeGWLVoneG0pxdV
+7W1SPO67dsQyq58mTxMIGVUj5YE1q7/C6OhCTnAHc+sRm0oUehPfO8kY4NHpCJGv
+nDRdJi6k6ewk94c0KK2tUUM/TN6ZSRfx6ccgfPH8zNcVPVcCAwEAAaN7MHkwDgYD
+VR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFFxywIBGqzfB
+AONbskw1dLqlaUVIMB8GA1UdIwQYMBaAFFxywIBGqzfBAONbskw1dLqlaUVIMBYG
+A1UdEQQPMA2CC215dmF1bHQuY29tMA0GCSqGSIb3DQEBCwUAA4IBAQBgvsgpBuVR
+iKVdXXpFyoQLImuoaHZgaj5tuUDqnMoxOA1XWW6SVlZmGfDQ7+u5NBkp2cGSDRGm
+ARHJTeURvdZIwdFdGkNqfAZjutRjjQOnXgS65ujZd7AnlZq1v0ZOZqVVk9YEOhOe
+Rh2MjnHGNuiLBib1YNQHNuRef1mPwIE2Gm/Tz/z3JPHtkKNIKbn60zHrIIM/OT2Z
+HYjcMUcqXtKGYfNjVspJm3lSDUoyJdaq80Afmy2Ez1Vt9crGG3Dj8mgs59lEhEyo
+MDVhOP116M5HJfQlRPVd29qS8pFrjBvXKjJSnJNG1UFdrWBJRJ3QrBxUQALKrJlR
+g5lvTeymHjS/
+-----END CERTIFICATE-----
+serial_number   10:dc:50:0f:b2:88:26:2d:73:13:f8:c4:89:8a:80:1b:55:42:e0:dc
+```
+
+Now set the intermediate certificate authorities signing certificate to the
+root-signed certificate.
+
+```text
+$ vault write pki_int/intermediate/set-signed certificate=@signed_certificate.pem
+Success! Data written to: pki_int/intermediate/set-signed
+```
+
+The intermediate certificate authority is now configured and ready to issue
+certificates.
+
+#### Set URL configuration
+
+Generated certificates can have the CRL location and the location of the
+issuing certificate encoded. These values must be set manually, but can be
+changed at any time.
+
+```text
+$ vault write pki_int/config/urls issuing_certificates="http://127.0.0.1:8200/v1/pki_int/ca" crl_distribution_points="http://127.0.0.1:8200/v1/pki_int/crl"
+Success! Data written to: pki_int/ca/urls
+```
+
+#### Configure a role
+
+The next step is to configure a role. A role is a logical name that maps to a
+policy used to generate those credentials. For example, let's create an
+"example-dot-com" role:
+
+```text
+$ vault write pki_int/roles/example-dot-com \
+    allowed_domains=example.com \
+    allow_subdomains=true max_ttl=72h
+Success! Data written to: pki_int/roles/example-dot-com
+```
+
+#### Issue Certificates
+
+By writing to the `roles/example-dot-com` path we are defining the
+`example-dot-com` role. To generate a new certificate, we simply write
+to the `issue` endpoint with that role name: Vault is now configured to create
+and manage certificates!
+
+```text
+$ vault write pki_int/issue/example-dot-com \
+    common_name=blah.example.com
+Key                 Value
+---                 -----
+certificate         -----BEGIN CERTIFICATE-----
+MIIDbDCCAlSgAwIBAgIUPiAyxq+nIE6xlWf7hrzLkPQxtvMwDQYJKoZIhvcNAQEL
+BQAwMzExMC8GA1UEAxMoVmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgU3ViIEF1
+dGhvcml0eTAeFw0xNjA5MjcwMDA5MTNaFw0xNjA5MjcwMTA5NDNaMBsxGTAXBgNV
+BAMTEGJsYWguZXhhbXBsZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+AoIBAQDJAYB04IVdmSC/TimaA6BbXlvgBTZHL5wBUTmO4iHhenL0eDEXVe2Fd7Yq
+75LiBJmcC96hKbqh5rwS8KwN9ElZI52/mSMC+IvoNlYHAf7shwfsjrVx3q7/bTFg
+lz6wECn1ugysxynmMvgQD/pliRkxTQ7RMh4Qlh75YG3R9BHy9ZddklZp0aNaitts
+0uufHnN1UER/wxBCZdWTUu34KDL9I6yE7Br0slKKHPdEsGlFcMkbZhvjslZ7DGvO
+974S0qtOdKiawJZbpNPg0foGZ3AxesDUlkHmmgzUNes/sjknDYTHEfeXM6Uap0j6
+XvyhCxqdeahb/Vtibg0z9I0IusJbAgMBAAGjgY8wgYwwDgYDVR0PAQH/BAQDAgOo
+MB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQU/5oy0rL7
+TT0wX7KZK7qcXqgayNwwHwYDVR0jBBgwFoAUgM37P8oXmA972ztLfw+b1eIY5now
+GwYDVR0RBBQwEoIQYmxhaC5leGFtcGxlLmNvbTANBgkqhkiG9w0BAQsFAAOCAQEA
+CT2vI6/taeLTw6ZulUhLXEXYXWZu1gF8n2COjZzbZXmHxQAoZ3GtnSNwacPHAyIj
+f3cA9Moo552y39LUtWk+wgFtQokWGK7LXglLaveNUBowOHq/xk0waiIinJcgTG53
+Z/qnbJnTjAOG7JwVJplWUIiS1avCksrHt7heE2EGRGJALqyLZ119+PW6ogtCLUv1
+X8RCTw/UkIF/LT+sLF0bXWy4Hn38Gjwj1MVv1l76cEGOVSHyrYkN+6AMnAP58L5+
+IWE9tN3oac4x7jhbuNpfxazIJ8Q6l/Up5U5Evfbh6N1DI0/gFCP20fMBkHwkuLfZ
+2ekZoSeCgFRDlHGkr7Vv9w==
+-----END CERTIFICATE-----
+issuing_ca          -----BEGIN CERTIFICATE-----
+MIIDijCCAnKgAwIBAgIUB28DoGwgGFKL7fbOu9S4FalHLn0wDQYJKoZIhvcNAQEL
+BQAwLzEtMCsGA1UEAxMkVmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgQXV0aG9y
+aXR5MB4XDTE2MDkyNzAwMDgyMVoXDTI2MDkxNjE2MDg1MVowMzExMC8GA1UEAxMo
+VmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgU3ViIEF1dGhvcml0eTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAOSCiSij4wy1wiMwvZt+rtU3IaO6ZTn9
+LfIPuGsR5/QSJk37pCZQco1LgoE/rTl+/xu3bDovyHDmgObghC6rzVOX2Tpi7kD+
+DOZpqxOsaS8ebYgxB/XJTSxyEJuSAcpSNLqqAiZivuQXdaD0N7H3Or0awwmKE9mD
+I0g8CF4fPDmuuOG0ASn9fMqXVVt5tXtEqZ9yJYfNOXx3FOPjRVOZf+kvSc31wCKe
+i/KmR0AQOmToKMzq988nLqFPTi9KZB8sEU20cGFeTQFol+m3FTcIru94EPD+nLUn
+xtlLELVspYb/PP3VpvRj9b+DY8FGJ5nfSJl7Rkje+CD4VxJpSadin3kCAwEAAaOB
+mTCBljAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU
+gM37P8oXmA972ztLfw+b1eIY5nowHwYDVR0jBBgwFoAUj4YAIxRwrBy0QMRKLnD0
+kVidIuYwMwYDVR0RBCwwKoIoVmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgU3Vi
+IEF1dGhvcml0eTANBgkqhkiG9w0BAQsFAAOCAQEAA4buJuPNJvA1kiATLw1dVU2J
+HPubk2Kp26Mg+GwLn7Vz45Ub133JCYfF3/zXLFZZ5Yub9gWTtjScrvNfQTAbNGdQ
+BdnUlMmIRmfB7bfckhryR2R9byumeHATgNKZF7h8liNHI7X8tTzZGs6wPdXOLlzR
+TlM3m1RNK8pbSPOkfPb06w9cBRlD8OAbNtJmuypXA6tYyiiMYBhP0QLAO3i4m1ns
+aAjAgEjtkB1rQxW5DxoTArZ0asiIdmIcIGmsVxfDQIjFlRxAkafMs74v+5U5gbBX
+wsOledU0fLl8KLq8W3OXqJwhGLK65fscrP0/omPAcFgzXf+L4VUADM4XhW6Xyg==
+-----END CERTIFICATE-----
+ca_chain            [-----BEGIN CERTIFICATE-----
+MIIDijCCAnKgAwIBAgIUB28DoGwgGFKL7fbOu9S4FalHLn0wDQYJKoZIhvcNAQEL
+BQAwLzEtMCsGA1UEAxMkVmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgQXV0aG9y
+aXR5MB4XDTE2MDkyNzAwMDgyMVoXDTI2MDkxNjE2MDg1MVowMzExMC8GA1UEAxMo
+VmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgU3ViIEF1dGhvcml0eTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAOSCiSij4wy1wiMwvZt+rtU3IaO6ZTn9
+LfIPuGsR5/QSJk37pCZQco1LgoE/rTl+/xu3bDovyHDmgObghC6rzVOX2Tpi7kD+
+DOZpqxOsaS8ebYgxB/XJTSxyEJuSAcpSNLqqAiZivuQXdaD0N7H3Or0awwmKE9mD
+I0g8CF4fPDmuuOG0ASn9fMqXVVt5tXtEqZ9yJYfNOXx3FOPjRVOZf+kvSc31wCKe
+i/KmR0AQOmToKMzq988nLqFPTi9KZB8sEU20cGFeTQFol+m3FTcIru94EPD+nLUn
+xtlLELVspYb/PP3VpvRj9b+DY8FGJ5nfSJl7Rkje+CD4VxJpSadin3kCAwEAAaOB
+mTCBljAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU
+gM37P8oXmA972ztLfw+b1eIY5nowHwYDVR0jBBgwFoAUj4YAIxRwrBy0QMRKLnD0
+kVidIuYwMwYDVR0RBCwwKoIoVmF1bHQgVGVzdGluZyBJbnRlcm1lZGlhdGUgU3Vi
+IEF1dGhvcml0eTANBgkqhkiG9w0BAQsFAAOCAQEAA4buJuPNJvA1kiATLw1dVU2J
+HPubk2Kp26Mg+GwLn7Vz45Ub133JCYfF3/zXLFZZ5Yub9gWTtjScrvNfQTAbNGdQ
+BdnUlMmIRmfB7bfckhryR2R9byumeHATgNKZF7h8liNHI7X8tTzZGs6wPdXOLlzR
+TlM3m1RNK8pbSPOkfPb06w9cBRlD8OAbNtJmuypXA6tYyiiMYBhP0QLAO3i4m1ns
+aAjAgEjtkB1rQxW5DxoTArZ0asiIdmIcIGmsVxfDQIjFlRxAkafMs74v+5U5gbBX
+wsOledU0fLl8KLq8W3OXqJwhGLK65fscrP0/omPAcFgzXf+L4VUADM4XhW6Xyg==
+-----END CERTIFICATE-----]
+private_key         -----BEGIN RSA PRIVATE KEY-----
+MIIEpgIBAAKCAQEAyQGAdOCFXZkgv04pmgOgW15b4AU2Ry+cAVE5juIh4Xpy9Hgx
+F1XthXe2Ku+S4gSZnAveoSm6oea8EvCsDfRJWSOdv5kjAviL6DZWBwH+7IcH7I61
+cd6u/20xYJc+sBAp9boMrMcp5jL4EA/6ZYkZMU0O0TIeEJYe+WBt0fQR8vWXXZJW
+adGjWorbbNLrnx5zdVBEf8MQQmXVk1Lt+Cgy/SOshOwa9LJSihz3RLBpRXDJG2Yb
+47JWewxrzve+EtKrTnSomsCWW6TT4NH6BmdwMXrA1JZB5poM1DXrP7I5Jw2ExxH3
+lzOlGqdI+l78oQsanXmoW/1bYm4NM/SNCLrCWwIDAQABAoIBAQCCbHMJY1Wl8eIJ
+v5HG2WuHXaaHqVoavo2fXTDXwWryfx1v+zz/Q0YnQBH3shPAi/OQCTOfpw/uVWTb
+dUZul3+wUyfcVmUdXGCLgBY53dWna8Z8e+zHwhISsqtDXV/TpelUBDCNO324XIIR
+Cg0TLO4nyzQ+ESLo6D+Y2DTp8lBjMEkmKTd8CLXR2ycEoVykN98qPZm8keiLGO91
+I8K7aRd8uOyQ6HUfJRlzFHSuwaLReErxGTEPI4t/wVqh2nP2gGBsn3apiJ0ul6Jz
+NlYO5PqiwpeDk4ibhQBpicnm1jnEcynH/WtGuKgMNB0M4SBRBsEguO7WoKx3o+qZ
+iVIaPWDhAoGBAO05UBvyJpAcz/ZNQlaF0EAOhoxNQ3h6+6ZYUE52PgZ/DHftyJPI
+Y+JJNclY91wn91Yk3ROrDi8gqhzA+2Lelxo1kuZDu+m+bpzhVUdJia7tZDNzRIhI
+24eP2GdochooOZ0qjvrik4kuX43amBhQ4RHsBjmX5CnUlL5ZULs8v2xnAoGBANjq
+VLAwiIIqJZEC6BuBvVYKaRWkBCAXvQ3j/OqxHRYu3P68PZ58Q7HrhrCuyQHTph2v
+fzfmEMPbSCrFIrrMRmjUG8wopL7GjZjFl8HOBHFwzFiz+CT5DEC+IJIRkp4HM8F/
+PAzjB2wCdRdSjLTD5ph0/xQIg5xfln7D+wqU0QHtAoGBAKkLF0/ivaIiNftw0J3x
+WxXag/yErlizYpIGCqvuzII6lLr9YdoViT/eJYrmb9Zm0HS9biCu2zuwDijRSBIL
+RieyF40opUaKoi3+0JMtDwTtO2MCd8qaCH3QfkgqAG0tTuj1Q8/6F2JA/myKYamq
+MMhhpYny9+7rAlemM8ZJIqtvAoGBAKOI3zpKDNCdd98A4v7B7H2usZUIJ7gOTZDo
+XqiNyRENWb2PK6GNq/e6SrxvuclvyKA+zFnXULJoYtsj7tAH69lieGaOCc5uoRgZ
+eBU7/euMj/McE6vEO3GgJawaJYCQi3uJMjvA+bp7i81+hehOfU5ZfmmbFaZSBoMh
+u+U5Vu3tAoGBANnBIbHfD3E7rqnqdpH1oRRHLA1VdghzEKgyUTPHNDzPJG87RY3c
+rRqeXepblud3qFjD60xS9BzcBijOvZ4+KHk6VIMpkyqoeNVFCJbBVCw+JGMp88+v
+e9t+2iwryh5+rnq+pg6anmgwHldptJc1XEFZA2UUQ89RP7kOGQF6IkIS
+-----END RSA PRIVATE KEY-----
+private_key_type    rsa
+serial_number       3e:20:32:c6:af:a7:20:4e:b1:95:67:fb:86:bc:cb:90:f4:31:b6:f3
+```
+
+Vault has now generated a new set of credentials using the `example-dot-com`
+role configuration. Here we see the dynamically generated private key and
+certificate. The issuing CA certificate and CA trust chain are returned as well.
+The CA Chain returns all the intermediate authorities in the trust chain. The root
+authority is not included since that will usually be trusted by the underlying
+OS.
 
 ## API
 
-### /pki/ca(/pem)
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Retrieves the CA certificate *in raw DER-encoded form*.
-    This is a bare endpoint that does not return a
-    standard Vault data structure. If `/pem` is added to the
-    endpoint, the CA certificate is returned in PEM format.
-    <br /><br />This is an unauthenticated endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/ca(/pem)`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```
-    <binary DER-encoded certficiate>
-    ```
-
-  </dd>
-</dl>
-
-### /pki/cert/
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Retrieves one of a selection of certificates. Valid values: `ca`
-    for the CA certificate, `crl` for the current CRL, or a serial
-    number in either hyphen-separated or colon-separated octal format.
-    This endpoint returns the certificate in PEM formatting in the
-    `certificate` key of the JSON object.
-    <br /><br />This is an unauthenticated endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/cert/<serial>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```javascript
-    {
-        "data": {
-            "certificate": "-----BEGIN CERTIFICATE-----\nMIIGmDCCBYCgAwIBAgIHBzEB3fTzhTANBgkqhkiG9w0BAQsFADCBjDELMAkGA1UE\n..."
-        }
-    }
-    ...
-    ```
-
-  </dd>
-</dl>
-
-### /pki/config/ca
-#### POST
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    A PEM file containing the issuing CA certificate
-    and its private key, concatenated.
-    <br /><br />This is a root-protected endpoint.
-    <br /><br />The information can be provided from a file via a `curl`
-    command similar to the following:<br/>
-
-    ```text
-    curl -X POST --data "@cabundle.json" http://127.0.0.1:8200/v1/pki/config/ca -H X-Vault-Token:06b9d...
-    ```
-
-    Note that if you provide the data through the HTTP API it must be
-    JSON-formatted, with newlines replaced with `\n`, like so:
-
-    ```text
-    { "pem_bundle": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END CERTIFICATE-----" }
-    ```
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/config/ca`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">pem_bundle</span>
-        <span class="param-flags">required</span>
-        The key and certificate concatenated in PEM format.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
-
-### /pki/crl(/pem)
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Retrieves the current CRL *in raw DER-encoded form*. This endpoint
-    is suitable for usage in the CRL Distribution Points extension in a
-    CA certificate. This is a bare endpoint that does not return a
-    standard Vault data structure. If `/pem` is added to the endpoint,
-    the CRL is returned in PEM format.
-    <br /><br />This is an unauthenticated endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/crl(/pem)`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```
-    <binary DER-encoded CRL>
-    ```
-
-  </dd>
-</dl>
-
-### /pki/crl/rotate
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-  This endpoint forces a rotation of the CRL. This can be used
-  by administrators to cut the size of the CRL if it contains
-  a number of certificates that have now expired, but has
-  not been rotated due to no further certificates being revoked.
-  <br /><br />This is a root-protected endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/crl/rotate`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-  ```javascript
-  {
-      "data": {
-          "success": true
-      }
-  }
-  ```
-
-  </dd>
-</dl>
-
-### /pki/issue/
-#### POST
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Generates a new set of credentials (private key and
-    certificate) based on the named role. The issuing CA
-    certificate is returned as well, so that only the root CA
-    need be in a client's trust store.
-    <br /><br />*The private key is _not_ stored.
-    If you do not save the private key, you will need to
-    request a new certificate.*
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/issue/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">common_name</span>
-        <span class="param-flags">required</span>
-        The requested CN for the certificate. If the CN is allowed
-        by role policy, it will be issued.
-      </li>
-      <li>
-        <span class="param">alt_names</span>
-        <span class="param-flags">optional</span>
-        Requested Subject Alternative Names, in a comma-delimited
-        list. If any requested names do not match role policy,
-        the entire request will be denied.
-      </li>
-      <li>
-        <span class="param">ip_sans</span>
-        <span class="param-flags">optional</span>
-        Requested IP Subject Alternative Names, in a comma-delimited
-        list. Only valid if the role allows IP SANs (which is the
-        default).
-      </li>
-      <li>
-      <span class="param">ttl</span>
-      <span class="param-flags">optional</span>
-        Requested Time To Live. Cannot be greater than the role's
-        `max_ttl` value. If not provided, the role's `ttl`
-        value will be used. Note that the role values default
-        to system values if not explicitly set.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-  ```javascript
-  {
-      "lease_id": "pki/issue/test/7ad6cfa5-f04f-c62a-d477-f33210475d05",
-      "renewable": false,
-      "lease_duration": 21600,
-      "data": {
-          "certificate": "-----BEGIN CERTIFICATE-----\nMIIDzDCCAragAwIBAgIUOd0ukLcjH43TfTHFG9qE0FtlMVgwCwYJKoZIhvcNAQEL\n...\numkqeYeO30g1uYvDuWLXVA==\n-----END CERTIFICATE-----\n",
-          "issuing_ca": "-----BEGIN CERTIFICATE-----\nMIIDUTCCAjmgAwIBAgIJAKM+z4MSfw2mMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV\n...\nG/7g4koczXLoUM3OQXd5Aq2cs4SS1vODrYmgbioFsQ3eDHd1fg==\n-----END CERTIFICATE-----\n",
-          "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAnVHfwoKsUG1GDVyWB1AFroaKl2ImMBO8EnvGLRrmobIkQvh+\n...\nQN351pgTphi6nlCkGPzkDuwvtxSxiCWXQcaxrHAL7MiJpPzkIBq1\n-----END RSA PRIVATE KEY-----\n",
-          "serial": "39:dd:2e:90:b7:23:1f:8d:d3:7d:31:c5:1b:da:84:d0:5b:65:31:58"
-      },
-      "auth": null
-  }
-  ```
-
-  </dd>
-</dl>
-
-### /pki/revoke
-#### POST
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Revokes a certificate using its serial number. This is an
-    alternative option to the standard method of revoking
-    using Vault lease IDs. A successful revocation will
-    rotate the CRL.
-    <br /><br />This is a root-protected endpoint.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/revoke`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">serial_number</span>
-        <span class="param-flags">required</span>
-        The serial number of the certificate to revoke, in
-        hyphen-separated or colon-separated octal.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-  ```javascript
-  {
-      "data": {
-          "revocation_time": 1433269787
-      }
-  }
-  ```
-  </dd>
-</dl>
-
-### /pki/roles/
-#### POST
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Creates or updates the role definition. Note that
-    the `allowed_base_domain`, `allow_token_displayname`,
-    `allow_subdomains`, and `allow_any_name` attributes
-    are additive; between them nearly and across multiple
-    roles nearly any issuing policy can be accommodated.
-    `server_flag`, `client_flag`, and `code_signing_flag`
-    are additive as well. If a client requests a
-    certificate that is not allowed by the CN policy in
-    the role, the request is denied.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>POST</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-    <ul>
-      <li>
-        <span class="param">ttl</span>
-        <span class="param-flags">optional</span>
-        The Time To Live value provided as a string duration
-        with time suffix. Hour is the largest suffix.
-        If not set, uses the system default value or the
-        value of `max_ttl`, whichever is shorter.
-      </li>
-      <li>
-        <span class="param">max_ttl</span>
-        <span class="param-flags">optional</span>
-        The maximum Time To Live provided as a string duration
-        with time suffix. Hour is the largest suffix. If not set,
-        defaults to the system maximum lease TTL.
-      </li>
-      <li>
-        <span class="param">allow_localhost</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request certificates for `localhost`
-        as one of the requested common names. This is useful
-        for testing and to allow clients on a single host to
-        talk securely.
-        Defaults to true.
-      </li>
-      <li>
-        <span class="param">allowed_base_domain</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request certificates for subdomains
-        directly off of this base domain. _This includes the
-        wildcard subdomain._ For instance, a base_domain of
-        `example.com` allows clients to request certificates for
-        `foo.example.com` and `*.example.com`. To allow further
-        levels of subdomains, enable the `allow_subdomains` option.
-        There is no default.
-      </li>
-      <li>
-        <span class="param">allow_token_displayname</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request certificates matching
-        the value of Display Name from the requesting token.
-        Remember, this stacks with the other CN options,
-        including `allowed_base_domain`. Defaults to `false`.
-      </li>
-      <li>
-        <span class="param">allow_subdomains</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request certificates with CNs that
-        are subdomains of the CNs allowed by the other role
-        options. _This includes wildcard subdomains._ This is
-        redundant when using the `allow_any_name` option.
-        Defaults to `false`.
-      </li>
-      <li>
-        <span class="param">allow_any_name</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request any CN. Useful in some
-        circumstances, but make sure you understand whether it
-        is appropriate for your installation before enabling it.
-        Defaults to `false`.
-      </li>
-      <li>
-        <span class="param">allow_ip_sans</span>
-        <span class="param-flags">optional</span>
-        If set, clients can request IP Subject Alternative
-        Names. Unlike CNs, no authorization checking is
-        performed except to verify that the given values
-        are valid IP addresses. Defaults to `true`.
-      <li>
-        <span class="param">server_flag</span>
-        <span class="param-flags">optional</span>
-        If set, certificates are flagged for server use.
-        Defaults to `true`.
-      </li>
-      <li>
-        <span class="param">client_flag</span>
-        <span class="param-flags">optional</span>
-        If set, certificates are flagged for client use.
-        Defaults to `true`.
-      </li>
-      <li>
-        <span class="param">code_signing_flag</span>
-        <span class="param-flags">optional</span>
-        If set, certificates are flagged for code signing
-        use. Defaults to `false`.
-      </li>
-      <li>
-        <span class="param">key_type</span>
-        <span class="param-flags">optional</span>
-        The type of key to generate for generated private
-        keys. Currently, `rsa` and `ec` are supported.
-        Defaults to `rsa`.
-      </li>
-      <li>
-        <span class="param">key_bits</span>
-        <span class="param-flags">optional</span>
-        The number of bits to use for the generated keys.
-        Defaults to `2048`; this will need to be changed for
-        `ec` keys. See https://golang.org/pkg/crypto/elliptic/#Curve
-        for an overview of allowed bit lengths for `ec`.
-      </li>
-    </ul>
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
-
-#### GET
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Queries the role definition.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>GET</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-
-    ```javascript
-    {
-        "data": {
-            "allow_any_name": false,
-            "allow_ip_sans": true,
-            "allow_localhost": true,
-            "allow_subdomains": false,
-            "allow_token_displayname": false,
-            "allowed_base_domain": "example.com",
-            "client_flag": true,
-            "code_signing_flag": false,
-            "key_bits": 2048,
-            "key_type": "rsa",
-            "ttl": "6h",
-            "max_ttl": "12h",
-            "server_flag": true
-        }
-    }
-    ```
-
-  </dd>
-</dl>
-
-
-#### DELETE
-
-<dl class="api">
-  <dt>Description</dt>
-  <dd>
-    Deletes the role definition. Deleting a role does <b>not</b> revoke
-    certificates previously issued under this role.
-  </dd>
-
-  <dt>Method</dt>
-  <dd>DELETE</dd>
-
-  <dt>URL</dt>
-  <dd>`/pki/roles/<name>`</dd>
-
-  <dt>Parameters</dt>
-  <dd>
-     None
-  </dd>
-
-  <dt>Returns</dt>
-  <dd>
-    A `204` response code.
-  </dd>
-</dl>
+The PKI secrets engine has a full HTTP API. Please see the
+[PKI secrets engine API](/api/secret/pki/index.html) for more
+details.

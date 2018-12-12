@@ -1,6 +1,7 @@
 package framework
 
 import (
+	"context"
 	"time"
 
 	"github.com/hashicorp/vault/logical"
@@ -19,13 +20,13 @@ type Secret struct {
 	// the structure of this secret.
 	Fields map[string]*FieldSchema
 
-	// DefaultDuration and DefaultGracePeriod are the default values for
-	// the duration of the lease for this secret and its grace period. These
-	// can be manually overwritten with the result of Response().
+	// DefaultDuration is the default value for the duration of the lease for
+	// this secret. This can be manually overwritten with the result of
+	// Response().
 	//
-	// If these aren't set, Vault core will set a default lease period.
-	DefaultDuration    time.Duration
-	DefaultGracePeriod time.Duration
+	// If these aren't set, Vault core will set a default lease period which
+	// may come from a mount tuning.
+	DefaultDuration time.Duration
 
 	// Renew is the callback called to renew this secret. If Renew is
 	// not specified then renewable is set to false in the secret.
@@ -51,9 +52,8 @@ func (s *Secret) Response(
 	return &logical.Response{
 		Secret: &logical.Secret{
 			LeaseOptions: logical.LeaseOptions{
-				TTL:         s.DefaultDuration,
-				GracePeriod: s.DefaultGracePeriod,
-				Renewable:   s.Renewable(),
+				TTL:       s.DefaultDuration,
+				Renewable: s.Renewable(),
 			},
 			InternalData: internalData,
 		},
@@ -63,7 +63,7 @@ func (s *Secret) Response(
 }
 
 // HandleRenew is the request handler for renewing this secret.
-func (s *Secret) HandleRenew(req *logical.Request) (*logical.Response, error) {
+func (s *Secret) HandleRenew(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	if !s.Renewable() {
 		return nil, logical.ErrUnsupportedOperation
 	}
@@ -73,18 +73,18 @@ func (s *Secret) HandleRenew(req *logical.Request) (*logical.Response, error) {
 		Schema: s.Fields,
 	}
 
-	return s.Renew(req, data)
+	return s.Renew(ctx, req, data)
 }
 
 // HandleRevoke is the request handler for renewing this secret.
-func (s *Secret) HandleRevoke(req *logical.Request) (*logical.Response, error) {
+func (s *Secret) HandleRevoke(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	data := &FieldData{
 		Raw:    req.Data,
 		Schema: s.Fields,
 	}
 
 	if s.Revoke != nil {
-		return s.Revoke(req, data)
+		return s.Revoke(ctx, req, data)
 	}
 
 	return nil, logical.ErrUnsupportedOperation
