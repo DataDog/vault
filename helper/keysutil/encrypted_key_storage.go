@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"math/big"
 	paths "path"
+	"sort"
 	"strings"
-
-	big "github.com/hashicorp/golang-math-big/big"
 
 	"github.com/hashicorp/golang-lru"
 	"github.com/hashicorp/vault/logical"
@@ -78,10 +78,6 @@ func NewEncryptedKeyStorageWrapper(config EncryptedKeyStorageConfig) (*Encrypted
 
 	if !config.Policy.ConvergentEncryption {
 		return nil, ErrPolicyConvergentEncryption
-	}
-
-	if config.Policy.ConvergentVersion < 2 {
-		return nil, ErrPolicyConvergentVersion
 	}
 
 	if config.Prefix == "" {
@@ -180,7 +176,7 @@ func (s *encryptedKeyStorage) List(ctx context.Context, prefix string) ([]string
 
 		decoded := Base62Decode(k)
 		if len(decoded) == 0 {
-			return nil, errors.New("Could not decode key")
+			return nil, errors.New("could not decode key")
 		}
 
 		// Decrypt the data with the object's key policy.
@@ -210,6 +206,7 @@ func (s *encryptedKeyStorage) List(ctx context.Context, prefix string) ([]string
 		decryptedKeys[i] = plaintext
 	}
 
+	sort.Strings(decryptedKeys)
 	return decryptedKeys, nil
 }
 

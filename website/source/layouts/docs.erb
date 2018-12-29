@@ -100,6 +100,9 @@
             <li<%= sidebar_current("docs-configuration-seal-awskms") %>>
               <a href="/docs/configuration/seal/awskms.html">AWS KMS <sup>ENT</sup></a>
             </li>
+            <li<%= sidebar_current("docs-configuration-seal-azurekeyvault") %>>
+              <a href="/docs/configuration/seal/azurekeyvault.html">Azure Key Vault <sup>ENT</sup></a>
+            </li>
             <li<%= sidebar_current("docs-configuration-seal-gcpckms") %>>
               <a href="/docs/configuration/seal/gcpckms.html">GCP Cloud KMS <sup>ENT</sup></a>
             </li>
@@ -133,7 +136,10 @@
                 <a href="/docs/configuration/storage/filesystem.html">Filesystem</a>
               </li>
               <li<%= sidebar_current("docs-configuration-storage-google-cloud")%>>
-                <a href="/docs/configuration/storage/google-cloud.html">Google Cloud</a>
+                <a href="/docs/configuration/storage/google-cloud-storage.html">Google Cloud Storage</a>
+              </li>
+              <li<%= sidebar_current("docs-configuration-storage-spanner")%>>
+                <a href="/docs/configuration/storage/google-cloud-spanner.html">Google Cloud Spanner</a>
               </li>
               <li<%= sidebar_current("docs-configuration-storage-in-memory")%>>
                 <a href="/docs/configuration/storage/in-memory.html">In-Memory</a>
@@ -146,9 +152,6 @@
               </li>
               <li<%= sidebar_current("docs-configuration-storage-postgresql")%>>
                 <a href="/docs/configuration/storage/postgresql.html">PostgreSQL</a>
-              </li>
-              <li<%= sidebar_current("docs-configuration-storage-spanner")%>>
-                <a href="/docs/configuration/storage/spanner.html">Spanner</a>
               </li>
               <li<%= sidebar_current("docs-configuration-storage-cassandra")%>>
                 <a href="/docs/configuration/storage/cassandra.html">Cassandra</a>
@@ -166,6 +169,9 @@
           </li>
           <li<%= sidebar_current("docs-configuration-telemetry") %>>
             <a href="/docs/configuration/telemetry.html"><tt>telemetry</tt></a>
+          </li>
+          <li<%= sidebar_current("docs-configuration-ui") %>>
+            <a href="/docs/configuration/ui/index.html"><tt>ui</tt></a>
           </li>
         </ul>
       </li>
@@ -259,6 +265,23 @@
           <li<%= sidebar_current("docs-commands-path-help") %>>
             <a href="/docs/commands/path-help.html">path-help</a>
           </li>
+          <li<%= sidebar_current("docs-commands-plugin") %>>
+            <a href="/docs/commands/plugin.html">plugin</a>
+            <ul class="nav">
+              <li<%= sidebar_current("docs-commands-plugin-deregister") %>>
+                <a href="/docs/commands/plugin/deregister.html">deregister</a>
+              </li>
+              <li<%= sidebar_current("docs-commands-plugin-info") %>>
+                <a href="/docs/commands/plugin/info.html">info</a>
+              </li>
+              <li<%= sidebar_current("docs-commands-plugin-list") %>>
+                <a href="/docs/commands/plugin/list.html">list</a>
+              </li>
+              <li<%= sidebar_current("docs-commands-plugin-register") %>>
+                <a href="/docs/commands/plugin/register.html">register</a>
+              </li>
+            </ul>
+          </li>
           <li<%= sidebar_current("docs-commands-policy") %>>
             <a href="/docs/commands/policy.html">policy</a>
             <ul class="nav">
@@ -348,6 +371,10 @@
       <li<%= sidebar_current("docs-secrets") %>>
         <a href="/docs/secrets/index.html">Secrets Engines</a>
         <ul class="nav">
+          <li<%= sidebar_current("docs-secrets-ad") %>>
+            <a href="/docs/secrets/ad/index.html">Active Directory</a>
+          </li>
+
           <li<%= sidebar_current("docs-secrets-aws") %>>
             <a href="/docs/secrets/aws/index.html">AWS</a>
           </li>
@@ -391,11 +418,19 @@
           </li>
 
           <li<%= sidebar_current("docs-secrets-gcp") %>>
-            <a href="/docs/secrets/gcp/index.html">Google Cloud<sup>BETA</sup></a>
+            <a href="/docs/secrets/gcp/index.html">Google Cloud</a>
           </li>
 
           <li<%= sidebar_current("docs-secrets-kv") %>>
             <a href="/docs/secrets/kv/index.html">Key/Value</a>
+            <ul class="nav">
+              <li<%= sidebar_current("docs-secrets-kv-v1") %>>
+                <a href="/docs/secrets/kv/kv-v1.html">K/V Version 1</a>
+              </li>
+              <li<%= sidebar_current("docs-secrets-kv-v2") %>>
+                <a href="/docs/secrets/kv/kv-v2.html">K/V Version 2</a>
+              </li>
+            </ul>
           </li>
 
           <li<%= sidebar_current("docs-secrets-identity") %>>
@@ -478,6 +513,10 @@
 
           <li<%= sidebar_current("docs-auth-gcp") %>>
             <a href="/docs/auth/gcp.html">Google Cloud</a>
+          </li>
+
+          <li<%= sidebar_current("docs-auth-jwt") %>>
+            <a href="/docs/auth/jwt.html">JWT/OIDC</a>
           </li>
 
           <li<%= sidebar_current("docs-auth-kubernetes") %>>
@@ -570,12 +609,6 @@
           </li>
           <li<%= sidebar_current("docs-vault-enterprise-sealwrap")%>>
             <a href="/docs/enterprise/sealwrap/index.html">Seal Wrap / FIPS 140-2</a>
-          </li>
-          <li<%= sidebar_current("docs-vault-enterprise-ui") %>>
-            <a href="/docs/enterprise/ui/index.html">UI (Web Interface)</a>
-          </li>
-          <li<%= sidebar_current("docs-vault-enterprise-identity") %>>
-            <a href="/docs/enterprise/identity/index.html">Identity</a>
           </li>
           <li<%= sidebar_current("docs-vault-enterprise-control-groups") %>>
             <a href="/docs/enterprise/control-groups/index.html">Control Groups</a>

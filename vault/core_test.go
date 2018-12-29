@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/hashicorp/errwrap"
+	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/audit"
 	"github.com/hashicorp/vault/helper/consts"
-	"github.com/hashicorp/vault/helper/logformat"
+	"github.com/hashicorp/vault/helper/logging"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/physical"
 	"github.com/hashicorp/vault/physical/inmem"
-	log "github.com/mgutz/logxi/v1"
 )
 
 var (
@@ -23,7 +23,7 @@ var (
 )
 
 func TestNewCore_badRedirectAddr(t *testing.T) {
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inm, err := inmem.NewInmem(nil, logger)
 	if err != nil {
@@ -276,7 +276,7 @@ func TestCore_Seal_BadToken(t *testing.T) {
 // GH-3497
 func TestCore_Seal_SingleUse(t *testing.T) {
 	c, keys, _ := TestCoreUnsealed(t)
-	c.tokenStore.create(context.Background(), &TokenEntry{
+	c.tokenStore.create(context.Background(), &logical.TokenEntry{
 		ID:       "foo",
 		NumUses:  1,
 		Policies: []string{"root"},
@@ -381,7 +381,7 @@ func TestCore_HandleRequest_Lease_MaxLength(t *testing.T) {
 		t.Fatalf("bad: %#v", resp)
 	}
 	if resp.Secret.TTL != c.maxLeaseTTL {
-		t.Fatalf("bad: %#v", resp.Secret)
+		t.Fatalf("bad: %#v, %d", resp.Secret, c.maxLeaseTTL)
 	}
 	if resp.Secret.LeaseID == "" {
 		t.Fatalf("bad: %#v", resp.Secret)
@@ -422,7 +422,7 @@ func TestCore_HandleRequest_Lease_DefaultLength(t *testing.T) {
 		t.Fatalf("bad: %#v", resp)
 	}
 	if resp.Secret.TTL != c.defaultLeaseTTL {
-		t.Fatalf("bad: %#v", resp.Secret)
+		t.Fatalf("bad: %#v, %d", resp.Secret, c.defaultLeaseTTL)
 	}
 	if resp.Secret.LeaseID == "" {
 		t.Fatalf("bad: %#v", resp.Secret)
@@ -494,7 +494,7 @@ func TestCore_HandleRequest_NoSlash(t *testing.T) {
 // Test a root path is denied if non-root
 func TestCore_HandleRequest_RootPath(t *testing.T) {
 	c, _, root := TestCoreUnsealed(t)
-	testCoreMakeToken(t, c, root, "child", "", []string{"test"})
+	testMakeTokenViaCore(t, c, root, "child", "", []string{"test"})
 
 	req := &logical.Request{
 		Operation:   logical.ReadOperation,
@@ -529,7 +529,7 @@ func TestCore_HandleRequest_RootPath_WithSudo(t *testing.T) {
 	}
 
 	// Child token (non-root) but with 'test' policy should have access
-	testCoreMakeToken(t, c, root, "child", "", []string{"test"})
+	testMakeTokenViaCore(t, c, root, "child", "", []string{"test"})
 	req = &logical.Request{
 		Operation:   logical.ReadOperation,
 		Path:        "sys/policy", // root protected!
@@ -547,7 +547,7 @@ func TestCore_HandleRequest_RootPath_WithSudo(t *testing.T) {
 // Check that standard permissions work
 func TestCore_HandleRequest_PermissionDenied(t *testing.T) {
 	c, _, root := TestCoreUnsealed(t)
-	testCoreMakeToken(t, c, root, "child", "", []string{"test"})
+	testMakeTokenViaCore(t, c, root, "child", "", []string{"test"})
 
 	req := &logical.Request{
 		Operation: logical.UpdateOperation,
@@ -567,7 +567,7 @@ func TestCore_HandleRequest_PermissionDenied(t *testing.T) {
 // Check that standard permissions work
 func TestCore_HandleRequest_PermissionAllowed(t *testing.T) {
 	c, _, root := TestCoreUnsealed(t)
-	testCoreMakeToken(t, c, root, "child", "", []string{"test"})
+	testMakeTokenViaCore(t, c, root, "child", "", []string{"test"})
 
 	// Set the 'test' policy object to permit access to secret/
 	req := &logical.Request{
@@ -719,7 +719,7 @@ func TestCore_HandleLogin_Token(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	expect := &TokenEntry{
+	expect := &logical.TokenEntry{
 		ID:       clientToken,
 		Accessor: te.Accessor,
 		Parent:   "",
@@ -1022,7 +1022,7 @@ func TestCore_HandleRequest_CreateToken_Lease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	expect := &TokenEntry{
+	expect := &logical.TokenEntry{
 		ID:           clientToken,
 		Accessor:     te.Accessor,
 		Parent:       root,
@@ -1067,7 +1067,7 @@ func TestCore_HandleRequest_CreateToken_NoDefaultPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	expect := &TokenEntry{
+	expect := &logical.TokenEntry{
 		ID:           clientToken,
 		Accessor:     te.Accessor,
 		Parent:       root,
@@ -1117,7 +1117,7 @@ func TestCore_LimitedUseToken(t *testing.T) {
 
 func TestCore_Standby_Seal(t *testing.T) {
 	// Create the first core and initialize it
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inm, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -1235,7 +1235,7 @@ func TestCore_Standby_Seal(t *testing.T) {
 
 func TestCore_StepDown(t *testing.T) {
 	// Create the first core and initialize it
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inm, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -1433,7 +1433,7 @@ func TestCore_StepDown(t *testing.T) {
 
 func TestCore_CleanLeaderPrefix(t *testing.T) {
 	// Create the first core and initialize it
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inm, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -1602,7 +1602,7 @@ func TestCore_CleanLeaderPrefix(t *testing.T) {
 }
 
 func TestCore_Standby(t *testing.T) {
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inmha, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -1613,7 +1613,7 @@ func TestCore_Standby(t *testing.T) {
 }
 
 func TestCore_Standby_SeparateHA(t *testing.T) {
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inmha, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -2192,7 +2192,7 @@ func TestCore_HandleRequest_MountPointType(t *testing.T) {
 
 func TestCore_Standby_Rotate(t *testing.T) {
 	// Create the first core and initialize it
-	logger = logformat.NewVaultLogger(log.LevelTrace)
+	logger = logging.NewVaultLogger(log.Trace)
 
 	inm, err := inmem.NewInmemHA(nil, logger)
 	if err != nil {
@@ -2314,7 +2314,6 @@ func TestCore_HandleRequest_Headers(t *testing.T) {
 		Path:        "foo/test",
 		ClientToken: root,
 		Headers: map[string][]string{
-			"X-Vault-Kv-Client":                   []string{"foo"},
 			"Should-Passthrough":                  []string{"foo"},
 			"Should-Passthrough-Case-Insensitive": []string{"baz"},
 			"Should-Not-Passthrough":              []string{"bar"},
@@ -2327,16 +2326,6 @@ func TestCore_HandleRequest_Headers(t *testing.T) {
 
 	// Check the headers
 	headers := noop.Requests[0].Headers
-
-	// Test whitelisted values
-	if val, ok := headers["X-Vault-Kv-Client"]; ok {
-		expected := []string{"foo"}
-		if !reflect.DeepEqual(val, expected) {
-			t.Fatalf("expected: %v, got: %v", expected, val)
-		}
-	} else {
-		t.Fatalf("expected 'X-Vault-Kv-Client' to be present in the headers map")
-	}
 
 	// Test passthrough values
 	if val, ok := headers["Should-Passthrough"]; ok {

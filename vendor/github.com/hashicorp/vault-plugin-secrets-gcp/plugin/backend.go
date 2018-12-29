@@ -2,6 +2,11 @@ package gcpsecrets
 
 import (
 	"context"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/hashicorp/go-gcp-common/gcputil"
 	"github.com/hashicorp/vault-plugin-secrets-gcp/plugin/iamutil"
@@ -9,16 +14,12 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/iam/v1"
-	"net/http"
-	"strings"
-	"sync"
-	"time"
 )
 
 type backend struct {
 	*framework.Backend
 
-	enabledIamResources iamutil.EnabledResources
+	iamResources iamutil.IamResourceParser
 
 	rolesetLock sync.Mutex
 }
@@ -33,7 +34,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 
 func Backend() *backend {
 	var b = backend{
-		enabledIamResources: iamutil.GetEnabledIamResources(),
+		iamResources: iamutil.GetEnabledIamResources(),
 	}
 
 	b.Backend = &framework.Backend{

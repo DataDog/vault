@@ -11,6 +11,13 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
+const (
+	secretIDPrefix              = "secret_id/"
+	secretIDLocalPrefix         = "secret_id_local/"
+	secretIDAccessorPrefix      = "accessor/"
+	secretIDAccessorLocalPrefix = "accessor_local/"
+)
+
 type backend struct {
 	*framework.Backend
 
@@ -23,7 +30,7 @@ type backend struct {
 	view logical.Storage
 
 	// Guard to clean-up the expired SecretID entries
-	tidySecretIDCASGuard uint32
+	tidySecretIDCASGuard *uint32
 
 	// Locks to make changes to role entries. These will be initialized to a
 	// predefined number of locks when the backend is created, and will be
@@ -78,6 +85,8 @@ func Backend(conf *logical.BackendConfig) (*backend, error) {
 
 		// Create locks to modify the generated SecretIDAccessors
 		secretIDAccessorLocks: locksutil.CreateLocks(),
+
+		tidySecretIDCASGuard: new(uint32),
 	}
 
 	// Attach the paths and secrets that are to be handled by the backend
@@ -89,6 +98,10 @@ func Backend(conf *logical.BackendConfig) (*backend, error) {
 		PathsSpecial: &logical.Paths{
 			Unauthenticated: []string{
 				"login",
+			},
+			LocalStorage: []string{
+				secretIDLocalPrefix,
+				secretIDAccessorLocalPrefix,
 			},
 		},
 		Paths: framework.PathAppend(
@@ -144,7 +157,7 @@ func (b *backend) invalidate(_ context.Context, key string) {
 func (b *backend) periodicFunc(ctx context.Context, req *logical.Request) error {
 	// Initiate clean-up of expired SecretID entries
 	if b.System().LocalMount() || !b.System().ReplicationState().HasState(consts.ReplicationPerformanceSecondary) {
-		b.tidySecretID(ctx, req.Storage)
+		b.tidySecretID(ctx, req)
 	}
 	return nil
 }

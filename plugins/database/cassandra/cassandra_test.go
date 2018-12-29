@@ -12,7 +12,7 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/builtin/logical/database/dbplugin"
-	dockertest "gopkg.in/ory-am/dockertest.v3"
+	"github.com/ory/dockertest"
 )
 
 func prepareCassandraTestContainer(t *testing.T) (func(), string, int) {
@@ -249,6 +249,45 @@ func TestCassandra_RevokeUser(t *testing.T) {
 
 	if err = testCredsExist(t, address, port, username, password); err == nil {
 		t.Fatal("Credentials were not revoked")
+	}
+}
+
+func TestCassandra_RotateRootCredentials(t *testing.T) {
+	cleanup, address, port := prepareCassandraTestContainer(t)
+	defer cleanup()
+
+	connectionDetails := map[string]interface{}{
+		"hosts":            address,
+		"port":             port,
+		"username":         "cassandra",
+		"password":         "cassandra",
+		"protocol_version": 4,
+	}
+
+	db := new()
+
+	connProducer := db.cassandraConnectionProducer
+
+	_, err := db.Init(context.Background(), connectionDetails, true)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	if !connProducer.Initialized {
+		t.Fatal("Database should be initialized")
+	}
+
+	newConf, err := db.RotateRootCredentials(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if newConf["password"] == "cassandra" {
+		t.Fatal("password was not updated")
+	}
+
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("err: %s", err)
 	}
 }
 

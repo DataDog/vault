@@ -86,15 +86,6 @@ func (c *KVDestroyCommand) Run(args []string) int {
 	}
 	var err error
 	path := sanitizePath(args[0])
-	path, err = addPrefixToVKVPath(path, "destroy")
-	if err != nil {
-		c.UI.Error(err.Error())
-		return 2
-	}
-
-	data := map[string]interface{}{
-		"versions": c.flagVersions,
-	}
 
 	client, err := c.Client()
 	if err != nil {
@@ -102,9 +93,31 @@ func (c *KVDestroyCommand) Run(args []string) int {
 		return 2
 	}
 
-	secret, err := kvWriteRequest(client, path, data)
+	mountPath, v2, err := isKVv2(path, client)
+	if err != nil {
+		c.UI.Error(err.Error())
+		return 2
+	}
+	if !v2 {
+		c.UI.Error("Destroy not supported on KV Version 1")
+		return 1
+	}
+	path = addPrefixToVKVPath(path, mountPath, "destroy")
+	if err != nil {
+		c.UI.Error(err.Error())
+		return 2
+	}
+
+	data := map[string]interface{}{
+		"versions": kvParseVersionsFlags(c.flagVersions),
+	}
+
+	secret, err := client.Logical().Write(path, data)
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Error writing data to %s: %s", path, err))
+		if secret != nil {
+			OutputSecret(c.UI, secret)
+		}
 		return 2
 	}
 	if secret == nil {

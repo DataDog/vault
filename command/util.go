@@ -6,8 +6,7 @@ import (
 	"os"
 	"time"
 
-	"golang.org/x/crypto/ssh/terminal"
-
+	"github.com/fatih/color"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/config"
 	"github.com/hashicorp/vault/command/token"
@@ -21,7 +20,7 @@ func DefaultTokenHelper() (token.TokenHelper, error) {
 
 // RawField extracts the raw field from the given data and returns it as a
 // string for printing purposes.
-func RawField(secret *api.Secret, field string) (interface{}, bool) {
+func RawField(secret *api.Secret, field string) interface{} {
 	var val interface{}
 	switch {
 	case secret.Auth != nil:
@@ -35,6 +34,10 @@ func RawField(secret *api.Secret, field string) (interface{}, bool) {
 		case "token_renewable":
 			val = secret.Auth.Renewable
 		case "token_policies":
+			val = secret.Auth.TokenPolicies
+		case "identity_policies":
+			val = secret.Auth.IdentityPolicies
+		case "policies":
 			val = secret.Auth.Policies
 		default:
 			val = secret.Data[field]
@@ -60,6 +63,14 @@ func RawField(secret *api.Secret, field string) (interface{}, bool) {
 
 	default:
 		switch field {
+		case "lease_duration":
+			val = secret.LeaseDuration
+		case "lease_id":
+			val = secret.LeaseID
+		case "request_id":
+			val = secret.RequestID
+		case "renewable":
+			val = secret.Renewable
 		case "refresh_interval":
 			val = secret.LeaseDuration
 		case "data":
@@ -73,13 +84,20 @@ func RawField(secret *api.Secret, field string) (interface{}, bool) {
 		}
 	}
 
-	return val, val != nil
+	return val
 }
 
 // PrintRawField prints raw field from the secret.
-func PrintRawField(ui cli.Ui, secret *api.Secret, field string) int {
-	val, ok := RawField(secret, field)
-	if !ok {
+func PrintRawField(ui cli.Ui, data interface{}, field string) int {
+	var val interface{}
+	switch data.(type) {
+	case *api.Secret:
+		val = RawField(data.(*api.Secret), field)
+	case map[string]interface{}:
+		val = data.(map[string]interface{})[field]
+	}
+
+	if val == nil {
 		ui.Error(fmt.Sprintf("Field %q not present in secret", field))
 		return 1
 	}
@@ -109,7 +127,7 @@ func PrintRawField(ui cli.Ui, secret *api.Secret, field string) int {
 // to something else, the "raw" value is printed without a newline character.
 // Otherwise the value is printed as normal.
 func PrintRaw(ui cli.Ui, str string) int {
-	if terminal.IsTerminal(int(os.Stdout.Fd())) {
+	if !color.NoColor {
 		ui.Output(str)
 	} else {
 		// The cli.Ui prints a CR, which is not wanted since the user probably wants

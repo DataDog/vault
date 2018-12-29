@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -40,14 +41,16 @@ const (
 	mountTableType = "mounts"
 )
 
-// ListingVisiblityType represents the types for listing visilibity
-type ListingVisiblityType string
+// ListingVisibilityType represents the types for listing visibility
+type ListingVisibilityType string
 
 const (
+	// ListingVisibilityDefault is the default value for listing visibility
+	ListingVisibilityDefault ListingVisibilityType = ""
 	// ListingVisibilityHidden is the hidden type for listing visibility
-	ListingVisibilityHidden ListingVisiblityType = ""
+	ListingVisibilityHidden ListingVisibilityType = "hidden"
 	// ListingVisibilityUnauth is the unauth type for listing visibility
-	ListingVisibilityUnauth ListingVisiblityType = "unauth"
+	ListingVisibilityUnauth ListingVisibilityType = "unauth"
 )
 
 var (
@@ -193,26 +196,26 @@ type MountEntry struct {
 
 // MountConfig is used to hold settable options
 type MountConfig struct {
-	DefaultLeaseTTL           time.Duration        `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"` // Override for global default
-	MaxLeaseTTL               time.Duration        `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`             // Override for global default
-	ForceNoCache              bool                 `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`          // Override for global default
-	PluginName                string               `json:"plugin_name,omitempty" structs:"plugin_name,omitempty" mapstructure:"plugin_name"`
-	AuditNonHMACRequestKeys   []string             `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
-	AuditNonHMACResponseKeys  []string             `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
-	ListingVisibility         ListingVisiblityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
-	PassthroughRequestHeaders []string             `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
+	DefaultLeaseTTL           time.Duration         `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"` // Override for global default
+	MaxLeaseTTL               time.Duration         `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`             // Override for global default
+	ForceNoCache              bool                  `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`          // Override for global default
+	PluginName                string                `json:"plugin_name,omitempty" structs:"plugin_name,omitempty" mapstructure:"plugin_name"`
+	AuditNonHMACRequestKeys   []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
+	AuditNonHMACResponseKeys  []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
+	ListingVisibility         ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
+	PassthroughRequestHeaders []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
 }
 
 // APIMountConfig is an embedded struct of api.MountConfigInput
 type APIMountConfig struct {
-	DefaultLeaseTTL           string               `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"`
-	MaxLeaseTTL               string               `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`
-	ForceNoCache              bool                 `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`
-	PluginName                string               `json:"plugin_name,omitempty" structs:"plugin_name,omitempty" mapstructure:"plugin_name"`
-	AuditNonHMACRequestKeys   []string             `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
-	AuditNonHMACResponseKeys  []string             `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
-	ListingVisibility         ListingVisiblityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
-	PassthroughRequestHeaders []string             `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
+	DefaultLeaseTTL           string                `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"`
+	MaxLeaseTTL               string                `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`
+	ForceNoCache              bool                  `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`
+	PluginName                string                `json:"plugin_name,omitempty" structs:"plugin_name,omitempty" mapstructure:"plugin_name"`
+	AuditNonHMACRequestKeys   []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
+	AuditNonHMACResponseKeys  []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
+	ListingVisibility         ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
+	PassthroughRequestHeaders []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
 }
 
 // Clone returns a deep copy of the mount entry
@@ -311,6 +314,8 @@ func (c *Core) mountInternal(ctx context.Context, entry *MountEntry) error {
 	// ensure that it is reset after. This ensures that there will be no
 	// writes during the construction of the backend.
 	view.setReadOnlyErr(logical.ErrSetupReadOnly)
+	// We defer this because we're already up and running so we don't need to
+	// time it for after postUnseal
 	defer view.setReadOnlyErr(nil)
 
 	var backend logical.Backend
@@ -329,15 +334,15 @@ func (c *Core) mountInternal(ctx context.Context, entry *MountEntry) error {
 	// Check for the correct backend type
 	backendType := backend.Type()
 	if entry.Type == "plugin" && backendType != logical.TypeLogical {
-		return fmt.Errorf("cannot mount '%s' of type '%s' as a logical backend", entry.Config.PluginName, backendType)
+		return fmt.Errorf("cannot mount %q of type %q as a logical backend", entry.Config.PluginName, backendType)
 	}
 
 	c.setCoreBackend(entry, backend, view)
 
 	newTable := c.mounts.shallowClone()
 	newTable.Entries = append(newTable.Entries, entry)
-	if err := c.persistMounts(ctx, newTable, entry.Local); err != nil {
-		c.logger.Error("core: failed to update mount table", "error", err)
+	if err := c.persistMounts(ctx, newTable, &entry.Local); err != nil {
+		c.logger.Error("failed to update mount table", "error", err)
 		return logical.CodedError(500, "failed to update mount table")
 	}
 	c.mounts = newTable
@@ -347,7 +352,7 @@ func (c *Core) mountInternal(ctx context.Context, entry *MountEntry) error {
 	}
 
 	if c.logger.IsInfo() {
-		c.logger.Info("core: successful mount", "path", entry.Path, "type", entry.Type)
+		c.logger.Info("successful mount", "path", entry.Path, "type", entry.Type)
 	}
 	return nil
 }
@@ -363,7 +368,7 @@ func (c *Core) unmount(ctx context.Context, path string) error {
 	// Prevent protected paths from being unmounted
 	for _, p := range protectedMounts {
 		if strings.HasPrefix(path, p) {
-			return fmt.Errorf("cannot unmount '%s'", path)
+			return fmt.Errorf("cannot unmount %q", path)
 		}
 	}
 	return c.unmountInternal(ctx, path)
@@ -386,7 +391,7 @@ func (c *Core) unmountInternal(ctx context.Context, path string) error {
 
 	// Mark the entry as tainted
 	if err := c.taintMountEntry(ctx, path); err != nil {
-		c.logger.Error("core: failed to taint mount entry for path being unmounted", "error", err, "path", path)
+		c.logger.Error("failed to taint mount entry for path being unmounted", "error", err, "path", path)
 		return err
 	}
 
@@ -403,7 +408,7 @@ func (c *Core) unmountInternal(ctx context.Context, path string) error {
 		}
 
 		// Revoke all the dynamic keys
-		if err := c.expiration.RevokePrefix(path); err != nil {
+		if err := c.expiration.RevokePrefix(path, true); err != nil {
 			return err
 		}
 
@@ -420,19 +425,19 @@ func (c *Core) unmountInternal(ctx context.Context, path string) error {
 	case entry.Local, !c.ReplicationState().HasState(consts.ReplicationPerformanceSecondary):
 		// Have writable storage, remove the whole thing
 		if err := logical.ClearView(ctx, view); err != nil {
-			c.logger.Error("core: failed to clear view for path being unmounted", "error", err, "path", path)
+			c.logger.Error("failed to clear view for path being unmounted", "error", err, "path", path)
 			return err
 		}
 	}
 
 	// Remove the mount table entry
 	if err := c.removeMountEntry(ctx, path); err != nil {
-		c.logger.Error("core: failed to remove mount entry for path being unmounted", "error", err, "path", path)
+		c.logger.Error("failed to remove mount entry for path being unmounted", "error", err, "path", path)
 		return err
 	}
 
 	if c.logger.IsInfo() {
-		c.logger.Info("core: successfully unmounted", "path", path)
+		c.logger.Info("successfully unmounted", "path", path)
 	}
 	return nil
 }
@@ -446,7 +451,7 @@ func (c *Core) removeMountEntry(ctx context.Context, path string) error {
 	newTable := c.mounts.shallowClone()
 	entry := newTable.remove(path)
 	if entry == nil {
-		c.logger.Error("core: nil entry found removing entry in mounts table", "path", path)
+		c.logger.Error("nil entry found removing entry in mounts table", "path", path)
 		return logical.CodedError(500, "failed to remove entry in mounts table")
 	}
 
@@ -457,8 +462,8 @@ func (c *Core) removeMountEntry(ctx context.Context, path string) error {
 	}
 
 	// Update the mount table
-	if err := c.persistMounts(ctx, newTable, entry.Local); err != nil {
-		c.logger.Error("core: failed to remove entry from mounts table", "error", err)
+	if err := c.persistMounts(ctx, newTable, &entry.Local); err != nil {
+		c.logger.Error("failed to remove entry from mounts table", "error", err)
 		return logical.CodedError(500, "failed to remove entry from mounts table")
 	}
 
@@ -475,13 +480,13 @@ func (c *Core) taintMountEntry(ctx context.Context, path string) error {
 	// we simply use the original
 	entry := c.mounts.setTaint(path, true)
 	if entry == nil {
-		c.logger.Error("core: nil entry found tainting entry in mounts table", "path", path)
+		c.logger.Error("nil entry found tainting entry in mounts table", "path", path)
 		return logical.CodedError(500, "failed to taint entry in mounts table")
 	}
 
 	// Update the mount table
-	if err := c.persistMounts(ctx, c.mounts, entry.Local); err != nil {
-		c.logger.Error("core: failed to taint entry in mounts table", "error", err)
+	if err := c.persistMounts(ctx, c.mounts, &entry.Local); err != nil {
+		c.logger.Error("failed to taint entry in mounts table", "error", err)
 		return logical.CodedError(500, "failed to taint entry in mounts table")
 	}
 
@@ -493,7 +498,7 @@ func (c *Core) taintMountEntry(ctx context.Context, path string) error {
 func (c *Core) remountForce(ctx context.Context, path string) error {
 	me := c.router.MatchingMountEntry(path)
 	if me == nil {
-		return fmt.Errorf("cannot find mount for path '%s'", path)
+		return fmt.Errorf("cannot find mount for path %q", path)
 	}
 
 	me, err := me.Clone()
@@ -520,18 +525,18 @@ func (c *Core) remount(ctx context.Context, src, dst string) error {
 	// Prevent protected paths from being remounted
 	for _, p := range protectedMounts {
 		if strings.HasPrefix(src, p) {
-			return fmt.Errorf("cannot remount '%s'", src)
+			return fmt.Errorf("cannot remount %q", src)
 		}
 	}
 
 	// Verify exact match of the route
 	match := c.router.MatchingMount(src)
 	if match == "" || src != match {
-		return fmt.Errorf("no matching mount at '%s'", src)
+		return fmt.Errorf("no matching mount at %q", src)
 	}
 
 	if match := c.router.MatchingMount(dst); match != "" {
-		return fmt.Errorf("existing mount at '%s'", match)
+		return fmt.Errorf("existing mount at %q", match)
 	}
 
 	// Mark the entry as tainted
@@ -550,7 +555,7 @@ func (c *Core) remount(ctx context.Context, src, dst string) error {
 	}
 
 	// Revoke all the dynamic keys
-	if err := c.expiration.RevokePrefix(src); err != nil {
+	if err := c.expiration.RevokePrefix(src, true); err != nil {
 		return err
 	}
 
@@ -566,16 +571,16 @@ func (c *Core) remount(ctx context.Context, src, dst string) error {
 
 	if entry == nil {
 		c.mountsLock.Unlock()
-		c.logger.Error("core: failed to find entry in mounts table")
+		c.logger.Error("failed to find entry in mounts table")
 		return logical.CodedError(500, "failed to find entry in mounts table")
 	}
 
 	// Update the mount table
-	if err := c.persistMounts(ctx, c.mounts, entry.Local); err != nil {
+	if err := c.persistMounts(ctx, c.mounts, &entry.Local); err != nil {
 		entry.Path = src
 		entry.Tainted = true
 		c.mountsLock.Unlock()
-		c.logger.Error("core: failed to update mounts table", "error", err)
+		c.logger.Error("failed to update mounts table", "error", err)
 		return logical.CodedError(500, "failed to update mounts table")
 	}
 	c.mountsLock.Unlock()
@@ -591,7 +596,7 @@ func (c *Core) remount(ctx context.Context, src, dst string) error {
 	}
 
 	if c.logger.IsInfo() {
-		c.logger.Info("core: successful remount", "old_path", src, "new_path", dst)
+		c.logger.Info("successful remount", "old_path", src, "new_path", dst)
 	}
 	return nil
 }
@@ -603,12 +608,12 @@ func (c *Core) loadMounts(ctx context.Context) error {
 	// Load the existing mount table
 	raw, err := c.barrier.Get(ctx, coreMountConfigPath)
 	if err != nil {
-		c.logger.Error("core: failed to read mount table", "error", err)
+		c.logger.Error("failed to read mount table", "error", err)
 		return errLoadMountsFailed
 	}
 	rawLocal, err := c.barrier.Get(ctx, coreLocalMountConfigPath)
 	if err != nil {
-		c.logger.Error("core: failed to read local mount table", "error", err)
+		c.logger.Error("failed to read local mount table", "error", err)
 		return errLoadMountsFailed
 	}
 
@@ -620,7 +625,7 @@ func (c *Core) loadMounts(ctx context.Context) error {
 		// yes, decompress the table and then JSON decode it. If not,
 		// simply JSON decode it.
 		if err := jsonutil.DecodeJSON(raw.Value, mountTable); err != nil {
-			c.logger.Error("core: failed to decompress and/or decode the mount table", "error", err)
+			c.logger.Error("failed to decompress and/or decode the mount table", "error", err)
 			return err
 		}
 		c.mounts = mountTable
@@ -628,13 +633,14 @@ func (c *Core) loadMounts(ctx context.Context) error {
 
 	var needPersist bool
 	if c.mounts == nil {
+		c.logger.Info("no mounts; adding default mount table")
 		c.mounts = c.defaultMountTable()
 		needPersist = true
 	}
 
 	if rawLocal != nil {
 		if err := jsonutil.DecodeJSON(rawLocal.Value, localMountTable); err != nil {
-			c.logger.Error("core: failed to decompress and/or decode the local mount table", "error", err)
+			c.logger.Error("failed to decompress and/or decode the local mount table", "error", err)
 			return err
 		}
 		if localMountTable != nil && len(localMountTable.Entries) > 0 {
@@ -710,23 +716,23 @@ func (c *Core) loadMounts(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.persistMounts(ctx, c.mounts, false); err != nil {
-		c.logger.Error("core: failed to persist mount table", "error", err)
+	if err := c.persistMounts(ctx, c.mounts, nil); err != nil {
+		c.logger.Error("failed to persist mount table", "error", err)
 		return errLoadMountsFailed
 	}
 	return nil
 }
 
 // persistMounts is used to persist the mount table after modification
-func (c *Core) persistMounts(ctx context.Context, table *MountTable, localOnly bool) error {
+func (c *Core) persistMounts(ctx context.Context, table *MountTable, local *bool) error {
 	if table.Type != mountTableType {
-		c.logger.Error("core: given table to persist has wrong type", "actual_type", table.Type, "expected_type", mountTableType)
+		c.logger.Error("given table to persist has wrong type", "actual_type", table.Type, "expected_type", mountTableType)
 		return fmt.Errorf("invalid table type given, not persisting")
 	}
 
 	for _, entry := range table.Entries {
 		if entry.Table != table.Type {
-			c.logger.Error("core: given entry to persist in mount table has wrong table value", "path", entry.Path, "entry_table_type", entry.Table, "actual_type", table.Type)
+			c.logger.Error("given entry to persist in mount table has wrong table value", "path", entry.Path, "entry_table_type", entry.Table, "actual_type", table.Type)
 			return fmt.Errorf("invalid mount entry found, not persisting")
 		}
 	}
@@ -747,45 +753,52 @@ func (c *Core) persistMounts(ctx context.Context, table *MountTable, localOnly b
 		}
 	}
 
-	if !localOnly {
+	writeTable := func(mt *MountTable, path string) error {
 		// Encode the mount table into JSON and compress it (lzw).
-		compressedBytes, err := jsonutil.EncodeJSONAndCompress(nonLocalMounts, nil)
+		compressedBytes, err := jsonutil.EncodeJSONAndCompress(mt, nil)
 		if err != nil {
-			c.logger.Error("core: failed to encode and/or compress the mount table", "error", err)
+			c.logger.Error("failed to encode or compress mount table", "error", err)
 			return err
 		}
 
 		// Create an entry
 		entry := &Entry{
-			Key:   coreMountConfigPath,
+			Key:   path,
 			Value: compressedBytes,
 		}
 
 		// Write to the physical backend
 		if err := c.barrier.Put(ctx, entry); err != nil {
-			c.logger.Error("core: failed to persist mount table", "error", err)
+			c.logger.Error("failed to persist mount table", "error", err)
 			return err
 		}
+
+		return nil
 	}
 
-	// Repeat with local mounts
-	compressedBytes, err := jsonutil.EncodeJSONAndCompress(localMounts, nil)
-	if err != nil {
-		c.logger.Error("core: failed to encode and/or compress the local mount table", "error", err)
-		return err
+	var err error
+	switch {
+	case local == nil:
+		// Write non-local mounts
+		err := writeTable(nonLocalMounts, coreMountConfigPath)
+		if err != nil {
+			return err
+		}
+
+		// Write local mounts
+		err = writeTable(localMounts, coreLocalMountConfigPath)
+		if err != nil {
+			return err
+		}
+	case *local:
+		// Write local mounts
+		err = writeTable(localMounts, coreLocalMountConfigPath)
+	default:
+		// Write non-local mounts
+		err = writeTable(nonLocalMounts, coreMountConfigPath)
 	}
 
-	entry := &Entry{
-		Key:   coreLocalMountConfigPath,
-		Value: compressedBytes,
-	}
-
-	if err := c.barrier.Put(ctx, entry); err != nil {
-		c.logger.Error("core: failed to persist local mount table", "error", err)
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // setupMounts is invoked after we've loaded the mount table to
@@ -811,7 +824,13 @@ func (c *Core) setupMounts(ctx context.Context) error {
 		// ensure that it is reset after. This ensures that there will be no
 		// writes during the construction of the backend.
 		view.setReadOnlyErr(logical.ErrSetupReadOnly)
-		defer view.setReadOnlyErr(nil)
+		if strutil.StrListContains(singletonMounts, entry.Type) {
+			defer view.setReadOnlyErr(nil)
+		} else {
+			c.postUnsealFuncs = append(c.postUnsealFuncs, func() {
+				view.setReadOnlyErr(nil)
+			})
+		}
 
 		var backend logical.Backend
 		var err error
@@ -820,12 +839,12 @@ func (c *Core) setupMounts(ctx context.Context) error {
 		// Create the new backend
 		backend, err = c.newLogicalBackend(ctx, entry, sysView, view)
 		if err != nil {
-			c.logger.Error("core: failed to create mount entry", "path", entry.Path, "error", err)
+			c.logger.Error("failed to create mount entry", "path", entry.Path, "error", err)
 			if entry.Type == "plugin" {
 				// If we encounter an error instantiating the backend due to an error,
 				// skip backend initialization but register the entry to the mount table
 				// to preserve storage and path.
-				c.logger.Warn("core: skipping plugin-based mount entry", "path", entry.Path)
+				c.logger.Warn("skipping plugin-based mount entry", "path", entry.Path)
 				goto ROUTER_MOUNT
 			}
 			return errLoadMountsFailed
@@ -837,7 +856,7 @@ func (c *Core) setupMounts(ctx context.Context) error {
 		// Check for the correct backend type
 		backendType = backend.Type()
 		if entry.Type == "plugin" && backendType != logical.TypeLogical {
-			return fmt.Errorf("cannot mount '%s' of type '%s' as a logical backend", entry.Config.PluginName, backendType)
+			return fmt.Errorf("cannot mount %q of type %q as a logical backend", entry.Config.PluginName, backendType)
 		}
 
 		c.setCoreBackend(entry, backend, view)
@@ -846,12 +865,12 @@ func (c *Core) setupMounts(ctx context.Context) error {
 		// Mount the backend
 		err = c.router.Mount(backend, entry.Path, entry, view)
 		if err != nil {
-			c.logger.Error("core: failed to mount entry", "path", entry.Path, "error", err)
+			c.logger.Error("failed to mount entry", "path", entry.Path, "error", err)
 			return errLoadMountsFailed
 		}
 
 		if c.logger.IsInfo() {
-			c.logger.Info("core: successfully mounted backend", "type", entry.Type, "path", entry.Path)
+			c.logger.Info("successfully mounted backend", "type", entry.Type, "path", entry.Path)
 		}
 
 		// Ensure the path is tainted if set in the mount table
@@ -892,7 +911,7 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 	}
 	f, ok := c.logicalBackends[t]
 	if !ok {
-		return nil, fmt.Errorf("unknown backend type: %s", t)
+		return nil, fmt.Errorf("unknown backend type: %q", t)
 	}
 
 	// Set up conf to pass in plugin_name
@@ -906,7 +925,7 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 
 	config := &logical.BackendConfig{
 		StorageView: view,
-		Logger:      c.logger,
+		Logger:      c.logger.ResetNamed(fmt.Sprintf("secrets.%s.%s", t, entry.Accessor)),
 		Config:      conf,
 		System:      sysView,
 		BackendUUID: entry.BackendAwareUUID,
@@ -959,8 +978,11 @@ func (c *Core) defaultMountTable() *MountTable {
 		Accessor:         mountAccessor,
 		BackendAwareUUID: bUUID,
 		Options: map[string]string{
-			"versioned": "true",
+			"version": "1",
 		},
+	}
+	if os.Getenv("VAULT_INTERACTIVE_DEMO_SERVER") != "" {
+		kvMount.Options["version"] = "2"
 	}
 	table.Entries = append(table.Entries, kvMount)
 	table.Entries = append(table.Entries, c.requiredMountTable().Entries...)

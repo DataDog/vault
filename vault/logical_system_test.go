@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fatih/structs"
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/audit"
 	"github.com/hashicorp/vault/helper/builtinplugins"
 	"github.com/hashicorp/vault/helper/salt"
@@ -35,6 +36,7 @@ func TestSystemBackend_RootPaths(t *testing.T) {
 		"rotate",
 		"config/cors",
 		"config/auditing/*",
+		"config/ui/headers/*",
 		"plugins/catalog/*",
 		"revoke-prefix/*",
 		"revoke-force/*",
@@ -46,7 +48,7 @@ func TestSystemBackend_RootPaths(t *testing.T) {
 	b := testSystemBackend(t)
 	actual := b.SpecialPaths().Root
 	if !reflect.DeepEqual(actual, expected) {
-		t.Fatalf("bad: %#v", actual)
+		t.Fatalf("bad: mismatch\nexpected:\n%#v\ngot:\n%#v", expected, actual)
 	}
 }
 
@@ -130,7 +132,7 @@ func TestSystemBackend_mounts(t *testing.T) {
 			"local":     false,
 			"seal_wrap": false,
 			"options": map[string]string{
-				"versioned": "true",
+				"version": "1",
 			},
 		},
 		"sys/": map[string]interface{}{
@@ -193,7 +195,7 @@ func TestSystemBackend_mount(t *testing.T) {
 	req.Data["local"] = true
 	req.Data["seal_wrap"] = true
 	req.Data["options"] = map[string]string{
-		"versioned": "true",
+		"version": "1",
 	}
 
 	resp, err := b.HandleRequest(context.Background(), req)
@@ -226,7 +228,7 @@ func TestSystemBackend_mount(t *testing.T) {
 			"local":     false,
 			"seal_wrap": false,
 			"options": map[string]string{
-				"versioned": "true",
+				"version": "1",
 			},
 		},
 		"sys/": map[string]interface{}{
@@ -284,7 +286,7 @@ func TestSystemBackend_mount(t *testing.T) {
 			"local":     true,
 			"seal_wrap": true,
 			"options": map[string]string{
-				"versioned": "true",
+				"version": "1",
 			},
 		},
 	}
@@ -329,7 +331,7 @@ func TestSystemBackend_mount_invalid(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "unknown backend type: nope" {
+	if resp.Data["error"] != `unknown backend type: "nope"` {
 		t.Fatalf("bad: %v", resp)
 	}
 }
@@ -440,7 +442,7 @@ func TestSystemBackend_PathCapabilities(t *testing.T) {
 	rootCheckFunc(t, resp)
 
 	// Create a non-root token
-	testMakeToken(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
+	testMakeTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
 
 	nonRootCheckFunc := func(t *testing.T, resp *logical.Response) {
 		expected1 := []string{"create", "sudo", "update"}
@@ -542,7 +544,7 @@ func testCapabilities(t *testing.T, endpoint string) {
 		t.Fatalf("err: %v", err)
 	}
 
-	testMakeToken(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
+	testMakeTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
 	req = logical.TestRequest(t, logical.UpdateOperation, endpoint)
 	if endpoint == "capabilities-self" {
 		req.ClientToken = "tokenid"
@@ -598,7 +600,7 @@ func TestSystemBackend_CapabilitiesAccessor_BC(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	testMakeToken(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
+	testMakeTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"test"})
 
 	te, err = core.tokenStore.Lookup(context.Background(), "tokenid")
 	if err != nil {
@@ -651,7 +653,7 @@ func TestSystemBackend_remount_invalid(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "no matching mount at 'unknown/'" {
+	if resp.Data["error"] != `no matching mount at "unknown/"` {
 		t.Fatalf("bad: %v", resp)
 	}
 }
@@ -666,7 +668,7 @@ func TestSystemBackend_remount_system(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "cannot remount 'sys/'" {
+	if resp.Data["error"] != `cannot remount "sys/"` {
 		t.Fatalf("bad: %v", resp)
 	}
 }
@@ -1262,8 +1264,10 @@ func TestSystemBackend_revokePrefix_origUrl(t *testing.T) {
 	}
 }
 
-func TestSystemBackend_revokePrefixAuth(t *testing.T) {
-	core, ts, _, _ := TestCoreWithTokenStore(t)
+func TestSystemBackend_revokePrefixAuth_newUrl(t *testing.T) {
+	core, _, _ := TestCoreUnsealed(t)
+
+	ts := core.tokenStore
 	bc := &logical.BackendConfig{
 		Logger: core.logger,
 		System: logical.StaticSystemView{
@@ -1271,7 +1275,7 @@ func TestSystemBackend_revokePrefixAuth(t *testing.T) {
 			MaxLeaseTTLVal:     time.Hour * 24 * 32,
 		},
 	}
-	b := NewSystemBackend(core)
+	b := NewSystemBackend(core, hclog.New(&hclog.LoggerOptions{}))
 	err := b.Backend.Setup(context.Background(), bc)
 	if err != nil {
 		t.Fatal(err)
@@ -1279,14 +1283,12 @@ func TestSystemBackend_revokePrefixAuth(t *testing.T) {
 
 	exp := ts.expiration
 
-	te := &TokenEntry{
+	te := &logical.TokenEntry{
 		ID:   "foo",
 		Path: "auth/github/login/bar",
+		TTL:  time.Hour,
 	}
-	err = ts.create(context.Background(), te)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testMakeTokenDirectly(t, ts, te)
 
 	te, err = ts.Lookup(context.Background(), "foo")
 	if err != nil {
@@ -1327,7 +1329,8 @@ func TestSystemBackend_revokePrefixAuth(t *testing.T) {
 }
 
 func TestSystemBackend_revokePrefixAuth_origUrl(t *testing.T) {
-	core, ts, _, _ := TestCoreWithTokenStore(t)
+	core, _, _ := TestCoreUnsealed(t)
+	ts := core.tokenStore
 	bc := &logical.BackendConfig{
 		Logger: core.logger,
 		System: logical.StaticSystemView{
@@ -1335,7 +1338,7 @@ func TestSystemBackend_revokePrefixAuth_origUrl(t *testing.T) {
 			MaxLeaseTTLVal:     time.Hour * 24 * 32,
 		},
 	}
-	b := NewSystemBackend(core)
+	b := NewSystemBackend(core, hclog.New(&hclog.LoggerOptions{}))
 	err := b.Backend.Setup(context.Background(), bc)
 	if err != nil {
 		t.Fatal(err)
@@ -1343,14 +1346,12 @@ func TestSystemBackend_revokePrefixAuth_origUrl(t *testing.T) {
 
 	exp := ts.expiration
 
-	te := &TokenEntry{
+	te := &logical.TokenEntry{
 		ID:   "foo",
 		Path: "auth/github/login/bar",
+		TTL:  time.Hour,
 	}
-	err = ts.create(context.Background(), te)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testMakeTokenDirectly(t, ts, te)
 
 	te, err = ts.Lookup(context.Background(), "foo")
 	if err != nil {
@@ -1491,7 +1492,7 @@ func TestSystemBackend_enableAuth_invalid(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "unknown backend type: nope" {
+	if resp.Data["error"] != `unknown backend type: "nope"` {
 		t.Fatalf("bad: %v", resp)
 	}
 }
@@ -1708,7 +1709,7 @@ func TestSystemBackend_enableAudit_invalid(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "unknown backend type: nope" {
+	if resp.Data["error"] != `unknown backend type: "nope"` {
 		t.Fatalf("bad: %v", resp)
 	}
 }
@@ -1956,7 +1957,7 @@ func testSystemBackendInternal(t *testing.T, c *Core) logical.Backend {
 		},
 	}
 
-	b := NewSystemBackend(c)
+	b := NewSystemBackend(c, hclog.New(&hclog.LoggerOptions{}))
 	err := b.Backend.Setup(context.Background(), bc)
 	if err != nil {
 		t.Fatal(err)
@@ -2216,7 +2217,7 @@ func TestSystemBackend_ToolsRandom(t *testing.T) {
 }
 
 func TestSystemBackend_InternalUIMounts(t *testing.T) {
-	b := testSystemBackend(t)
+	_, b, rootToken := testCoreSystemBackend(t)
 
 	// Ensure no entries are in the endpoint as a starting point
 	req := logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts")
@@ -2231,6 +2232,95 @@ func TestSystemBackend_InternalUIMounts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.Data, exp) {
 		t.Fatalf("got: %#v expect: %#v", resp.Data, exp)
+	}
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts")
+	req.ClientToken = rootToken
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	exp = map[string]interface{}{
+		"secret": map[string]interface{}{
+			"secret/": map[string]interface{}{
+				"type":        "kv",
+				"description": "key/value secret storage",
+				"accessor":    resp.Data["secret"].(map[string]interface{})["secret/"].(map[string]interface{})["accessor"],
+				"config": map[string]interface{}{
+					"default_lease_ttl": resp.Data["secret"].(map[string]interface{})["secret/"].(map[string]interface{})["config"].(map[string]interface{})["default_lease_ttl"].(int64),
+					"max_lease_ttl":     resp.Data["secret"].(map[string]interface{})["secret/"].(map[string]interface{})["config"].(map[string]interface{})["max_lease_ttl"].(int64),
+					"plugin_name":       "",
+					"force_no_cache":    false,
+				},
+				"local":     false,
+				"seal_wrap": false,
+				"options": map[string]string{
+					"version": "1",
+				},
+			},
+			"sys/": map[string]interface{}{
+				"type":        "system",
+				"description": "system endpoints used for control, policy and debugging",
+				"accessor":    resp.Data["secret"].(map[string]interface{})["sys/"].(map[string]interface{})["accessor"],
+				"config": map[string]interface{}{
+					"default_lease_ttl": resp.Data["secret"].(map[string]interface{})["sys/"].(map[string]interface{})["config"].(map[string]interface{})["default_lease_ttl"].(int64),
+					"max_lease_ttl":     resp.Data["secret"].(map[string]interface{})["sys/"].(map[string]interface{})["config"].(map[string]interface{})["max_lease_ttl"].(int64),
+					"plugin_name":       "",
+					"force_no_cache":    false,
+				},
+				"local":     false,
+				"seal_wrap": false,
+				"options":   map[string]string(nil),
+			},
+			"cubbyhole/": map[string]interface{}{
+				"description": "per-token private secret storage",
+				"type":        "cubbyhole",
+				"accessor":    resp.Data["secret"].(map[string]interface{})["cubbyhole/"].(map[string]interface{})["accessor"],
+				"config": map[string]interface{}{
+					"default_lease_ttl": resp.Data["secret"].(map[string]interface{})["cubbyhole/"].(map[string]interface{})["config"].(map[string]interface{})["default_lease_ttl"].(int64),
+					"max_lease_ttl":     resp.Data["secret"].(map[string]interface{})["cubbyhole/"].(map[string]interface{})["config"].(map[string]interface{})["max_lease_ttl"].(int64),
+					"plugin_name":       "",
+					"force_no_cache":    false,
+				},
+				"local":     true,
+				"seal_wrap": false,
+				"options":   map[string]string(nil),
+			},
+			"identity/": map[string]interface{}{
+				"description": "identity store",
+				"type":        "identity",
+				"accessor":    resp.Data["secret"].(map[string]interface{})["identity/"].(map[string]interface{})["accessor"],
+				"config": map[string]interface{}{
+					"default_lease_ttl": resp.Data["secret"].(map[string]interface{})["identity/"].(map[string]interface{})["config"].(map[string]interface{})["default_lease_ttl"].(int64),
+					"max_lease_ttl":     resp.Data["secret"].(map[string]interface{})["identity/"].(map[string]interface{})["config"].(map[string]interface{})["max_lease_ttl"].(int64),
+					"plugin_name":       "",
+					"force_no_cache":    false,
+				},
+				"local":     false,
+				"seal_wrap": false,
+				"options":   map[string]string(nil),
+			},
+		},
+		"auth": map[string]interface{}{
+			"token/": map[string]interface{}{
+				"options": map[string]string(nil),
+				"config": map[string]interface{}{
+					"default_lease_ttl": int64(0),
+					"max_lease_ttl":     int64(0),
+					"force_no_cache":    false,
+					"plugin_name":       "",
+				},
+				"type":        "token",
+				"description": "token based credentials",
+				"accessor":    resp.Data["auth"].(map[string]interface{})["token/"].(map[string]interface{})["accessor"],
+				"local":       false,
+				"seal_wrap":   false,
+			},
+		},
+	}
+	if !reflect.DeepEqual(resp.Data, exp) {
+		t.Fatalf("got: %#v \n\n expect: %#v", resp.Data, exp)
 	}
 
 	// Mount-tune an auth mount
@@ -2254,16 +2344,90 @@ func TestSystemBackend_InternalUIMounts(t *testing.T) {
 			"secret/": map[string]interface{}{
 				"type":        "kv",
 				"description": "key/value secret storage",
+				"options":     map[string]string{"version": "1"},
 			},
 		},
 		"auth": map[string]interface{}{
 			"token/": map[string]interface{}{
 				"type":        "token",
 				"description": "token based credentials",
+				"options":     map[string]string(nil),
 			},
 		},
 	}
 	if !reflect.DeepEqual(resp.Data, exp) {
 		t.Fatalf("got: %#v expect: %#v", resp.Data, exp)
+	}
+}
+
+func TestSystemBackend_InternalUIMount(t *testing.T) {
+	core, b, rootToken := testCoreSystemBackend(t)
+
+	req := logical.TestRequest(t, logical.UpdateOperation, "policy/secret")
+	req.ClientToken = rootToken
+	req.Data = map[string]interface{}{
+		"rules": `path "secret/foo/*" {
+    capabilities = ["create", "read", "update", "delete", "list"]
+}`,
+	}
+	resp, err := b.HandleRequest(context.Background(), req)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("Bad %#v %#v", err, resp)
+	}
+
+	req = logical.TestRequest(t, logical.UpdateOperation, "mounts/kv")
+	req.ClientToken = rootToken
+	req.Data = map[string]interface{}{
+		"type": "kv",
+	}
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("Bad %#v %#v", err, resp)
+	}
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts/kv/bar")
+	req.ClientToken = rootToken
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("Bad %#v %#v", err, resp)
+	}
+	if resp.Data["type"] != "kv" {
+		t.Fatalf("Bad Response: %#v", resp)
+	}
+
+	testMakeTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"secret"})
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts/kv")
+	req.ClientToken = "tokenid"
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != logical.ErrPermissionDenied {
+		t.Fatal("expected permission denied error")
+	}
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts/secret")
+	req.ClientToken = "tokenid"
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("Bad %#v %#v", err, resp)
+	}
+	if resp.Data["type"] != "kv" {
+		t.Fatalf("Bad Response: %#v", resp)
+	}
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts/sys")
+	req.ClientToken = "tokenid"
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("Bad %#v %#v", err, resp)
+	}
+	if resp.Data["type"] != "system" {
+		t.Fatalf("Bad Response: %#v", resp)
+	}
+
+	req = logical.TestRequest(t, logical.ReadOperation, "internal/ui/mounts/non-existent")
+	req.ClientToken = "tokenid"
+	resp, err = b.HandleRequest(context.Background(), req)
+	if err != logical.ErrPermissionDenied {
+		t.Fatal("expected permission denied error")
 	}
 }

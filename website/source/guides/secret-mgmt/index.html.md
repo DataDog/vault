@@ -21,10 +21,17 @@ secrets.
 - [Static Secrets](/guides/secret-mgmt/static-secrets.html) guide walks you
 through the steps to write secrets in Vault, and control who can access them.
 
+- [Versioned KV Secret Engine](/guides/secret-mgmt/versioned-kv.html) guide
+demonstrates the secret versioning capabilities provided by KV Secret Engine v2.
+
 - [Secret as a Service: Dynamic Secrets](/guides/secret-mgmt/dynamic-secrets.html)
  guide demonstrates the Vault feature to generate database credentials
  on-demand so that each application or system can obtain its own credentials,
  and its permissions can be tightly controlled.
+
+- [Database Root Credential Rotation](/guides/secret-mgmt/db-root-rotation.html)
+guide walks you through the steps to enable the rotation of the database root
+credentials for those managed by Vault. 
 
 - [Cubbyhole Response Wrapping](/guides/secret-mgmt/cubbyhole.html) guide
 demonstrates a secure method to distribute secrets by wrapping them where only

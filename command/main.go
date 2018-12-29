@@ -9,31 +9,21 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/fatih/color"
+	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/command/token"
+	colorable "github.com/mattn/go-colorable"
 	"github.com/mitchellh/cli"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 type VaultUI struct {
 	cli.Ui
-	isTerminal bool
-	format     string
-}
-
-func (u *VaultUI) Output(m string) {
-	if u.isTerminal {
-		u.Ui.Output(m)
-	} else {
-		writer := getWriterFromUI(u.Ui)
-		writer.Write([]byte(m))
-		writer.Write([]byte("\n"))
-	}
+	format string
 }
 
 // setupEnv parses args and may replace them and sets some env vars to known
 // values based on format options
-func setupEnv(args []string) []string {
-	var format string
+func setupEnv(args []string) (retArgs []string, format string) {
 	var nextArgFormat bool
 
 	for _, arg := range args {
@@ -47,7 +37,7 @@ func setupEnv(args []string) []string {
 			break
 		}
 
-		if arg == "-v" || arg == "-version" || arg == "--version" {
+		if len(args) == 1 && (arg == "-v" || arg == "-version" || arg == "--version") {
 			args = []string{"version"}
 			break
 		}
@@ -75,10 +65,8 @@ func setupEnv(args []string) []string {
 	if format == "" {
 		format = "table"
 	}
-	// Put back into the env for later
-	os.Setenv(EnvVaultFormat, format)
 
-	return args
+	return args, format
 }
 
 type RunOptions struct {
@@ -86,6 +74,7 @@ type RunOptions struct {
 	Stdout      io.Writer
 	Stderr      io.Writer
 	Address     string
+	Client      *api.Client
 }
 
 func Run(args []string) int {
@@ -98,6 +87,16 @@ func RunCustom(args []string, runOpts *RunOptions) int {
 	if runOpts == nil {
 		runOpts = &RunOptions{}
 	}
+
+	var format string
+	args, format = setupEnv(args)
+
+	// Don't use color if disabled
+	useColor := true
+	if os.Getenv(EnvVaultCLINoColor) != "" || color.NoColor {
+		useColor = false
+	}
+
 	if runOpts.Stdout == nil {
 		runOpts.Stdout = os.Stdout
 	}
@@ -105,52 +104,45 @@ func RunCustom(args []string, runOpts *RunOptions) int {
 		runOpts.Stderr = os.Stderr
 	}
 
-	args = setupEnv(args)
-
-	// Don't use color if disabled
-	color := true
-	if os.Getenv(EnvVaultCLINoColor) != "" {
-		color = false
+	// Only use colored UI if stdout is a tty, and not disabled
+	if useColor && format == "table" {
+		if f, ok := runOpts.Stdout.(*os.File); ok {
+			runOpts.Stdout = colorable.NewColorable(f)
+		}
+		if f, ok := runOpts.Stderr.(*os.File); ok {
+			runOpts.Stderr = colorable.NewColorable(f)
+		}
+	} else {
+		runOpts.Stdout = colorable.NewNonColorable(runOpts.Stdout)
+		runOpts.Stderr = colorable.NewNonColorable(runOpts.Stderr)
 	}
-
-	format := format()
-
-	isTerminal := terminal.IsTerminal(int(os.Stdout.Fd()))
 
 	ui := &VaultUI{
-		Ui: &cli.BasicUi{
-			Writer:      runOpts.Stdout,
-			ErrorWriter: runOpts.Stderr,
+		Ui: &cli.ColoredUi{
+			ErrorColor: cli.UiColorRed,
+			WarnColor:  cli.UiColorYellow,
+			Ui: &cli.BasicUi{
+				Writer:      runOpts.Stdout,
+				ErrorWriter: runOpts.Stderr,
+			},
 		},
-		isTerminal: isTerminal,
-		format:     format,
+		format: format,
 	}
+
 	serverCmdUi := &VaultUI{
-		Ui: &cli.BasicUi{
-			Writer: runOpts.Stdout,
+		Ui: &cli.ColoredUi{
+			ErrorColor: cli.UiColorRed,
+			WarnColor:  cli.UiColorYellow,
+			Ui: &cli.BasicUi{
+				Writer: runOpts.Stdout,
+			},
 		},
-		isTerminal: isTerminal,
-		format:     format,
+		format: format,
 	}
 
 	if _, ok := Formatters[format]; !ok {
 		ui.Error(fmt.Sprintf("Invalid output format: %s", format))
 		return 1
-	}
-
-	// Only use colored UI if stdout is a tty, and not disabled
-	if isTerminal && color && format == "table" {
-		ui.Ui = &cli.ColoredUi{
-			ErrorColor: cli.UiColorRed,
-			WarnColor:  cli.UiColorYellow,
-			Ui:         ui.Ui,
-		}
-
-		serverCmdUi.Ui = &cli.ColoredUi{
-			ErrorColor: cli.UiColorRed,
-			WarnColor:  cli.UiColorYellow,
-			Ui:         serverCmdUi.Ui,
-		}
 	}
 
 	initCommands(ui, serverCmdUi, runOpts)
