@@ -98,9 +98,9 @@ func jsonTemplateHandler(v interface{}, keys ...string) (string, error) {
 	return "", fmt.Errorf("unknown type: %T", v)
 }
 
-func PopulateString(p PopulateStringInput) (bool, string, error) {
+func PopulateString(p PopulateStringInput) (bool, []string, error) {
 	if p.String == "" {
-		return false, "", nil
+		return false, []string{}, nil
 	}
 
 	// preprocess groups
@@ -116,7 +116,7 @@ func PopulateString(p PopulateStringInput) (bool, string, error) {
 	case JSONTemplating:
 		p.templateHandler = jsonTemplateHandler
 	default:
-		return false, "", fmt.Errorf("unknown mode %q", p.Mode)
+		return false, []string{}, fmt.Errorf("unknown mode %q", p.Mode)
 	}
 
 	var subst bool
@@ -124,46 +124,60 @@ func PopulateString(p PopulateStringInput) (bool, string, error) {
 
 	if len(splitStr) >= 1 {
 		if strings.Contains(splitStr[0], "}}") {
-			return false, "", ErrUnbalancedTemplatingCharacter
+			return false, []string{}, ErrUnbalancedTemplatingCharacter
 		}
 		if len(splitStr) == 1 {
-			return false, p.String, nil
+			return false, []string{p.String}, nil
 		}
 	}
 
-	var b strings.Builder
-	if !p.ValidityCheckOnly {
-		b.Grow(2 * len(p.String))
-	}
-
+	var builders []*strings.Builder
 	for i, str := range splitStr {
 		if i == 0 {
 			if !p.ValidityCheckOnly {
+				var b strings.Builder
 				b.WriteString(str)
+				builders = append(builders, &b)
 			}
 			continue
 		}
 		splitPiece := strings.Split(str, "}}")
-		switch len(splitPiece) {
-		case 2:
-			subst = true
-			if !p.ValidityCheckOnly {
-				tmplStr, err := performTemplating(strings.TrimSpace(splitPiece[0]), &p)
-				if err != nil {
-					return false, "", err
+		var bs []*strings.Builder
+		for _, cb := range builders {
+
+			switch len(splitPiece) {
+			case 2:
+				subst = true
+				if !p.ValidityCheckOnly {
+					tmplStrs, err := performTemplating(strings.TrimSpace(splitPiece[0]), &p)
+					if err != nil {
+						return false, []string{}, err
+					}
+
+					for _, tmplStr := range tmplStrs {
+						var b strings.Builder
+						b.WriteString(cb.String())
+						b.WriteString(tmplStr)
+						b.WriteString(splitPiece[1])
+						bs = append(bs, &b)
+					}
+
 				}
-				b.WriteString(tmplStr)
-				b.WriteString(splitPiece[1])
+			default:
+				return false, []string{}, ErrUnbalancedTemplatingCharacter
 			}
-		default:
-			return false, "", ErrUnbalancedTemplatingCharacter
 		}
+		builders = bs
 	}
 
-	return subst, b.String(), nil
+	var results []string
+	for _, b := range builders {
+		results = append(results, b.String())
+	}
+	return subst, results, nil
 }
 
-func performTemplating(input string, p *PopulateStringInput) (string, error) {
+func performTemplating(input string, p *PopulateStringInput) ([]string, error) {
 	performAliasTemplating := func(trimmed string, alias *logical.Alias) (string, error) {
 		switch {
 		case trimmed == "id":
@@ -239,14 +253,26 @@ func performTemplating(input string, p *PopulateStringInput) (string, error) {
 		return "", ErrTemplateValueNotFound
 	}
 
-	performGroupsTemplating := func(trimmed string) (string, error) {
+	performGroupsTemplating := func(trimmed string) ([]string, error) {
 		var ids bool
 
 		selectorSplit := strings.SplitN(trimmed, ".", 2)
 
 		switch {
+		case trimmed == "names":
+			var names []string
+			for _, group := range p.Groups {
+				names = append(names, group.Name)
+			}
+			return names, nil
+		case trimmed == "ids":
+			var idss []string
+			for _, group := range p.Groups {
+				idss = append(idss, group.ID)
+			}
+			return idss, nil
 		case len(selectorSplit) != 2:
-			return "", errors.New("invalid groups selector")
+			return []string{}, errors.New("invalid groups selector")
 
 		case selectorSplit[0] == "ids":
 			ids = true
@@ -254,13 +280,13 @@ func performTemplating(input string, p *PopulateStringInput) (string, error) {
 		case selectorSplit[0] == "names":
 
 		default:
-			return "", errors.New("invalid groups selector")
+			return []string{}, errors.New("invalid groups selector")
 		}
 		trimmed = selectorSplit[1]
 
 		accessorSplit := strings.SplitN(trimmed, ".", 2)
 		if len(accessorSplit) != 2 {
-			return "", errors.New("invalid groups accessor")
+			return []string{}, errors.New("invalid groups accessor")
 		}
 		var found *logical.Group
 		for _, group := range p.Groups {
@@ -281,30 +307,30 @@ func performTemplating(input string, p *PopulateStringInput) (string, error) {
 		}
 
 		if found == nil {
-			return "", fmt.Errorf("entity is not a member of group %q", accessorSplit[0])
+			return []string{}, fmt.Errorf("entity is not a member of group %q", accessorSplit[0])
 		}
 
 		trimmed = accessorSplit[1]
 
 		switch {
 		case trimmed == "id":
-			return found.ID, nil
+			return []string{found.ID}, nil
 
 		case trimmed == "name":
 			if found.Name == "" {
-				return "", ErrTemplateValueNotFound
+				return []string{}, ErrTemplateValueNotFound
 			}
-			return found.Name, nil
+			return []string{found.Name}, nil
 
 		case strings.HasPrefix(trimmed, "metadata."):
 			val, ok := found.Metadata[strings.TrimPrefix(trimmed, "metadata.")]
 			if !ok {
-				return "", ErrTemplateValueNotFound
+				return []string{}, ErrTemplateValueNotFound
 			}
-			return val, nil
+			return []string{val}, nil
 		}
 
-		return "", ErrTemplateValueNotFound
+		return []string{}, ErrTemplateValueNotFound
 	}
 
 	performTimeTemplating := func(trimmed string) (string, error) {
@@ -348,19 +374,20 @@ func performTemplating(input string, p *PopulateStringInput) (string, error) {
 	switch {
 	case strings.HasPrefix(input, "identity.entity."):
 		if p.Entity == nil {
-			return "", ErrNoEntityAttachedToToken
+			return []string{}, ErrNoEntityAttachedToToken
 		}
-		return performEntityTemplating(strings.TrimPrefix(input, "identity.entity."))
-
+		str, err := performEntityTemplating(strings.TrimPrefix(input, "identity.entity."))
+		return []string{str}, err
 	case strings.HasPrefix(input, "identity.groups."):
 		if len(p.Groups) == 0 {
-			return "", ErrNoGroupsAttachedToToken
+			return []string{}, ErrNoGroupsAttachedToToken
 		}
 		return performGroupsTemplating(strings.TrimPrefix(input, "identity.groups."))
 
 	case strings.HasPrefix(input, "time."):
-		return performTimeTemplating(strings.TrimPrefix(input, "time."))
+		str, err := performTimeTemplating(strings.TrimPrefix(input, "time."))
+		return []string{str}, err
 	}
 
-	return "", ErrTemplateValueNotFound
+	return []string{}, ErrTemplateValueNotFound
 }

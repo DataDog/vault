@@ -324,6 +324,8 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			key = item.Keys[0].Token.Value().(string)
 		}
 
+		fmt.Printf("key: %q\n", key)
+		keys := []string{key}
 		// Check the path
 		if performTemplating {
 			_, templated, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
@@ -334,9 +336,10 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 				NamespaceID: result.namespace.ID,
 			})
 			if err != nil {
+				// TKTK: templating errors are ignored?
 				continue
 			}
-			key = templated
+			keys = templated
 		} else {
 			hasTemplating, _, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 				Mode:              identitytpl.ACLTemplating,
@@ -350,6 +353,8 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 				result.Templated = true
 			}
 		}
+
+		fmt.Printf("templated key: %q\n", key)
 
 		valid := []string{
 			"comment",
@@ -367,169 +372,177 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			return multierror.Prefix(err, fmt.Sprintf("path %q:", key))
 		}
 
-		var pc PathRules
+		var pcs []*PathRules
+		// TKTK it would be better to avoid redoing all this logic, by copying the
+		// PathRule and then changing the path field only on the copies
+		fmt.Printf("keys keys: %v\n", keys)
+		for _, key := range keys {
+			var pc PathRules
 
-		// allocate memory so that DecodeObject can initialize the ACLPermissions struct
-		pc.Permissions = new(ACLPermissions)
+			// allocate memory so that DecodeObject can initialize the ACLPermissions struct
+			pc.Permissions = new(ACLPermissions)
 
-		pc.Path = key
+			pc.Path = key
 
-		if err := hcl.DecodeObject(&pc, item.Val); err != nil {
-			return multierror.Prefix(err, fmt.Sprintf("path %q:", key))
-		}
-
-		// Strip a leading '/' as paths in Vault start after the / in the API path
-		if len(pc.Path) > 0 && pc.Path[0] == '/' {
-			pc.Path = pc.Path[1:]
-		}
-
-		// Ensure we are using the full request path internally
-		pc.Path = result.namespace.Path + pc.Path
-
-		if strings.Contains(pc.Path, "+*") {
-			return fmt.Errorf("path %q: invalid use of wildcards ('+*' is forbidden)", pc.Path)
-		}
-
-		if pc.Path == "+" || strings.Count(pc.Path, "/+") > 0 || strings.HasPrefix(pc.Path, "+/") {
-			pc.HasSegmentWildcards = true
-		}
-
-		if strings.HasSuffix(pc.Path, "*") {
-			// If there are segment wildcards, don't actually strip the
-			// trailing asterisk, but don't want to hit the default case
-			if !pc.HasSegmentWildcards {
-				// Strip the glob character if found
-				pc.Path = strings.TrimSuffix(pc.Path, "*")
-				pc.IsPrefix = true
+			if err := hcl.DecodeObject(&pc, item.Val); err != nil {
+				return multierror.Prefix(err, fmt.Sprintf("path %q:", key))
 			}
-		}
 
-		// Map old-style policies into capabilities
-		if len(pc.Policy) > 0 {
-			switch pc.Policy {
-			case OldDenyPathPolicy:
-				pc.Capabilities = []string{DenyCapability}
-			case OldReadPathPolicy:
-				pc.Capabilities = append(pc.Capabilities, []string{ReadCapability, ListCapability}...)
-			case OldWritePathPolicy:
-				pc.Capabilities = append(pc.Capabilities, []string{CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability}...)
-			case OldSudoPathPolicy:
-				pc.Capabilities = append(pc.Capabilities, []string{CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability}...)
-			default:
-				return fmt.Errorf("path %q: invalid policy %q", key, pc.Policy)
+			// Strip a leading '/' as paths in Vault start after the / in the API path
+			if len(pc.Path) > 0 && pc.Path[0] == '/' {
+				pc.Path = pc.Path[1:]
 			}
-		}
 
-		// Initialize the map
-		pc.Permissions.CapabilitiesBitmap = 0
-		for _, cap := range pc.Capabilities {
-			switch cap {
-			// If it's deny, don't include any other capability
-			case DenyCapability:
-				pc.Capabilities = []string{DenyCapability}
-				pc.Permissions.CapabilitiesBitmap = DenyCapabilityInt
-				goto PathFinished
-			case CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability, PatchCapability:
-				pc.Permissions.CapabilitiesBitmap |= cap2Int[cap]
-			default:
-				return fmt.Errorf("path %q: invalid capability %q", key, cap)
-			}
-		}
+			// Ensure we are using the full request path internally
+			pc.Path = result.namespace.Path + pc.Path
 
-		if pc.AllowedParametersHCL != nil {
-			pc.Permissions.AllowedParameters = make(map[string][]interface{}, len(pc.AllowedParametersHCL))
-			for k, v := range pc.AllowedParametersHCL {
-				pc.Permissions.AllowedParameters[strings.ToLower(k)] = v
+			if strings.Contains(pc.Path, "+*") {
+				return fmt.Errorf("path %q: invalid use of wildcards ('+*' is forbidden)", pc.Path)
 			}
-		}
-		if pc.DeniedParametersHCL != nil {
-			pc.Permissions.DeniedParameters = make(map[string][]interface{}, len(pc.DeniedParametersHCL))
 
-			for k, v := range pc.DeniedParametersHCL {
-				pc.Permissions.DeniedParameters[strings.ToLower(k)] = v
+			if pc.Path == "+" || strings.Count(pc.Path, "/+") > 0 || strings.HasPrefix(pc.Path, "+/") {
+				pc.HasSegmentWildcards = true
 			}
-		}
-		if pc.MinWrappingTTLHCL != nil {
-			dur, err := parseutil.ParseDurationSecond(pc.MinWrappingTTLHCL)
-			if err != nil {
-				return fmt.Errorf("error parsing min_wrapping_ttl: %w", err)
-			}
-			pc.Permissions.MinWrappingTTL = dur
-		}
-		if pc.MaxWrappingTTLHCL != nil {
-			dur, err := parseutil.ParseDurationSecond(pc.MaxWrappingTTLHCL)
-			if err != nil {
-				return fmt.Errorf("error parsing max_wrapping_ttl: %w", err)
-			}
-			pc.Permissions.MaxWrappingTTL = dur
-		}
-		if pc.MFAMethodsHCL != nil {
-			pc.Permissions.MFAMethods = make([]string, len(pc.MFAMethodsHCL))
-			copy(pc.Permissions.MFAMethods, pc.MFAMethodsHCL)
-		}
-		if pc.ControlGroupHCL != nil {
-			pc.Permissions.ControlGroup = new(ControlGroup)
-			if pc.ControlGroupHCL.TTL != nil {
-				dur, err := parseutil.ParseDurationSecond(pc.ControlGroupHCL.TTL)
-				if err != nil {
-					return fmt.Errorf("error parsing control group max ttl: %w", err)
+
+			if strings.HasSuffix(pc.Path, "*") {
+				// If there are segment wildcards, don't actually strip the
+				// trailing asterisk, but don't want to hit the default case
+				if !pc.HasSegmentWildcards {
+					// Strip the glob character if found
+					pc.Path = strings.TrimSuffix(pc.Path, "*")
+					pc.IsPrefix = true
 				}
-				pc.Permissions.ControlGroup.TTL = dur
 			}
-			var factors []*ControlGroupFactor
-			if pc.ControlGroupHCL.Factors != nil {
-				for key, factor := range pc.ControlGroupHCL.Factors {
-					// Although we only have one factor here, we need to check to make sure there is at least
-					// one factor defined in this factor block.
-					if factor.Identity == nil {
-						return errors.New("no control_group factor provided")
-					}
 
-					if factor.Identity.ApprovalsRequired <= 0 ||
-						(len(factor.Identity.GroupIDs) == 0 && len(factor.Identity.GroupNames) == 0) {
-						return errors.New("must provide more than one identity group and approvals > 0")
-					}
+			// Map old-style policies into capabilities
+			if len(pc.Policy) > 0 {
+				switch pc.Policy {
+				case OldDenyPathPolicy:
+					pc.Capabilities = []string{DenyCapability}
+				case OldReadPathPolicy:
+					pc.Capabilities = append(pc.Capabilities, []string{ReadCapability, ListCapability}...)
+				case OldWritePathPolicy:
+					pc.Capabilities = append(pc.Capabilities, []string{CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability}...)
+				case OldSudoPathPolicy:
+					pc.Capabilities = append(pc.Capabilities, []string{CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability}...)
+				default:
+					return fmt.Errorf("path %q: invalid policy %q", key, pc.Policy)
+				}
+			}
 
-					// Ensure that configured ControlledCapabilities for factor are a subset of the
-					// Capabilities of the policy.
-					if len(factor.ControlledCapabilities) > 0 {
-						var found bool
-						for _, controlledCapability := range factor.ControlledCapabilities {
-							found = false
-							for _, policyCap := range pc.Capabilities {
-								if controlledCapability == policyCap {
-									found = true
+			// Initialize the map
+			pc.Permissions.CapabilitiesBitmap = 0
+			for _, cap := range pc.Capabilities {
+				switch cap {
+				// If it's deny, don't include any other capability
+				case DenyCapability:
+					pc.Capabilities = []string{DenyCapability}
+					pc.Permissions.CapabilitiesBitmap = DenyCapabilityInt
+					goto PathFinished
+				case CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability, PatchCapability:
+					pc.Permissions.CapabilitiesBitmap |= cap2Int[cap]
+				default:
+					return fmt.Errorf("path %q: invalid capability %q", key, cap)
+				}
+			}
+
+			if pc.AllowedParametersHCL != nil {
+				pc.Permissions.AllowedParameters = make(map[string][]interface{}, len(pc.AllowedParametersHCL))
+				for k, v := range pc.AllowedParametersHCL {
+					pc.Permissions.AllowedParameters[strings.ToLower(k)] = v
+				}
+			}
+			if pc.DeniedParametersHCL != nil {
+				pc.Permissions.DeniedParameters = make(map[string][]interface{}, len(pc.DeniedParametersHCL))
+
+				for k, v := range pc.DeniedParametersHCL {
+					pc.Permissions.DeniedParameters[strings.ToLower(k)] = v
+				}
+			}
+			if pc.MinWrappingTTLHCL != nil {
+				dur, err := parseutil.ParseDurationSecond(pc.MinWrappingTTLHCL)
+				if err != nil {
+					return fmt.Errorf("error parsing min_wrapping_ttl: %w", err)
+				}
+				pc.Permissions.MinWrappingTTL = dur
+			}
+			if pc.MaxWrappingTTLHCL != nil {
+				dur, err := parseutil.ParseDurationSecond(pc.MaxWrappingTTLHCL)
+				if err != nil {
+					return fmt.Errorf("error parsing max_wrapping_ttl: %w", err)
+				}
+				pc.Permissions.MaxWrappingTTL = dur
+			}
+			if pc.MFAMethodsHCL != nil {
+				pc.Permissions.MFAMethods = make([]string, len(pc.MFAMethodsHCL))
+				copy(pc.Permissions.MFAMethods, pc.MFAMethodsHCL)
+			}
+			if pc.ControlGroupHCL != nil {
+				pc.Permissions.ControlGroup = new(ControlGroup)
+				if pc.ControlGroupHCL.TTL != nil {
+					dur, err := parseutil.ParseDurationSecond(pc.ControlGroupHCL.TTL)
+					if err != nil {
+						return fmt.Errorf("error parsing control group max ttl: %w", err)
+					}
+					pc.Permissions.ControlGroup.TTL = dur
+				}
+				var factors []*ControlGroupFactor
+				if pc.ControlGroupHCL.Factors != nil {
+					for key, factor := range pc.ControlGroupHCL.Factors {
+						// Although we only have one factor here, we need to check to make sure there is at least
+						// one factor defined in this factor block.
+						if factor.Identity == nil {
+							return errors.New("no control_group factor provided")
+						}
+
+						if factor.Identity.ApprovalsRequired <= 0 ||
+							(len(factor.Identity.GroupIDs) == 0 && len(factor.Identity.GroupNames) == 0) {
+							return errors.New("must provide more than one identity group and approvals > 0")
+						}
+
+						// Ensure that configured ControlledCapabilities for factor are a subset of the
+						// Capabilities of the policy.
+						if len(factor.ControlledCapabilities) > 0 {
+							var found bool
+							for _, controlledCapability := range factor.ControlledCapabilities {
+								found = false
+								for _, policyCap := range pc.Capabilities {
+									if controlledCapability == policyCap {
+										found = true
+									}
+								}
+								if !found {
+									return errors.New(ControlledCapabilityPolicySubsetError)
 								}
 							}
-							if !found {
-								return errors.New(ControlledCapabilityPolicySubsetError)
-							}
 						}
+
+						factors = append(factors, &ControlGroupFactor{
+							Name:                   key,
+							Identity:               factor.Identity,
+							ControlledCapabilities: factor.ControlledCapabilities,
+						})
 					}
-
-					factors = append(factors, &ControlGroupFactor{
-						Name:                   key,
-						Identity:               factor.Identity,
-						ControlledCapabilities: factor.ControlledCapabilities,
-					})
 				}
+				if len(factors) == 0 {
+					return errors.New("no control group factors provided")
+				}
+				pc.Permissions.ControlGroup.Factors = factors
 			}
-			if len(factors) == 0 {
-				return errors.New("no control group factors provided")
+			if pc.Permissions.MinWrappingTTL != 0 &&
+				pc.Permissions.MaxWrappingTTL != 0 &&
+				pc.Permissions.MaxWrappingTTL < pc.Permissions.MinWrappingTTL {
+				return errors.New("max_wrapping_ttl cannot be less than min_wrapping_ttl")
 			}
-			pc.Permissions.ControlGroup.Factors = factors
-		}
-		if pc.Permissions.MinWrappingTTL != 0 &&
-			pc.Permissions.MaxWrappingTTL != 0 &&
-			pc.Permissions.MaxWrappingTTL < pc.Permissions.MinWrappingTTL {
-			return errors.New("max_wrapping_ttl cannot be less than min_wrapping_ttl")
-		}
-		if len(pc.RequiredParametersHCL) > 0 {
-			pc.Permissions.RequiredParameters = pc.RequiredParametersHCL[:]
-		}
+			if len(pc.RequiredParametersHCL) > 0 {
+				pc.Permissions.RequiredParameters = pc.RequiredParametersHCL[:]
+			}
 
-	PathFinished:
-		paths = append(paths, &pc)
+		PathFinished:
+			pcs = append(pcs, &pc)
+			fmt.Printf("appending path %q\n", pc.Path)
+		}
+		paths = append(paths, pcs...)
 	}
 
 	result.Paths = paths

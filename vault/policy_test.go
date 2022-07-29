@@ -339,20 +339,27 @@ func TestPolicy_ParseTemplated(t *testing.T) {
 	rules :=
 		`
 name = "dev"
+path "test" {
+	capabilities = ["create", "sudo"]
+}
 path "test/{{ identity.entity.name }}" {
 	capabilities = ["create", "sudo"]
 }
-path "test/{{ identity.groups.names }}" {
+path "test/{{ identity.groups.names }}/shared" {
 	capabilities = ["list", "read"]
-}`
+}
+path "test/{{ identity.groups.names }}/{{ identity.entity.name }}" {
+	capabilities = ["list", "read"]
+}
+`
 	entity := &identity.Entity{
 		Name: "trey.anastatio",
 	}
 	groups := []*identity.Group{
-		&identity.Group{
+		{
 			Name: "phish",
 		},
-		&identity.Group{
+		{
 			Name: "oysterhead",
 		},
 	}
@@ -367,6 +374,16 @@ path "test/{{ identity.groups.names }}" {
 
 	expect := []*PathRules{
 		{
+			Path: "test",
+			Capabilities: []string{
+				"create",
+				"sudo",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
+			},
+		},
+		{
 			Path: "test/trey.anastatio",
 			Capabilities: []string{
 				"create",
@@ -377,20 +394,40 @@ path "test/{{ identity.groups.names }}" {
 			},
 		},
 		{
-			Path: "test/phish",
+			Path: "test/phish/shared",
 			Capabilities: []string{
-				"read",
 				"list",
+				"read",
 			},
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),
 			},
 		},
 		{
-			Path: "test/oysterhead",
+			Path: "test/oysterhead/shared",
 			Capabilities: []string{
-				"read",
 				"list",
+				"read",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),
+			},
+		},
+		{
+			Path: "test/phish/trey.anastatio",
+			Capabilities: []string{
+				"list",
+				"read",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),
+			},
+		},
+		{
+			Path: "test/oysterhead/trey.anastatio",
+			Capabilities: []string{
+				"list",
+				"read",
 			},
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),

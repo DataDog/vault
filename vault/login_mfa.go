@@ -1607,7 +1607,7 @@ func (c *Core) validateLoginMFAInternal(ctx context.Context, methodID string, en
 			}
 			groups := append(directGroups, inheritedGroups...)
 
-			_, finalUsername, err = identitytpl.PopulateString(identitytpl.PopulateStringInput{
+			_, finalUsernames, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 				Mode:        identitytpl.ACLTemplating,
 				String:      mConfig.UsernameFormat,
 				Entity:      identity.ToSDKEntity(entity),
@@ -1617,6 +1617,9 @@ func (c *Core) validateLoginMFAInternal(ctx context.Context, methodID string, en
 			if err != nil {
 				return err
 			}
+
+			// TKTK fix this
+			finalUsername = finalUsernames[0]
 		}
 	}
 

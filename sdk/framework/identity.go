@@ -38,7 +38,8 @@ func PopulateIdentityTemplate(tpl string, entityID string, sysView logical.Syste
 		return "", err
 	}
 
-	return out, nil
+	// TKTK this isn't safe
+	return out[0], nil
 }
 
 // ValidateIdentityTemplate takes a template string and returns if the string is

@@ -887,7 +887,7 @@ func (i *IdentityStore) pathOIDCGenerateToken(ctx context.Context, req *logical.
 	// Parse and integrate the populated template. Structural errors with the template _should_
 	// be caught during configuration. Error found during runtime will be logged, but they will
 	// not block generation of the basic ID token. They should not be returned to the requester.
-	_, populatedTemplate, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+	_, populatedTemplates, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 		Mode:        identitytpl.JSONTemplating,
 		String:      role.Template,
 		Entity:      identity.ToSDKEntity(e),
@@ -897,6 +897,9 @@ func (i *IdentityStore) pathOIDCGenerateToken(ctx context.Context, req *logical.
 	if err != nil {
 		i.Logger().Warn("error populating OIDC token template", "template", role.Template, "error", err)
 	}
+
+	// TKTK fix this
+	populatedTemplate := populatedTemplates[0]
 
 	payload, err := idToken.generatePayload(i.Logger(), populatedTemplate)
 	if err != nil {
@@ -1129,7 +1132,7 @@ func (i *IdentityStore) pathOIDCCreateUpdateRole(ctx context.Context, req *logic
 
 	// Validate that template can be parsed and results in valid JSON
 	if role.Template != "" {
-		_, populatedTemplate, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+		_, populatedTemplates, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 			Mode:   identitytpl.JSONTemplating,
 			String: role.Template,
 			Entity: new(logical.Entity),
@@ -1139,6 +1142,9 @@ func (i *IdentityStore) pathOIDCCreateUpdateRole(ctx context.Context, req *logic
 		if err != nil {
 			return logical.ErrorResponse("error parsing template: %s", err.Error()), nil
 		}
+
+		// TKTK fix this
+		populatedTemplate := populatedTemplates[0]
 
 		var tmp map[string]interface{}
 		if err := json.Unmarshal([]byte(populatedTemplate), &tmp); err != nil {

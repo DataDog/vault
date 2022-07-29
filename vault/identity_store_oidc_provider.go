@@ -857,7 +857,7 @@ func (i *IdentityStore) pathOIDCCreateUpdateScope(ctx context.Context, req *logi
 
 	// Validate that template can be parsed and results in valid JSON
 	if scope.Template != "" {
-		_, populatedTemplate, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+		_, populatedTemplates, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 			Mode:   identitytpl.JSONTemplating,
 			String: scope.Template,
 			Entity: new(logical.Entity),
@@ -866,6 +866,9 @@ func (i *IdentityStore) pathOIDCCreateUpdateScope(ctx context.Context, req *logi
 		if err != nil {
 			return logical.ErrorResponse("error parsing template: %s", err.Error()), nil
 		}
+
+		// TKTK fix this
+		populatedTemplate := populatedTemplates[0]
 
 		var tmp map[string]interface{}
 		if err := json.Unmarshal([]byte(populatedTemplate), &tmp); err != nil {
@@ -1272,7 +1275,7 @@ func (i *IdentityStore) pathOIDCCreateUpdateProvider(ctx context.Context, req *l
 		}
 
 		// ensure no two templates have the same top-level keys
-		_, populatedTemplate, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+		_, populatedTemplates, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 			Mode:   identitytpl.JSONTemplating,
 			String: scope.Template,
 			Entity: new(logical.Entity),
@@ -1281,6 +1284,9 @@ func (i *IdentityStore) pathOIDCCreateUpdateProvider(ctx context.Context, req *l
 		if err != nil {
 			return nil, fmt.Errorf("error parsing template for scope %q: %s", scopeName, err.Error())
 		}
+
+		// TKTK fix this
+		populatedTemplate := populatedTemplates[0]
 
 		jsonTemplate := make(map[string]interface{})
 		if err = json.Unmarshal([]byte(populatedTemplate), &jsonTemplate); err != nil {
@@ -2318,7 +2324,7 @@ func (i *IdentityStore) populateScopeTemplates(ctx context.Context, s logical.St
 	for scope, template := range templates {
 		// Parse and integrate the populated template. Structural errors with the template
 		// should be caught during configuration. Errors found during runtime will be logged.
-		_, populatedTemplate, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+		_, populatedTemplates, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
 			Mode:        identitytpl.JSONTemplating,
 			String:      template,
 			Entity:      identity.ToSDKEntity(entity),
@@ -2329,6 +2335,9 @@ func (i *IdentityStore) populateScopeTemplates(ctx context.Context, s logical.St
 			i.Logger().Warn("error populating OIDC token template", "scope", scope,
 				"template", template, "error", err)
 		}
+		
+		// TKTK fix this
+		populatedTemplate := populatedTemplates[0]
 
 		if populatedTemplate != "" {
 			claimsMap := make(map[string]interface{})
