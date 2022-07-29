@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"github.com/hashicorp/vault/helper/identity"
 	"strings"
 	"testing"
 	"time"
@@ -326,6 +327,74 @@ func TestPolicy_Parse(t *testing.T) {
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
 			HasSegmentWildcards: true,
+		},
+	}
+
+	if diff := deep.Equal(p.Paths, expect); diff != nil {
+		t.Error(diff)
+	}
+}
+
+func TestPolicy_ParseTemplated(t *testing.T) {
+	rules :=
+		`
+name = "dev"
+path "test/{{ identity.entity.name }}" {
+	capabilities = ["create", "sudo"]
+}
+path "test/{{ identity.groups.names }}" {
+	capabilities = ["list", "read"]
+}`
+	entity := &identity.Entity{
+		Name: "trey.anastatio",
+	}
+	groups := []*identity.Group{
+		&identity.Group{
+			Name: "phish",
+		},
+		&identity.Group{
+			Name: "oysterhead",
+		},
+	}
+	p, err := parseACLPolicyWithTemplating(namespace.RootNamespace, rules, true, entity, groups)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if p.Name != "dev" {
+		t.Fatalf("bad name: %q", p.Name)
+	}
+
+	expect := []*PathRules{
+		{
+			Path: "test/trey.anastatio",
+			Capabilities: []string{
+				"create",
+				"sudo",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
+			},
+		},
+		{
+			Path: "test/phish",
+			Capabilities: []string{
+				"read",
+				"list",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),
+			},
+		},
+		{
+			Path: "test/oysterhead",
+			Capabilities: []string{
+				"read",
+				"list",
+			},
+			Permissions: &ACLPermissions{
+				CapabilitiesBitmap: (ListCapabilityInt | ReadCapabilityInt),
+			},
 		},
 	}
 
