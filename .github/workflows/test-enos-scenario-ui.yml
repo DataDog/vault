@@ -76,7 +76,7 @@ jobs:
       - uses: ./.github/actions/set-up-go
         with:
           github-token: ${{ secrets.ELEVATED_GITHUB_TOKEN }}
-      - uses: hashicorp/action-setup-enos@v1
+      - uses: hashicorp/action-setup-enos@b9fa53484a1e8fdcc7b02a118bcf01d65b9414c9 # v1.37.0
         with:
           github-token: ${{ secrets.ELEVATED_GITHUB_TOKEN }}
       - name: Set Up Git
@@ -86,7 +86,7 @@ jobs:
         with:
           node-version-file: './ui/package.json'
       - name: Set Up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
           terraform_wrapper: false

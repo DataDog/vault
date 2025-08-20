@@ -69,4 +69,4 @@ jobs:
     needs: test
     steps:
       - name: Persist metadata
-        uses: hashicorp/actions-persist-metadata@v2
+        uses: hashicorp/actions-persist-metadata@e13fbbb09a867e1274210306a1fd53e1d1fda9c3 # v2.0.0
