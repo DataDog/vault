@@ -3,12 +3,112 @@
 - [v1.0.0 - v1.9.10](CHANGELOG-pre-v1.10.md)
 - [v0.11.6 and earlier](CHANGELOG-v0.md)
 
+## 1.20.3
+### August 28, 2025
+
+FEATURES:
+
+* **IBM RACF Static Role Password Phrase Management (Enterprise)**: Add support for static role password phrase management to the LDAP secrets engine. (https://github.com/hashicorp/vault-plugin-secrets-openldap/pull/184)
+
+SECURITY:
+
+* core: Update github.com/hashicorp/go-getter to fix security vulnerability GHSA-wjrx-6529-hcj3. ([8b3a9ce1](https://github.com/hashicorp/vault/commit/8b3a9ce1f651932559a129a7889243d24127cee2))
+
+CHANGES:
+
+* core: Bump Go version to 1.24.6. ([ce56e14e](https://github.com/hashicorp/vault/commit/ce56e14e7466ae80e05d11a83c8f41db0f4653be))
+* http: Add JSON configurable limits to HTTP handling for JSON payloads: `max_json_depth`, `max_json_string_value_length`, `max_json_object_entry_count`, `max_json_array_element_count`. [[GH-31069](https://github.com/hashicorp/vault/pull/31069)]
+* sdk: Upgrade to go-secure-stdlib/plugincontainer@v0.4.2, which also bumps github.com/docker/docker to v28.3.3+incompatible ([8f172169](https://github.com/hashicorp/vault/commit/8f1721697bba123117f4f98dae4154ef9fe614e5))
+* secrets/openldap (enterprise): update plugin to v0.16.1
+
+IMPROVEMENTS:
+
+* auth/ldap: add explicit logging to rotations in ldap [[GH-31401](https://github.com/hashicorp/vault/pull/31401)]
+* core (enterprise): improve rotation manager logging to include specific lines for rotation success and failure
+* secrets/database: log password rotation success (info) and failure (error). Some relevant log lines have been updated to include "path" fields. [[GH-31402](https://github.com/hashicorp/vault/pull/31402)]
+* secrets/transit: add logging on both success and failure of key rotation [[GH-31420](https://github.com/hashicorp/vault/pull/31420)]
+* ui: Use the Helios Design System Code Block component for all readonly code editors and use its Code Editor component for all other code editors [[GH-30188](https://github.com/hashicorp/vault/pull/30188)]
+
+BUG FIXES:
+
+* core (enterprise): fix a bug where issuing a token in a namespace used root auth configuration instead of namespace auth configuration
+* core/metrics: Add service name prefix for core HA metrics to avoid duplicate, zero-value metrics. ([91e5f443](https://github.com/hashicorp/vault/commit/91e5f44315fb52c37b54e8b0eece1b4390665cc3))
+* core/seal: When Seal-HA is enabled, make it an error to persist the barrier
+keyring when not all seals are healthy.  This prevents the possibility of
+failing to unseal when a different subset of seals are healthy than were
+healthy at last write. ([bbe64227](https://github.com/hashicorp/vault/commit/bbe64227c586cb34f73d9ae8025398f24aa7e12d))
+* raft (enterprise): auto-join will now work in regions that do not support dual-stack ([c66baf5e](https://github.com/hashicorp/vault/commit/c66baf5ee1ee9320daa6af5528cb2f250f2a0f3a))
+* raft/autopilot: Fixes an issue with enterprise redundancy zones where, if the leader was in a redundancy zone and that leader becomes unavailable, the node would become an unzoned voter. This can artificially inflate the required number of nodes for quorum, leading to a situation where the cluster cannot recover if another leader subsequently becomes unavailable. Vault will now keep an unavailable node in its last known redundancy zone as a non-voter. [[GH-31443](https://github.com/hashicorp/vault/pull/31443)]
+* replication (enterprise): Fix bug where group updates fail when processed on a
+standby node in a PR secondary cluster.
+* secrets-sync (enterprise): GCP locational KMS keys are no longer incorrectly removed when the location name is all lowercase.
+* secrets/database/postgresql: Support for multiline statements in the `rotation_statements` field. [[GH-31442](https://github.com/hashicorp/vault/pull/31442)]
+* ui: Fix DR secondary view from not loading/transitioning. [[GH-31478](https://github.com/hashicorp/vault/pull/31478)]
+
+## 1.20.2
+### August 06, 2025
+
+SECURITY:
+
+* auth/ldap: fix MFA/TOTP enforcement bypass when username_as_alias is enabled [[GH-31427](https://github.com/hashicorp/vault/pull/31427),[HCSEC-2025-20](https://discuss.hashicorp.com/t/hcsec-2025-20-vault-ldap-mfa-enforcement-bypass-when-using-username-as-alias/76092)].
+
+BUG FIXES:
+
+* agent/template: Fixed issue where templates would not render correctly if namespaces was provided by config, and the namespace and mount path of the secret were the same. [[GH-31392](https://github.com/hashicorp/vault/pull/31392)]
+* identity/mfa: revert cache entry change from #31217 and document cache entry values [[GH-31421](https://github.com/hashicorp/vault/pull/31421)]
+
+## 1.20.1
+### July 25, 2025
+
+SECURITY:
+
+* audit: **breaking change** privileged vault operator may execute code on the underlying host (CVE-2025-6000). Vault will not unseal if the only configured file audit device has executable permissions (e.g., 0777, 0755). See recent [breaking change](https://developer.hashicorp.com/vault/docs/updates/important-changes#breaking-changes) docs for more details. [[GH-31211](https://github.com/hashicorp/vault/pull/31211),[HCSEC-2025-14](https://discuss.hashicorp.com/t/hcsec-2025-14-privileged-vault-operator-may-execute-code-on-the-underlying-host/76033)]
+* auth/userpass: timing side-channel in vault's userpass auth method (CVE-2025-6011)[HCSEC-2025-15](https://discuss.hashicorp.com/t/hcsec-2025-15-timing-side-channel-in-vault-s-userpass-auth-method/76034)
+* core/login: vault userpass and ldap user lockout bypass (CVE-2025-6004). update alias lookahead to respect username case for LDAP and username/password. [[GH-31352](https://github.com/hashicorp/vault/pull/31352),[HCSEC-2025-16](https://discuss.hashicorp.com/t/hcsec-2025-16-vault-userpass-and-ldap-user-lockout-bypass/76035)]
+* secrets/totp: vault totp secrets engine code reuse (CVE-2025-6014) [[GH-31246](https://github.com/hashicorp/vault/pull/31246),[HCSEC-2025-17](https://discuss.hashicorp.com/t/hcsec-2025-17-vault-totp-secrets-engine-code-reuse/76036)]
+* auth/cert: vault certificate auth method did not validate common name for non-ca certificates (CVE-2025-6037). test non-CA cert equality on login matching instead of individual fields. [[GH-31210](https://github.com/hashicorp/vault/pull/31210),[HCSEC-2025-18](https://discuss.hashicorp.com/t/hcsec-2025-18-vault-certificate-auth-method-did-not-validate-common-name-for-non-ca-certificates/76037)]
+* core/mfa: vault login mfa bypass of rate limiting and totp token reuse (CVE-2025-6015) [[GH-31217](https://github.com/hashicorp/vault/pull/31297),[HCSEC-2025-19](https://discuss.hashicorp.com/t/hcsec-2025-19-vault-login-mfa-bypass-of-rate-limiting-and-totp-token-reuse/76038)]
+
+FEATURES:
+
+* **Post-Quantum Cryptography Support**: Experimental support for PQC signatures with SLH-DSA in Transit.
+
+IMPROVEMENTS:
+
+* Plugin Downloads (enterprise): add CLI `-download` option for plugin register (beta)
+* openapi: Add OpenAPI support for secret recovery operations. [[GH-31331](https://github.com/hashicorp/vault/pull/31331)]
+* plugins: Clarify usage of sha256, command, and version for plugin registration of binary or artifact with API and CLI. Introduce new RegisterPluginDetailed and RegisterPluginWtihContextDetailed functions to API client to propagate response along with error, and mark RegisterPlugin and RegisterPluginWithContext as deprecated. [[GH-30811](https://github.com/hashicorp/vault/pull/30811)]
+* secrets/pki (enterprise): enable separately-configured logging for SCEP-enrollment.
+* secrets/pki: Add the digest OID when logging SCEP digest mismatch errors. [[GH-31232](https://github.com/hashicorp/vault/pull/31232)]
+
+BUG FIXES:
+
+* activity (enterprise): Fix `development_cluster` setting being overwritten on performance secondaries upon cluster reload. [[GH-31223](https://github.com/hashicorp/vault/pull/31223)]
+* auth/scep (enterprise): enforce the token_bound_cidrs role parameter within SCEP roles
+* auto-reporting (enterprise): Clarify debug logs to accurately reflect when automated license utilization reporting is enabled or disabled, especially since manual reporting is always initialized.
+* core/seal (enterprise): Fix a bug that caused the seal rewrap process to abort in the presence of partially sealed entries.
+* kmip (enterprise): Fix a panic that can happen when a KMIP client makes a request before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* plugins: Fix panics that can occur when a plugin audits a request or response before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* product usage reporting (enterprise): Clarify debug logs to accurately reflect when anonymous product usage reporting is enabled or disabled, especially since manual reporting is always initialized.
+* replication (enterprise): Fix bug with mount invalidations consuming excessive memory.
+* secrets-sync (enterprise): Unsyncing secret-key granularity associations will no longer give a misleading error about a failed unsync operation that did indeed succeed.
+* secrets/gcp: Update to vault-plugin-secrets-gcp@v0.22.1 to address more eventual consistency issues [[GH-31350](https://github.com/hashicorp/vault/pull/31350)]
+* ui: Fix capability checks for api resources with underscores to properly hide actions and dropdown items a user cannot perform [[GH-31271](https://github.com/hashicorp/vault/pull/31271)]
+* ui: Fix kv v2 overview page from erroring if a user does not have access to the /subkeys endpoint and the policy check fails. [[GH-31136](https://github.com/hashicorp/vault/pull/31136)]
+* ui: Fix mutation of unwrapped data when keys contain underscores [[GH-31287](https://github.com/hashicorp/vault/pull/31287)]
+* ui: Fix regression in 1.20.0 to properly set namespace context for capabilities checks [[GH-31276](https://github.com/hashicorp/vault/pull/31276)]
+* ui: Fix selecting multiple namespaces in the namespace picker when the path contains matching nodes [[GH-31326](https://github.com/hashicorp/vault/pull/31326)]
+* ui: Fixes UI login settings list page which was not rendering rules with an underscore in the name. [[GH-31150](https://github.com/hashicorp/vault/pull/31150)]
+* ui: Include user's root namespace in the namespace picker if it's a namespace other than the actual root ("") [[GH-31300](https://github.com/hashicorp/vault/pull/31300)]
+* ui: Revert camelizing of parameters returned from `sys/internal/ui/mounts` so mount paths match serve value [[GH-31094](https://github.com/hashicorp/vault/pull/31094)]
+
 ## 1.20.0
 ### June 25, 2025
 
 SECURITY:
 
 * core: require a nonce when cancelling a rekey operation that was initiated within the last 10 minutes. [[GH-30794](https://github.com/hashicorp/vault/pull/30794)],[[HCSEC-2025-11](https://discuss.hashicorp.com/t/hcsec-2025-11-vault-vulnerable-to-recovery-key-cancellation-denial-of-service/75570)]
+* core/identity: vault root namespace operator may elevate privileges (CVE-2025-5999). Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045),[HCSEC-2025-13](https://discuss.hashicorp.com/t/hcsec-2025-13-vault-root-namespace-operator-may-elevate-token-privileges/76032)]
 
 CHANGES:
 
@@ -142,7 +242,6 @@ BUG FIXES:
 * core (enterprise): fix issue with errors being swallowed on failed HSM logins. 
 core/managed-keys (enterprise): fix RSA encryption/decryption with OAEP on managed keys.
 * core: Fix a bug that prevents certain loggers from writing to a log file. [[GH-29917](https://github.com/hashicorp/vault/pull/29917)]
-* core: Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045)]
 * core: Omit automatic version control information of the main module from compiled Vault binaries [[GH-30926](https://github.com/hashicorp/vault/pull/30926)]
 * database: Prevent static roles created in versions prior to 1.15.0 from rotating on backend restart. [[GH-30320](https://github.com/hashicorp/vault/pull/30320)]
 * database: no longer incorrectly add an "unrecognized parameters" warning for certain SQL database secrets config operations when another warning is returned [[GH-30327](https://github.com/hashicorp/vault/pull/30327)]
@@ -183,6 +282,88 @@ intermediate certificates. [[GH-30034](https://github.com/hashicorp/vault/pull/3
 * ui: MFA methods now display the namespace path instead of the namespace id. [[GH-29588](https://github.com/hashicorp/vault/pull/29588)]
 * ui: Redirect users authenticating with Vault as an OIDC provider to log in again when token expires. [[GH-30838](https://github.com/hashicorp/vault/pull/30838)]
 
+## 1.19.9 Enterprise
+### August 28, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.19 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+FEATURES:
+
+* **IBM RACF Static Role Password Phrase Management**: Add support for static role password phrase management to the LDAP secrets engine. (https://github.com/hashicorp/vault-plugin-secrets-openldap/pull/184)
+
+SECURITY:
+
+* core: Update github.com/hashicorp/go-getter to fix security vulnerability GHSA-wjrx-6529-hcj3.
+
+CHANGES:
+
+* core: Bump Go version to 1.24.6.
+* http: Add JSON configurable limits to HTTP handling for JSON payloads: `max_json_depth`, `max_json_string_value_length`, `max_json_object_entry_count`, `max_json_array_element_count`.
+* sdk: Upgrade to go-secure-stdlib/plugincontainer@v0.4.2, which also bumps github.com/docker/docker to v28.3.3+incompatible
+* secrets/openldap: update plugin to v0.15.5
+
+IMPROVEMENTS:
+
+* auth/ldap: add explicit logging to rotations in ldap
+* core (enterprise): improve rotation manager logging to include specific lines for rotation success and failure
+* secrets/database: log password rotation success (info) and failure (error). Some relevant log lines have been updated to include "path" fields.
+* secrets/transit: add logging on both success and failure of key rotation
+* ui: Use the Helios Design System Code Block component for all readonly code editors and use its Code Editor component for all other code editors
+
+BUG FIXES:
+
+* core (enterprise): fix a bug where issuing a token in a namespace used root auth configuration instead of namespace auth configuration
+* core/metrics: Add service name prefix for core HA metrics to avoid duplicate, zero-value metrics.
+* core/seal: When Seal-HA is enabled, make it an error to persist the barrier
+keyring when not all seals are healthy.  This prevents the possibility of
+failing to unseal when a different subset of seals are healthy than were
+healthy at last write.
+* raft (enterprise): auto-join will now work in regions that do not support dual-stack
+* raft/autopilot: Fixes an issue with enterprise redundancy zones where, if the leader was in a redundancy zone and that leader becomes unavailable, the node would become an unzoned voter. This can artificially inflate the required number of nodes for quorum, leading to a situation where the cluster cannot recover if another leader subsequently becomes unavailable. Vault will now keep an unavailable node in its last known redundancy zone as a non-voter.
+* replication (enterprise): Fix bug where group updates fail when processed on a
+standby node in a PR secondary cluster.
+* secrets-sync (enterprise): GCP locational KMS keys are no longer incorrectly removed when the location name is all lowercase.
+* secrets/database/postgresql: Support for multiline statements in the `rotation_statements` field.
+
+## 1.19.8 Enterprise
+### August 06, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.19 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+SECURITY:
+
+* auth/ldap: fix MFA/TOTP enforcement bypass when username_as_alias is enabled [[GH-31427](https://github.com/hashicorp/vault/pull/31427),[HCSEC-2025-20](https://discuss.hashicorp.com/t/hcsec-2025-20-vault-ldap-mfa-enforcement-bypass-when-using-username-as-alias/76092)].
+
+BUG FIXES:
+
+* agent/template: Fixed issue where templates would not render correctly if namespaces was provided by config, and the namespace and mount path of the secret were the same. [[GH-31392](https://github.com/hashicorp/vault/pull/31392)]
+* identity/mfa: revert cache entry change from #31217 and document cache entry values [[GH-31421](https://github.com/hashicorp/vault/pull/31421)]
+
+## 1.19.7 Enterprise
+### July 25, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.19 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+SECURITY: 
+
+* audit: **breaking change** privileged vault operator may execute code on the underlying host (CVE-2025-6000). Vault will not unseal if the only configured file audit device has executable permissions (e.g., 0777, 0755). See recent [breaking change](https://developer.hashicorp.com/vault/docs/updates/important-changes#breaking-changes) docs for more details. [[GH-31211](https://github.com/hashicorp/vault/pull/31211),[HCSEC-2025-14](https://discuss.hashicorp.com/t/hcsec-2025-14-privileged-vault-operator-may-execute-code-on-the-underlying-host/76033)]
+* auth/userpass: timing side-channel in vault's userpass auth method (CVE-2025-6011)[HCSEC-2025-15](https://discuss.hashicorp.com/t/hcsec-2025-15-timing-side-channel-in-vault-s-userpass-auth-method/76034)
+* core/login: vault userpass and ldap user lockout bypass (CVE-2025-6004). update alias lookahead to respect username case for LDAP and username/password. [[GH-31352](https://github.com/hashicorp/vault/pull/31352),[HCSEC-2025-16](https://discuss.hashicorp.com/t/hcsec-2025-16-vault-userpass-and-ldap-user-lockout-bypass/76035)]
+* secrets/totp: vault totp secrets engine code reuse (CVE-2025-6014) [[GH-31246](https://github.com/hashicorp/vault/pull/31246),[HCSEC-2025-17](https://discuss.hashicorp.com/t/hcsec-2025-17-vault-totp-secrets-engine-code-reuse/76036)]
+* auth/cert: vault certificate auth method did not validate common name for non-ca certificates (CVE-2025-6037). test non-CA cert equality on login matching instead of individual fields. [[GH-31210](https://github.com/hashicorp/vault/pull/31210),[HCSEC-2025-18](https://discuss.hashicorp.com/t/hcsec-2025-18-vault-certificate-auth-method-did-not-validate-common-name-for-non-ca-certificates/76037)]
+* core/mfa: vault login mfa bypass of rate limiting and totp token reuse (CVE-2025-6015) [[GH-31217](https://github.com/hashicorp/vault/pull/31297),[HCSEC-2025-19](https://discuss.hashicorp.com/t/hcsec-2025-19-vault-login-mfa-bypass-of-rate-limiting-and-totp-token-reuse/76038)]
+
+BUG FIXES:
+
+* auto-reporting (enterprise): Clarify debug logs to accurately reflect when automated license utilization reporting is enabled or disabled, especially since manual reporting is always initialized.
+* core/seal (enterprise): Fix a bug that caused the seal rewrap process to abort in the presence of partially sealed entries.
+* kmip (enterprise): Fix a panic that can happen when a KMIP client makes a request before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* plugins: Fix panics that can occur when a plugin audits a request or response before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* product usage reporting (enterprise): Clarify debug logs to accurately reflect when anonymous product usage reporting is enabled or disabled, especially since manual reporting is always initialized.
+* replication (enterprise): Fix bug with mount invalidations consuming excessive memory.
+* secrets-sync (enterprise): Unsyncing secret-key granularity associations will no longer give a misleading error about a failed unsync operation that did indeed succeed.
+* secrets/gcp: Update to vault-plugin-secrets-gcp@v0.21.4 to address more eventual consistency issues
+
 ## 1.19.6 Enterprise
 ### June 25, 2025
 
@@ -191,6 +372,7 @@ intermediate certificates. [[GH-30034](https://github.com/hashicorp/vault/pull/3
 SECURITY:
 
 * core: require a nonce when cancelling a rekey operation that was initiated within the last 10 minutes. [[GH-30794](https://github.com/hashicorp/vault/pull/30794)],[[HCSEC-2025-11](https://discuss.hashicorp.com/t/hcsec-2025-11-vault-vulnerable-to-recovery-key-cancellation-denial-of-service/75570)]
+* core/identity: vault root namespace operator may elevate privileges (CVE-2025-5999). Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045),[HCSEC-2025-13](https://discuss.hashicorp.com/t/hcsec-2025-13-vault-root-namespace-operator-may-elevate-token-privileges/76032)]
 
 CHANGES:
 
@@ -211,7 +393,6 @@ DEPRECATIONS:
 
 BUG FIXES:
 
-* core: Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045)]
 * core: Omit automatic version control information of the main module from compiled Vault binaries [[GH-30926](https://github.com/hashicorp/vault/pull/30926)]
 * secrets/database: Treat all rotation_schedule values as UTC to ensure consistent behavior. [[GH-30606](https://github.com/hashicorp/vault/pull/30606)]
 * secrets/transit (enterprise): ensure verify endpoint always returns valid field in batch_results with CMAC
@@ -441,6 +622,7 @@ schedules/periods via the Rotation Manager. Note: Enterprise only. [[GH-29598](h
 Entities and Groups by renaming them. This feature is disabled by default and
 can be enabled through the `force_identity_deduplication` activation flag. [[GH-29356](https://github.com/hashicorp/vault/pull/29356)]
 * **Plugins**: Allow Enterprise plugins to run externally on Vault Enterprise only.
+* **Post-Quantum Cryptography Support**: Experimental support for PQC signatures with ML-DSA in Transit.
 * **Product Usage Reporting**: Added product usage reporting, which collects anonymous, numerical, non-sensitive data about Vault feature usage, and adds it to the existing utilization reports. [[GH-28858](https://github.com/hashicorp/vault/pull/28858)]
 * **Rotation Manager**: Add Rotation Manager to Vault Enterprise Core. The Rotation Manager enables
 plugin users to automate their root credential rotations based on configurable schedules/periods.
@@ -585,12 +767,68 @@ Unblocks customers that were stuck in a failing loop when attempting to rotate s
 * ui: No longer running decodeURIComponent on KVv2 list view allowing percent encoded data-octets in path name. [[GH-28698](https://github.com/hashicorp/vault/pull/28698)]
 * vault/diagnose: Fix time to expiration reporting within the TLS verification to not be a month off. [[GH-29128](https://github.com/hashicorp/vault/pull/29128)]
 
+## 1.18.14 Enterprise
+### August 28, 2025
+
+FEATURES:
+
+* **IBM RACF Static Role Password Phrase Management**: Add support for static role password phrase management to the LDAP secrets engine. (https://github.com/hashicorp/vault-plugin-secrets-openldap/pull/184)
+
+CHANGES:
+
+* core: Bump Go version to 1.23.12.
+* http: Add JSON configurable limits to HTTP handling for JSON payloads: `max_json_depth`, `max_json_string_value_length`, `max_json_object_entry_count`, `max_json_array_element_count`.
+* secrets/openldap: update plugin to v0.14.7
+
+BUG FIXES:
+
+* core (enterprise): fix a bug where issuing a token in a namespace used root auth configuration instead of namespace auth configuration
+* core/metrics: Add service name prefix for core HA metrics to avoid duplicate, zero-value metrics.
+* core/seal: When Seal-HA is enabled, make it an error to persist the barrier
+keyring when not all seals are healthy.  This prevents the possibility of
+failing to unseal when a different subset of seals are healthy than were
+healthy at last write.
+* raft/autopilot: Fixes an issue with enterprise redundancy zones where, if the leader was in a redundancy zone and that leader becomes unavailable, the node would become an unzoned voter. This can artificially inflate the required number of nodes for quorum, leading to a situation where the cluster cannot recover if another leader subsequently becomes unavailable. Vault will now keep an unavailable node in its last known redundancy zone as a non-voter.
+* secrets/database/postgresql: Support for multiline statements in the `rotation_statements` field.
+
+## 1.18.13 Enterprise
+### August 06, 2025
+
+SECURITY:
+
+* auth/ldap: fix MFA/TOTP enforcement bypass when username_as_alias is enabled [[GH-31427](https://github.com/hashicorp/vault/pull/31427),[HCSEC-2025-20](https://discuss.hashicorp.com/t/hcsec-2025-20-vault-ldap-mfa-enforcement-bypass-when-using-username-as-alias/76092)].
+
+BUG FIXES:
+
+* identity/mfa: revert cache entry change from #31217 and document cache entry values [[GH-31421](https://github.com/hashicorp/vault/pull/31421)]
+
+## 1.18.12 Enterprise
+### July 25, 2025
+
+SECURITY:
+
+* audit: **breaking change** privileged vault operator may execute code on the underlying host (CVE-2025-6000). Vault will not unseal if the only configured file audit device has executable permissions (e.g., 0777, 0755). See recent [breaking change](https://developer.hashicorp.com/vault/docs/updates/important-changes#breaking-changes) docs for more details. [[GH-31211](https://github.com/hashicorp/vault/pull/31211),[HCSEC-2025-14](https://discuss.hashicorp.com/t/hcsec-2025-14-privileged-vault-operator-may-execute-code-on-the-underlying-host/76033)]
+* auth/userpass: timing side-channel in vault's userpass auth method (CVE-2025-6011)[HCSEC-2025-15](https://discuss.hashicorp.com/t/hcsec-2025-15-timing-side-channel-in-vault-s-userpass-auth-method/76034)
+* core/login: vault userpass and ldap user lockout bypass (CVE-2025-6004). update alias lookahead to respect username case for LDAP and username/password. [[GH-31352](https://github.com/hashicorp/vault/pull/31352),[HCSEC-2025-16](https://discuss.hashicorp.com/t/hcsec-2025-16-vault-userpass-and-ldap-user-lockout-bypass/76035)]
+* secrets/totp: vault totp secrets engine code reuse (CVE-2025-6014) [[GH-31246](https://github.com/hashicorp/vault/pull/31246),[HCSEC-2025-17](https://discuss.hashicorp.com/t/hcsec-2025-17-vault-totp-secrets-engine-code-reuse/76036)]
+* auth/cert: vault certificate auth method did not validate common name for non-ca certificates (CVE-2025-6037). test non-CA cert equality on login matching instead of individual fields. [[GH-31210](https://github.com/hashicorp/vault/pull/31210),[HCSEC-2025-18](https://discuss.hashicorp.com/t/hcsec-2025-18-vault-certificate-auth-method-did-not-validate-common-name-for-non-ca-certificates/76037)]
+* core/mfa: vault login mfa bypass of rate limiting and totp token reuse (CVE-2025-6015) [[GH-31217](https://github.com/hashicorp/vault/pull/31297),[HCSEC-2025-19](https://discuss.hashicorp.com/t/hcsec-2025-19-vault-login-mfa-bypass-of-rate-limiting-and-totp-token-reuse/76038)]
+
+BUG FIXES:
+
+* core/seal (enterprise): Fix a bug that caused the seal rewrap process to abort in the presence of partially sealed entries.
+* kmip (enterprise): Fix a panic that can happen when a KMIP client makes a request before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* plugins: Fix panics that can occur when a plugin audits a request or response before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* replication (enterprise): Fix bug with mount invalidations consuming excessive memory.
+* secrets-sync (enterprise): Unsyncing secret-key granularity associations will no longer give a misleading error about a failed unsync operation that did indeed succeed.
+
 ## 1.18.11 Enterprise
 ### June 25, 2025
 
 SECURITY:
 
 * core: require a nonce when cancelling a rekey operation that was initiated within the last 10 minutes. [[GH-30794](https://github.com/hashicorp/vault/pull/30794)],[[HCSEC-2025-11](https://discuss.hashicorp.com/t/hcsec-2025-11-vault-vulnerable-to-recovery-key-cancellation-denial-of-service/75570)]
+* core/identity: vault root namespace operator may elevate privileges (CVE-2025-5999). Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045),[HCSEC-2025-13](https://discuss.hashicorp.com/t/hcsec-2025-13-vault-root-namespace-operator-may-elevate-token-privileges/76032)]
 
 CHANGES:
 
@@ -603,7 +841,6 @@ CHANGES:
 
 BUG FIXES:
 
-* core: Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045)]
 * secrets/database: Treat all rotation_schedule values as UTC to ensure consistent behavior. [[GH-30606](https://github.com/hashicorp/vault/pull/30606)]
 * secrets/transit (enterprise): ensure verify endpoint always returns valid field in batch_results with CMAC
 * secrets/transit: ensure verify endpoint always returns valid field in batch_results with HMAC [[GH-30852](https://github.com/hashicorp/vault/pull/30852)]
@@ -1085,6 +1322,7 @@ use versioned plugins. [[GH-27881](https://github.com/hashicorp/vault/pull/27881
 SECURITY:
 
 * core: require a nonce when cancelling a rekey operation that was initiated within the last 10 minutes. [[GH-30794](https://github.com/hashicorp/vault/pull/30794)],[[HCSEC-2025-11](https://discuss.hashicorp.com/t/hcsec-2025-11-vault-vulnerable-to-recovery-key-cancellation-denial-of-service/75570)]
+* core/identity: vault root namespace operator may elevate privileges (CVE-2025-5999). Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045),[HCSEC-2025-13](https://discuss.hashicorp.com/t/hcsec-2025-13-vault-root-namespace-operator-may-elevate-token-privileges/76032)]
 
 CHANGES:
 
@@ -1097,7 +1335,6 @@ CHANGES:
 
 BUG FIXES:
 
-* core: Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045)]
 * secrets/database: Treat all rotation_schedule values as UTC to ensure consistent behavior. [[GH-30606](https://github.com/hashicorp/vault/pull/30606)]
 * secrets/transit (enterprise): ensure verify endpoint always returns valid field in batch_results with CMAC
 * secrets/transit: ensure verify endpoint always returns valid field in batch_results with HMAC [[GH-30852](https://github.com/hashicorp/vault/pull/30852)]
@@ -1586,7 +1823,6 @@ FEATURES:
 for write requests as a Beta feature (disabled by default). This automatically
 prevents overloads caused by too many write requests while maintaining optimal
 throughput for the hardware configuration and workload.
-* **Audit Filtering (enterprise)** : Audit devices support expression-based filter rules (powered by go-bexpr) to determine which entries are written to the audit log.
 * **LDAP Secrets engine hierarchical path support**: Hierarchical path handling is now supported for role and set APIs. [[GH-27203](https://github.com/hashicorp/vault/pull/27203)]
 * **Plugin Identity Tokens**: Adds secret-less configuration of AWS auth engine using web identity federation. [[GH-26507](https://github.com/hashicorp/vault/pull/26507)]
 * **Plugin Workload Identity** (enterprise): Vault can generate identity tokens for plugins to use in workload identity federation auth flows.
@@ -1719,6 +1955,58 @@ autopilot to fail to discover new server versions and so not trigger an upgrade.
 * ui: fixed a bug where the replication pages did not update display when navigating between DR and performance [[GH-26325](https://github.com/hashicorp/vault/pull/26325)]
 * ui: fixes undefined start time in filename for downloaded client count attribution csv [[GH-26485](https://github.com/hashicorp/vault/pull/26485)]
 
+## 1.16.25 Enterprise
+### August 28, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.16 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+CHANGES:
+
+* core: Bump Go version to 1.23.12
+* http: Add JSON configurable limits to HTTP handling for JSON payloads: `max_json_depth`, `max_json_string_value_length`, `max_json_object_entry_count`, `max_json_array_element_count`.
+
+BUG FIXES:
+
+* core (enterprise): fix a bug where issuing a token in a namespace used root auth configuration instead of namespace auth configuration
+* core/seal: When Seal-HA is enabled, make it an error to persist the barrier
+keyring when not all seals are healthy.  This prevents the possibility of
+failing to unseal when a different subset of seals are healthy than were
+healthy at last write.
+
+## 1.16.24 Enterprise
+### August 06, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.16 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+SECURITY:
+
+* auth/ldap: fix MFA/TOTP enforcement bypass when username_as_alias is enabled [[GH-31427](https://github.com/hashicorp/vault/pull/31427),[HCSEC-2025-20](https://discuss.hashicorp.com/t/hcsec-2025-20-vault-ldap-mfa-enforcement-bypass-when-using-username-as-alias/76092)].
+
+BUG FIXES:
+
+* identity/mfa: revert cache entry change from #31217 and document cache entry values [[GH-31421](https://github.com/hashicorp/vault/pull/31421)]
+
+## 1.16.23 Enterprise
+### July 25, 2025
+
+**Enterprise LTS:** Vault Enterprise 1.16 is a [Long-Term Support (LTS)](https://developer.hashicorp.com/vault/docs/enterprise/lts) release.
+
+SECURITY:
+
+* audit: **breaking change** privileged vault operator may execute code on the underlying host (CVE-2025-6000). Vault will not unseal if the only configured file audit device has executable permissions (e.g., 0777, 0755). See recent [breaking change](https://developer.hashicorp.com/vault/docs/updates/important-changes#breaking-changes) docs for more details. [[GH-31211](https://github.com/hashicorp/vault/pull/31211),[HCSEC-2025-14](https://discuss.hashicorp.com/t/hcsec-2025-14-privileged-vault-operator-may-execute-code-on-the-underlying-host/76033)]
+* auth/userpass: timing side-channel in vault's userpass auth method (CVE-2025-6011)[HCSEC-2025-15](https://discuss.hashicorp.com/t/hcsec-2025-15-timing-side-channel-in-vault-s-userpass-auth-method/76034)
+* core/login: vault userpass and ldap user lockout bypass (CVE-2025-6004). update alias lookahead to respect username case for LDAP and username/password. [[GH-31352](https://github.com/hashicorp/vault/pull/31352),[HCSEC-2025-16](https://discuss.hashicorp.com/t/hcsec-2025-16-vault-userpass-and-ldap-user-lockout-bypass/76035)]
+* secrets/totp: vault totp secrets engine code reuse (CVE-2025-6014) [[GH-31246](https://github.com/hashicorp/vault/pull/31246),[HCSEC-2025-17](https://discuss.hashicorp.com/t/hcsec-2025-17-vault-totp-secrets-engine-code-reuse/76036)]
+* auth/cert: vault certificate auth method did not validate common name for non-ca certificates (CVE-2025-6037). test non-CA cert equality on login matching instead of individual fields. [[GH-31210](https://github.com/hashicorp/vault/pull/31210),[HCSEC-2025-18](https://discuss.hashicorp.com/t/hcsec-2025-18-vault-certificate-auth-method-did-not-validate-common-name-for-non-ca-certificates/76037)]
+* core/mfa: vault login mfa bypass of rate limiting and totp token reuse (CVE-2025-6015) [[GH-31217](https://github.com/hashicorp/vault/pull/31297),[HCSEC-2025-19](https://discuss.hashicorp.com/t/hcsec-2025-19-vault-login-mfa-bypass-of-rate-limiting-and-totp-token-reuse/76038)]
+
+BUG FIXES:
+
+* core/seal (enterprise): Fix a bug that caused the seal rewrap process to abort in the presence of partially sealed entries.
+* kmip (enterprise): Fix a panic that can happen when a KMIP client makes a request before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* plugins: Fix panics that can occur when a plugin audits a request or response before the Vault server has finished unsealing. [[GH-31266](https://github.com/hashicorp/vault/pull/31266)]
+* secrets-sync (enterprise): Unsyncing secret-key granularity associations will no longer give a misleading error about a failed unsync operation that did indeed succeed.
+
 ## 1.16.22 Enterprise
 ### June 25, 2025
 
@@ -1727,6 +2015,7 @@ autopilot to fail to discover new server versions and so not trigger an upgrade.
 SECURITY:
 
 * core: require a nonce when cancelling a rekey operation that was initiated within the last 10 minutes. [[GH-30794](https://github.com/hashicorp/vault/pull/30794)],[[HCSEC-2025-11](https://discuss.hashicorp.com/t/hcsec-2025-11-vault-vulnerable-to-recovery-key-cancellation-denial-of-service/75570)]
+* core/identity: vault root namespace operator may elevate privileges (CVE-2025-5999). Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045),[HCSEC-2025-13](https://discuss.hashicorp.com/t/hcsec-2025-13-vault-root-namespace-operator-may-elevate-token-privileges/76032)]
 
 CHANGES:
 
@@ -1737,7 +2026,6 @@ CHANGES:
 
 BUG FIXES:
 
-* core: Fix string contains check in Identity APIs to be case-insensitive. [[GH-31045](https://github.com/hashicorp/vault/pull/31045)]
 * secrets/database: Treat all rotation_schedule values as UTC to ensure consistent behavior. [[GH-30606](https://github.com/hashicorp/vault/pull/30606)]
 
 ## 1.16.21 Enterprise
@@ -2342,7 +2630,7 @@ google.golang.org/grpc to  v1.57.2 and golang.org/x/net to v0.17.0. [[GH-23913](
 FEATURES:
 
 * **Add Snapshot Inspector Tool**: Add CLI tool to inspect Vault snapshots [[GH-23457](https://github.com/hashicorp/vault/pull/23457)]
-* **Audit Filtering**: Audit devices support expression-based filter rules (powered by go-bexpr) to determine which entries are written to the audit log. [[GH-24558](https://github.com/hashicorp/vault/pull/24558)]
+* **Audit Filtering (enterprise)**: Audit devices support expression-based filter rules (powered by go-bexpr) to determine which entries are written to the audit log. [[GH-24558](https://github.com/hashicorp/vault/pull/24558)]
 * **Controlled Access to Unauthenticated Endpoints (enterprise)**: Gives admins more control over how unauthenticated endpoints in Vault can be accessed and in some cases what information they return. [[GH-23547](https://github.com/hashicorp/vault/pull/23547)] [[GH-23534](https://github.com/hashicorp/vault/pull/23534)] [[GH-23740](https://github.com/hashicorp/vault/pull/23740)]
 * **Custom messages (enterprise)**: Introduces custom messages settings, allowing users to view, and operators to configure system-wide messages.
 * **Database Event Notifications**: The database plugin now emits event notifications. [[GH-24718](https://github.com/hashicorp/vault/pull/24718)]

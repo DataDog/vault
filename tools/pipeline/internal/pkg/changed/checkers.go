@@ -160,7 +160,8 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 		hasBaseDir(name, "vault_ent"),
 		hasBaseDir(name, filepath.Join("scripts", "dev", "hsm")),
 		hasBaseDir(name, filepath.Join("scripts", "testing")),
-		hasBaseDir(name, filepath.Join("specs")):
+		hasBaseDir(name, filepath.Join("specs")),
+		hasBaseDir(name, filepath.Join(".release", "ibm-pao")):
 		return FileGroups{FileGroupEnterprise}
 	}
 
@@ -180,10 +181,6 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 			strings.HasSuffix(name, "_ent.go"),
 			strings.HasSuffix(name, "_ent_test.go"),
 			strings.Contains(name, "_ent") && strings.HasSuffix(name, ".pb.go"):
-			return FileGroups{FileGroupEnterprise}
-		}
-	case ".txt":
-		if hasBaseDir(name, "changelog") && strings.HasPrefix(filepath.Base(name), "_") {
 			return FileGroups{FileGroupEnterprise}
 		}
 	case
