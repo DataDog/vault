@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package ssh
@@ -29,7 +29,8 @@ func pathFetchPublicKey(b *backend) *framework.Path {
 }
 
 func (b *backend) pathFetchPublicKey(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	publicKey, err := getCAPublicKey(ctx, req.Storage)
+	const allowMigration = true // only paths that support snapshot reads are
+	publicKey, err := getCAPublicKey(ctx, req.Storage, allowMigration)
 	if err != nil {
 		return nil, err
 	}

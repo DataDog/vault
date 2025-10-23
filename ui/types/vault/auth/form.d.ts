@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,10 +7,6 @@ export interface UnauthMountsByType {
   // key is the auth method type
   // if the value is "null" there is no mount data for that type
   [key: string]: AuthTabMountData[] | null;
-}
-export interface UnauthMountsResponse {
-  // key is the mount path
-  [key: string]: { type: string; description?: string; config?: object | null };
 }
 
 interface AuthTabMountData {
@@ -38,8 +34,10 @@ export interface VisibleAuthMounts {
 // normalized so each method's information maps to the same key names
 export interface NormalizedAuthData extends NormalizeAuthResponseKeys {
   authMethodType: string;
+  entityId?: string;
   expireTime?: string;
-  namespacePath?: string;
+  renewable: boolean;
+  policies: string[];
   mfaRequirement?: MfaRequirementApiResponse | null;
 }
 

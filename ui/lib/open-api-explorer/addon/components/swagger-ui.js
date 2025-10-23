@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -165,9 +165,13 @@ export default class SwaggerUiComponent extends Component {
   }
 
   updateDisabledFields() {
-    document.querySelectorAll('.parameters :disabled').forEach((el) => {
-      el.removeAttribute('disabled');
-      el.setAttribute('readonly', true);
+    document.querySelectorAll('.parameters').forEach((el) => {
+      if (!el.disabled) {
+        el.removeAttribute('readonly');
+      } else {
+        el.removeAttribute('disabled');
+        el.setAttribute('readonly', true);
+      }
     });
   }
 

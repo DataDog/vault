@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package server
@@ -130,6 +130,8 @@ type Config struct {
 
 	EnablePostUnsealTrace bool   `hcl:"enable_post_unseal_trace"`
 	PostUnsealTraceDir    string `hcl:"post_unseal_trace_directory"`
+
+	ReportingScanDirectory string `hcl:"reporting_scan_directory"`
 }
 
 const (
@@ -479,6 +481,11 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.PostUnsealTraceDir = c2.PostUnsealTraceDir
 	}
 
+	result.ReportingScanDirectory = c.ReportingScanDirectory
+	if c2.ReportingScanDirectory != "" {
+		result.ReportingScanDirectory = c2.ReportingScanDirectory
+	}
+
 	// Use values from top-level configuration for storage if set
 	if storage := result.Storage; storage != nil {
 		if result.APIAddr != "" {
@@ -653,6 +660,14 @@ func ParseConfigCheckDuplicate(d, source string) (cfg *Config, duplicate bool, e
 	// Parse!
 	obj, duplicate, err := random.ParseAndCheckForDuplicateHclAttributes(d)
 	if err != nil {
+		if strings.Contains(err.Error(), "was already set. Each argument can only be defined once") {
+			knownPossibleAttributeDupErrors := []string{"retry_join", "transform", "listener"}
+			for _, s := range knownPossibleAttributeDupErrors {
+				if strings.Contains(err.Error(), fmt.Sprintf("The argument %q at", s)) {
+					return nil, duplicate, fmt.Errorf("%w (if using the attribute syntax %s = [...], change it to the block syntax %s { ... })", err, s, s)
+				}
+			}
+		}
 		return nil, duplicate, err
 	}
 

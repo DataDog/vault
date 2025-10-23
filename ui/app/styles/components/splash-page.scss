@@ -1,9 +1,8 @@
-@use '../utils/color_variables';
 @use '../utils/mixins';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,7 +15,7 @@
   }
 
   svg {
-    fill: color_variables.$white;
+    fill: hsl(0, 0%, 100%);
     height: 24px;
     width: 72px;
 
@@ -32,4 +31,12 @@
 
 .splash-page-header {
   padding: size_variables.$spacing-14 0;
+}
+
+// Override default SplashPage styling which uses styles in columns.scss
+.wide-content {
+  .column.is-4-desktop {
+    max-width: 640px;
+    width: 75%;
+  }
 }

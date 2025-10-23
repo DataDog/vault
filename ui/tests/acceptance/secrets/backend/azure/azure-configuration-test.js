@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -41,12 +41,12 @@ module('Acceptance | Azure | configuration', function (hooks) {
 
   test('it should prompt configuration after mounting the azure engine', async function (assert) {
     const path = `azure-${this.uid}`;
-    await visit('/vault/settings/mount-secret-backend');
+    await visit('/vault/secrets-engines/enable');
     await mountBackend(this.type, path);
 
     assert.strictEqual(
       currentURL(),
-      `/vault/secrets/${path}/configuration`,
+      `/vault/secrets-engines/${path}/configuration`,
       'navigated to configuration view'
     );
     assert
@@ -63,7 +63,7 @@ module('Acceptance | Azure | configuration', function (hooks) {
     await click(SES.configure);
     assert.strictEqual(
       currentURL(),
-      `/vault/secrets/${path}/configuration/edit`,
+      `/vault/secrets-engines/${path}/configuration/edit`,
       'navigated to configuration edit view'
     );
     // cleanup
@@ -176,8 +176,8 @@ module('Acceptance | Azure | configuration', function (hooks) {
             'subscription_id is included with updated value in the payload'
           );
         });
-        await fillIn(GENERAL.inputByAttr('subscriptionId'), 'subscription-id-updated');
-        await click(GENERAL.enableField('clientSecret'));
+        await fillIn(GENERAL.inputByAttr('subscription_id'), 'subscription-id-updated');
+        await click(GENERAL.enableField('client_secret'));
         await click(GENERAL.submitButton);
         // cleanup
         await runCmd(`delete sys/mounts/${path}`);
@@ -201,10 +201,10 @@ module('Acceptance | Azure | configuration', function (hooks) {
             'subscription_id is included with updated value in the payload'
           );
         });
-        await fillIn(GENERAL.inputByAttr('subscriptionId'), 'subscription-id-updated-again');
-        await click(GENERAL.enableField('clientSecret'));
+        await fillIn(GENERAL.inputByAttr('subscription_id'), 'subscription-id-updated-again');
+        await click(GENERAL.enableField('client_secret'));
         await click(GENERAL.button('toggle-masked'));
-        await fillIn(GENERAL.inputByAttr('clientSecret'), 'client-secret-updated');
+        await fillIn(GENERAL.inputByAttr('client_secret'), 'client-secret-updated');
         await click(GENERAL.submitButton);
         // cleanup
         await runCmd(`delete sys/mounts/${path}`);
@@ -228,7 +228,7 @@ module('Acceptance | Azure | configuration', function (hooks) {
         assert.dom(GENERAL.messageError).hasText('Error welp, that did not work!', 'API error shows on form');
         assert.strictEqual(
           currentURL(),
-          `/vault/secrets/${path}/configuration/edit`,
+          `/vault/secrets-engines/${path}/configuration/edit`,
           'the form did not transition because the save failed.'
         );
         // cleanup
@@ -426,7 +426,7 @@ module('Acceptance | Azure | configuration', function (hooks) {
         assert.dom(GENERAL.messageError).hasText('Error bad request', 'Error message is displayed.');
         assert.strictEqual(
           currentURL(),
-          `/vault/secrets/${path}/configuration/edit`,
+          `/vault/secrets-engines/${path}/configuration/edit`,
           'stays on the edit page'
         );
         assert
@@ -449,7 +449,7 @@ module('Acceptance | Azure | configuration', function (hooks) {
           .dom(GENERAL.infoRowValue('Identity token audience'))
           .hasText('azure-audience', `value for identity token audience shows on the config details view.`);
         await click(SES.configure);
-        await fillIn(GENERAL.inputByAttr('identityTokenAudience'), 'new-audience');
+        await fillIn(GENERAL.inputByAttr('identity_token_audience'), 'new-audience');
         await click(GENERAL.submitButton);
         assert
           .dom(GENERAL.infoRowValue('Identity token audience'))

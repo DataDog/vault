@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -38,7 +38,7 @@ export async function addSecondary(secondaryName, mountFilterMode = null) {
     await searchSelect.options.objectAt(0).click();
   }
 
-  await click('[data-test-secondary-add]');
+  await click(GENERAL.submitButton);
 }
 
 export const disableReplication = async (type, assert) => {

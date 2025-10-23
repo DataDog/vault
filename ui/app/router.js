@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,6 +17,15 @@ Router.map(function () {
       this.route('dashboard');
       this.mount('config-ui');
       this.mount('sync');
+      this.route('recovery', function () {
+        this.route('snapshots', function () {
+          this.route('load');
+          this.route('snapshot', { path: '/:snapshot_id' }, function () {
+            this.route('manage');
+            this.route('details');
+          });
+        });
+      });
       this.route('oidc-provider-ns', { path: '/*namespace/identity/oidc/provider/:provider_name/authorize' });
       this.route('oidc-provider', { path: '/identity/oidc/provider/:provider_name/authorize' });
       this.route('oidc-callback', { path: '/auth/*auth_path/oidc/callback' });
@@ -29,9 +38,7 @@ Router.map(function () {
       this.route('clients', function () {
         this.route('counts', function () {
           this.route('overview');
-          this.route('token');
-          this.route('sync');
-          this.route('acme');
+          this.route('client-list');
         });
         this.route('config');
         this.route('edit');
@@ -50,7 +57,6 @@ Router.map(function () {
             this.route('section', { path: '/:section_name' });
           });
         });
-        this.route('mount-secret-backend');
       });
       this.route('unseal');
       this.route('tools', function () {
@@ -99,6 +105,7 @@ Router.map(function () {
           this.route('show', { path: '/show/*lease_id' });
         });
         // the outer identity route handles group and entity items
+        // the "identity" routes expect :item_type to be plural
         this.route('identity', { path: '/identity/:item_type' }, function () {
           this.route('index', { path: '/' });
           this.route('create');
@@ -160,7 +167,12 @@ Router.map(function () {
           });
         });
       });
-      this.route('secrets', function () {
+      this.route('secrets-redirect', { path: '/secrets' }); // legacy redirect
+      this.route('secrets', { path: '/secrets-engines' }, function () {
+        this.route('enable', function () {
+          // TODO: Revisit path on create once components are separated - should we specify selected type or just keep it generic as /create?
+          this.route('create', { path: '/:mount_type' });
+        });
         this.route('backends', { path: '/' });
         this.route('backend', { path: '/:backend' }, function () {
           this.mount('kmip');
@@ -170,6 +182,9 @@ Router.map(function () {
           this.mount('pki');
           this.route('index', { path: '/' });
           this.route('configuration', function () {
+            this.route('index', { path: '/' }); // this is still used by old engines
+            this.route('general-settings');
+            this.route('plugin-settings');
             // only CONFIGURABLE_SECRET_ENGINES can be configured and access the edit route
             this.route('edit');
           });

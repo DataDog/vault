@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -18,7 +18,7 @@ export default class GcpSmForm extends Form<GcpSmFormData> {
   formFieldGroups = [
     new FormFieldGroup('default', [
       commonFields.name,
-      new FormField('projectId', 'string', {
+      new FormField('project_id', 'string', {
         label: 'Project ID',
         subText:
           'The target project to manage secrets in. If set, overrides the project derived from the service account JSON credentials or application default credentials.',

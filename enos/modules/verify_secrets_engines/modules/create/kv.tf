@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 locals {
@@ -93,7 +93,7 @@ resource "enos_remote_exec" "identity_group_kv_writers" {
     VAULT_INSTALL_DIR = var.vault_install_dir
   }
 
-  scripts = [abspath("${path.module}/../../scripts/write-payload.sh")]
+  scripts = [abspath("${path.module}/../../scripts/write.sh")]
 
   transport = {
     ssh = {

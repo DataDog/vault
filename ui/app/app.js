@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -24,7 +24,6 @@ export default class App extends Application {
           'version',
           'custom-messages',
           'api',
-          'store',
           'capabilities',
         ],
       },
@@ -98,6 +97,7 @@ export default class App extends Application {
     kv: {
       dependencies: {
         services: [
+          'api',
           'capabilities',
           'control-group',
           'download',
@@ -105,7 +105,6 @@ export default class App extends Application {
           'namespace',
           { 'app-router': 'router' },
           'secret-mount-path',
-          'store',
           'pagination',
           'version',
         ],

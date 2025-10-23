@@ -5,12 +5,12 @@
 /dist/
 /tmp/
 /vault-reporting/
+/vendor/
 
 # dependencies
 /bower_components/
 /node_modules/
 /.yarn/
-/api-client/
 
 # misc
 /coverage/

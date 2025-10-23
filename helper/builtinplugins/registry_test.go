@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package builtinplugins
@@ -99,7 +99,7 @@ func Test_RegistryKeyCounts(t *testing.T) {
 			name:       "number of auth plugins",
 			pluginType: consts.PluginTypeCredential,
 			want:       18,
-			entWant:    2,
+			entWant:    3,
 		},
 		{
 			name:       "number of database plugins",

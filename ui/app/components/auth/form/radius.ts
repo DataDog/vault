@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -25,8 +25,8 @@ export default class AuthFormRadius extends AuthBase {
     return this.normalizeAuthResponse(auth, {
       authMountPath: path,
       displayName: auth?.metadata?.username,
-      token: auth.clientToken,
-      ttl: auth.leaseDuration,
+      token: auth.client_token,
+      ttl: auth.lease_duration,
     });
   }
 }

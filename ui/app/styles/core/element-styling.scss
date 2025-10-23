@@ -1,9 +1,7 @@
-@use '../utils/color_variables';
-@use '../utils/font_variables';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -41,7 +39,7 @@ body,
 pre:not(.hds-code-block__code),
 strong,
 table th {
-  color: color_variables.$ui-gray-900;
+  color: var(--token-color-foreground-primary);
 }
 
 h1,
@@ -51,7 +49,7 @@ h4,
 h5,
 h6 {
   font-size: 100%;
-  font-weight: normal;
+  font-weight: var(--token-typography-font-weight-regular);
 }
 
 ul {
@@ -84,8 +82,8 @@ object {
 }
 
 html {
-  background-color: color_variables.$white;
-  font-size: size_variables.$base-font-size; // 16px
+  background-color: hsl(0, 0%, 100%);
+  font-size: var(--token-typography-body-300-font-size); // 16px
   -moz-osx-font-smoothing: grayscale;
   -webkit-font-smoothing: antialiased;
   min-width: 300px;
@@ -108,14 +106,14 @@ button,
 input,
 select,
 textarea {
-  font-family: font_variables.$family-sans;
+  font-family: var(--token-typography-font-stack-text);
 }
 
 code,
 pre {
   -moz-osx-font-smoothing: auto;
   -webkit-font-smoothing: inherit;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-family: var(--token-typography-font-stack-code);
   font-smooth: inherit;
 }
 
@@ -125,14 +123,14 @@ pre code {
 }
 
 body {
-  font-size: size_variables.$size-6;
-  line-height: 1.5;
+  font-size: var(--token-typography-body-300-font-size);
+  line-height: var(--token-typography-body-300-line-height);
   overflow-x: hidden;
   overflow-y: scroll;
 }
 
 a {
-  color: color_variables.$blue-500;
+  color: var(--token-color-foreground-action);
   cursor: pointer;
   text-decoration: underline;
 
@@ -144,19 +142,19 @@ a {
 }
 
 a:hover {
-  color: color_variables.$ui-gray-900;
+  color: var(--token-color-foreground-primary);
 }
 
 code {
   background-color: transparent;
-  color: color_variables.$ui-gray-700;
+  color: var(--token-color-foreground-faint);
   font-size: 1em;
-  font-weight: 400;
+  font-weight: var(--token-typography-font-weight-regular);
   padding: 0;
 }
 
 hr {
-  background-color: color_variables.$ui-gray-300;
+  background-color: var(--token-color-surface-strong);
   border: none;
   display: block;
   height: 1px;
@@ -194,7 +192,7 @@ label {
 // <Hds::Dropdown>
 .hds-dropdown-list-item {
   > button:disabled {
-    color: color_variables.$black;
+    color: hsl(0, 0%, 4%);
     opacity: 0.5;
     cursor: not-allowed;
   }

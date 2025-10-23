@@ -1,10 +1,9 @@
 @use '../utils/box-shadow_variables';
-@use '../utils/color_variables';
 @use '../utils/mixins';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -13,14 +12,14 @@
 .input,
 .textarea {
   align-items: center;
-  border-radius: size_variables.$radius;
+  border-radius: var(--token-border-radius-x-small);
   border: box-shadow_variables.$base-border;
-  box-shadow: 0 4px 1px rgba(color_variables.$black, 0.06) inset;
-  color: color_variables.$grey-dark;
+  box-shadow: 0 4px 1px rgba(hsl(0, 0%, 4%), 0.06) inset;
+  color: var(--token-color-foreground-faint);
   display: inline-flex;
-  font-size: size_variables.$size-6;
+  font-size: var(--token-typography-body-300-font-size);
   height: size_variables.$size-2;
-  line-height: 1.5;
+  line-height: var(--token-typography-body-300-line-height);
   max-width: 100%;
   padding-bottom: calc(0.375em - 1px);
   padding-left: size_variables.$spacing-12;
@@ -33,17 +32,17 @@
   &.is-active,
   &:focus-visible {
     outline: none;
-    background-color: color_variables.$white;
-    border-color: color_variables.$blue-500 !important;
+    background-color: hsl(0, 0%, 100%);
+    border-color: var(--token-color-palette-blue-200) !important;
     box-shadow: 0 0 0 0.125em rgba(21, 99, 255, 0.25);
   }
 
   &:hover {
-    border-color: color_variables.$ui-gray-300;
+    border-color: var(--token-color-palette-neutral-300);
   }
 
   @include mixins.until(size_variables.$desktop) {
-    font-size: size_variables.$size-6;
+    font-size: var(--token-typography-body-300-font-size);
   }
 
   &::placeholder {
@@ -53,13 +52,13 @@
 
 .input[disabled],
 .textarea[disabled] {
-  border-color: color_variables.$grey-light;
-  background-color: color_variables.$ui-gray-100;
-  color: color_variables.$ui-gray-500;
+  border-color: var(--token-color-palette-neutral-300);
+  background-color: var(--token-color-palette-neutral-100);
+  color: var(--token-color-foreground-disabled);
   cursor: not-allowed;
 
   &:hover {
-    border-color: color_variables.$grey-light;
+    border-color: var(--token-color-palette-neutral-300);
   }
 }
 
@@ -85,6 +84,6 @@
 // custom input
 .input-hint {
   padding: 0 size_variables.$spacing-10;
-  font-size: size_variables.$size-8;
+  font-size: var(--token-typography-body-200-font-size);
   color: var(--token-color-foreground-faint);
 }

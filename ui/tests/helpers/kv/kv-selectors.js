@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -36,7 +36,7 @@ export const PAGE = {
     deleteMetadata: '[data-test-kv-delete="delete-metadata"]',
   },
   detail: {
-    versionTimestamp: '[data-test-kv-version-tooltip-trigger]',
+    versionTimestamp: '[data-test-tooltip="kv-version"]',
     versionDropdown: '[data-test-version-dropdown]',
     version: (number) => `[data-test-version="${number}"]`,
     createNewVersion: '[data-test-create-new-version]',
@@ -58,14 +58,10 @@ export const PAGE = {
   list: {
     createSecret: '[data-test-toolbar-create-secret]',
     item: (secret) => (!secret ? '[data-test-list-item]' : `[data-test-list-item="${secret}"]`),
+    menuItem: (label) => `[data-test-list-menu-item="${label}"]`,
     filter: `[data-test-kv-list-filter]`,
-    listMenuDelete: `[data-test-popup-metadata-delete]`,
     overviewCard: '[data-test-overview-card-container="View secret"]',
     overviewInput: '[data-test-view-secret] input',
-    pagination: '[data-test-pagination]',
-    paginationInfo: '.hds-pagination-info',
-    paginationNext: '.hds-pagination-nav__arrow--direction-next',
-    paginationSelected: '.hds-pagination-nav__number--is-selected',
   },
   versions: {
     icon: (version) => `[data-test-icon-holder="${version}"]`,

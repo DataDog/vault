@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 # Shim module since CRT provided things will use the crt_bundle_path variable
@@ -24,7 +24,6 @@ variable "goos" {
 
 variable "artifactory_host" { default = null }
 variable "artifactory_repo" { default = null }
-variable "artifactory_username" { default = null }
 variable "artifactory_token" { default = null }
 variable "arch" { default = null }
 variable "artifact_path" { default = null }

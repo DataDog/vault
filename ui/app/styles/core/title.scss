@@ -1,9 +1,7 @@
-@use '../utils/color_variables';
-@use '../utils/font_variables';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -18,12 +16,12 @@
 .title {
   color: hsl(0, 0%, 21%);
   font-size: 2rem;
-  font-weight: font_variables.$font-weight-bold;
+  font-weight: var(--token-typography-font-weight-bold);
   line-height: 1.125;
   word-break: break-word;
 
   > a {
-    color: color_variables.$black;
+    color: hsl(0, 0%, 4%);
     text-decoration: none;
   }
 
@@ -37,7 +35,7 @@
   }
 
   &.is-4 {
-    font-size: size_variables.$size-4;
+    font-size: var(--token-typography-display-400-font-size);
   }
 
   &.is-5 {
@@ -45,7 +43,7 @@
   }
 
   &.is-6 {
-    font-size: size_variables.$size-6;
+    font-size: var(--token-typography-display-200-font-size);
   }
 
   &.is-7 {
@@ -53,7 +51,7 @@
   }
 
   &.is-8 {
-    font-size: size_variables.$size-8;
+    font-size: var(--token-typography-body-200-font-size);
   }
 }
 
@@ -64,5 +62,5 @@
 .is-subtitle-gray {
   text-transform: uppercase;
   font-size: size_variables.$size-7;
-  color: color_variables.$ui-gray-500;
+  color: var(--token-color-palette-neutral-400);
 }

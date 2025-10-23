@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,6 +16,7 @@ export default Factory.extend({
   period: 30,
   qr_size: 200,
   skew: 1,
+  self_enrollment_enabled: false,
   type: 'totp',
 
   afterCreate(record) {

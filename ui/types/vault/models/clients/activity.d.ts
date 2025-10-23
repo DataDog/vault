@@ -1,11 +1,14 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import type { Model } from 'vault/app-types';
-
-import type { ByMonthClients, ByNamespaceClients, TotalClients } from 'core/utils/client-count-utils';
+import type {
+  ByMonthClients,
+  ByNamespaceClients,
+  TotalClients,
+} from 'vault/vault/client-counts/activity-api';
 
 export default interface ClientsActivityModel extends Model {
   byMonth: ByMonthClients[];

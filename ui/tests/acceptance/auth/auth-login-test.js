@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -21,7 +21,8 @@ import { AUTH_FORM } from 'vault/tests/helpers/auth/auth-form-selectors';
 import { v4 as uuidv4 } from 'uuid';
 import { GENERAL } from 'vault/tests/helpers/general-selectors';
 import sinon from 'sinon';
-import { supportedTypes } from 'vault/utils/auth-form-helpers';
+import { ERROR_JWT_LOGIN, supportedTypes } from 'vault/utils/auth-form-helpers';
+import { overrideResponse } from 'vault/tests/helpers/stubs';
 
 const { rootToken } = VAULT_KEYS;
 
@@ -52,6 +53,20 @@ module('Acceptance | auth login', function (hooks) {
   test('it selects auth method if "with" query param ends in an unencoded a slash', async function (assert) {
     await visit('/vault/auth?with=userpass/');
     assert.dom(AUTH_FORM.selectMethod).hasValue('userpass');
+  });
+
+  test('it pre-fills OIDC role if specified in query param', async function (assert) {
+    const role = AUTH_METHOD_LOGIN_DATA.oidc.role;
+    await visit(`/vault/auth?with=oidc&role=${role}`);
+    assert.dom(AUTH_FORM.selectMethod).hasValue('oidc');
+    assert.dom(GENERAL.inputByAttr('role')).hasValue(role);
+  });
+
+  test('enterprise: it pre-fills SAML role if specified in query param', async function (assert) {
+    const role = AUTH_METHOD_LOGIN_DATA.oidc.role;
+    await visit(`/vault/auth?with=saml&role=${role}`);
+    assert.dom(AUTH_FORM.selectMethod).hasValue('saml');
+    assert.dom(GENERAL.inputByAttr('role')).hasValue(role);
   });
 
   test('it selects auth method if "with" query param ends in an encoded slash and matches an auth type', async function (assert) {
@@ -90,6 +105,21 @@ module('Acceptance | auth login', function (hooks) {
     assert.dom(GENERAL.backButton).doesNotExist('it does not render "Back" button');
     assert.dom(AUTH_FORM.authForm('token')).exists('it renders token form');
     assert.dom(AUTH_FORM.tabs).doesNotExist();
+  });
+
+  test('it renders default view if sys/internal/ui/mounts has unsupported type', async function (assert) {
+    this.server.get('/sys/internal/ui/mounts', () => {
+      return { data: { auth: { 'custom-auth/': { type: 'custom-auth' } } } };
+    });
+    await logout();
+    await visit('/vault/auth');
+    await waitFor(AUTH_FORM.form);
+    assert.dom(GENERAL.selectByAttr('auth type')).exists('dropdown renders');
+    assert.dom(GENERAL.selectByAttr('auth type')).hasValue('token', 'dropdown has default "Token" selected');
+    // dropdown could still render in "Sign in with other methods" view, so make sure we're not in a weird state
+    assert.dom(GENERAL.backButton).doesNotExist('it does not render "Back" button');
+    assert.dom(AUTH_FORM.authForm('token')).exists('it renders token form');
+    assert.dom(AUTH_FORM.tabs).doesNotExist('it does not render auth tabs');
   });
 
   module('listing visibility', function (hooks) {
@@ -168,7 +198,7 @@ module('Acceptance | auth login', function (hooks) {
   // Assertion count is one for the URL and one for each payload key
   module('it sends the right payload when authenticating', function (hooks) {
     hooks.beforeEach(function () {
-      this.assertAuthRequest = (assert, req, expectedPayload) => {
+      this.assertAuthPayload = (assert, req, expectedPayload) => {
         const body = JSON.parse(req.requestBody);
         assert.true(true, `it calls the correct URL: ${req.url}`);
 
@@ -213,7 +243,7 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'github';
       this.expectedPayload = { token: 'mysupersecuretoken' };
       this.server.post('/auth/custom-github/login', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -225,24 +255,30 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'ldap';
       this.expectedPayload = { password: 'some-password' };
       this.server.post('/auth/custom-ldap/login/matilda', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
       await this.fillAndLogIn();
     });
 
+    // JWT and OIDC use the same request URLs and how the login happens depends on the configuration.
+    // For simplicity, mocking each to be configured as their namesake.
     test('jwt', async function (assert) {
-      // auth_url is hit twice (once when inputs are filled and again on submit)
-      // so the assertion count is doubled
-      assert.expect(6);
+      // assertion for each payload key and request made
+      assert.expect(3);
       this.authType = 'jwt';
       this.expectedPayload = {
-        redirect_uri: 'http://localhost:7357/ui/vault/auth/custom-jwt/oidc/callback',
+        jwt: 'some-jwt-token',
         role: 'some-dev',
       };
-      this.server.post('/auth/custom-jwt/oidc/auth_url', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+      // Additional setup so that JWT method is configured as jwt (not OIDC)
+      this.server.post(`/auth/:path/oidc/auth_url`, () =>
+        overrideResponse(400, { errors: [ERROR_JWT_LOGIN] })
+      );
+
+      this.server.post('/auth/custom-jwt/login', (schema, req) => {
+        this.assertAuthPayload(assert, req, this.expectedPayload); // 1 assertion + 1 for each payload key
         req.passthrough();
       });
 
@@ -259,7 +295,7 @@ module('Acceptance | auth login', function (hooks) {
         role: 'some-dev',
       };
       this.server.post('/auth/custom-oidc/oidc/auth_url', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -271,7 +307,7 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'okta';
       this.expectedPayload = { password: 'some-password' };
       this.server.post('/auth/custom-okta/login/matilda', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -283,7 +319,7 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'radius';
       this.expectedPayload = { password: 'some-password' };
       this.server.post('/auth/custom-radius/login/matilda', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -295,7 +331,7 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'userpass';
       this.expectedPayload = { password: 'some-password' };
       this.server.post('/auth/custom-userpass/login/matilda', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -307,7 +343,7 @@ module('Acceptance | auth login', function (hooks) {
       this.authType = 'saml';
       this.expectedPayload = { role: 'some-dev' };
       this.server.post('/auth/custom-saml/sso_service_url', (schema, req) => {
-        this.assertAuthRequest(assert, req, this.expectedPayload);
+        this.assertAuthPayload(assert, req, this.expectedPayload);
         req.passthrough();
       });
 
@@ -359,7 +395,7 @@ module('Acceptance | auth login', function (hooks) {
 
       // login with token to reproduce bug
       await loginNs(ns, token);
-      await visit(`/vault/secrets/${db}/overview?namespace=${ns}`);
+      await visit(`/vault/secrets-engines/${db}/overview?namespace=${ns}`);
       assert
         .dom('[data-test-overview-card="Roles"]')
         .hasText('Roles Create new', 'database overview renders');
@@ -382,7 +418,7 @@ module('Acceptance | auth login', function (hooks) {
       await click(GENERAL.tab('overview'));
       assert.strictEqual(
         currentURL(),
-        `/vault/secrets/${db}/overview?namespace=${ns}`,
+        `/vault/secrets-engines/${db}/overview?namespace=${ns}`,
         'it navigates to database overview'
       );
 
@@ -399,7 +435,7 @@ module('Acceptance | auth login', function (hooks) {
       await visit('/vault/auth');
 
       this.server.get('/sys/internal/ui/mounts', (_, req) => {
-        assert.strictEqual(req.requestHeaders['X-Vault-Namespace'], 'admin', 'header contains namespace');
+        assert.strictEqual(req.requestHeaders['x-vault-namespace'], 'admin', 'header contains namespace');
         return req.passthrough();
       });
       await typeIn(GENERAL.inputByAttr('namespace'), 'admin');

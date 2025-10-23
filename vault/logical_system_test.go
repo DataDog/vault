@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -2813,21 +2813,32 @@ func TestSystemBackend_policyCRUD(t *testing.T) {
 // TestSystemBackend_writeHCLDuplicateAttributes checks that trying to create a policy with duplicate HCL attributes
 // results in a warning being returned by the API
 func TestSystemBackend_writeHCLDuplicateAttributes(t *testing.T) {
-	b := testSystemBackend(t)
-
 	// policy with duplicate attribute
 	rules := `path "foo/" { policy = "read" policy = "read" }`
 	req := logical.TestRequest(t, logical.UpdateOperation, "policy/foo")
 	req.Data["policy"] = rules
-	resp, err := b.HandleRequest(namespace.RootContext(nil), req)
-	// TODO (HCL_DUP_KEYS_DEPRECATION): change this test to expect an error when creating a policy with duplicate attributes
-	if err != nil {
-		t.Fatalf("err: %v %#v", err, resp)
-	}
-	if resp != nil && (resp.IsError() || len(resp.Data) > 0) {
-		t.Fatalf("bad: %#v", resp)
-	}
-	require.Contains(t, resp.Warnings, "policy contains duplicate attributes, which will no longer be supported in a future version")
+
+	t.Run("fails with env unset", func(t *testing.T) {
+		b := testSystemBackend(t)
+		resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+		require.Error(t, err)
+		require.Error(t, resp.Error())
+		require.EqualError(t, resp.Error(), "failed to parse policy: The argument \"policy\" at 1:31 was already set. Each argument can only be defined once")
+	})
+
+	// TODO (HCL_DUP_KEYS_DEPRECATION): leave only test above once deprecation is done
+	t.Run("warning with env set", func(t *testing.T) {
+		t.Setenv(random.AllowHclDuplicatesEnvVar, "true")
+		b := testSystemBackend(t)
+		resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+		if err != nil {
+			t.Fatalf("err: %v %#v", err, resp)
+		}
+		if resp != nil && (resp.IsError() || len(resp.Data) > 0) {
+			t.Fatalf("bad: %#v", resp)
+		}
+		require.Contains(t, resp.Warnings, "policy contains duplicate attributes, which will no longer be supported in a future version")
+	})
 }
 
 func TestSystemBackend_enableAudit(t *testing.T) {
@@ -4725,6 +4736,91 @@ func TestSystemBackend_InternalUIMount(t *testing.T) {
 	if err != logical.ErrPermissionDenied {
 		t.Fatal("expected permission denied error")
 	}
+}
+
+// TestSystemBackend_InternalUIResultantACL verifies that segment wildcard and prefix glob ACLs are emitted correctly in the internal UI resultant-acl endpoint.
+func TestSystemBackend_InternalUIResultantACL(t *testing.T) {
+	ctx := namespace.RootContext(nil)
+	core, b, rootToken := testCoreSystemBackend(t)
+
+	// Define a policy that includes a segment wildcard and a prefix glob.
+	rules := `
+name = "ui-res-acl-test"
+path "+/auth/*" {
+  capabilities = ["read"]
+}
+path "sys/*" {
+  capabilities = ["update"]
+}`
+
+	pol, err := ParseACLPolicy(namespace.RootNamespace, rules)
+	require.NoError(t, err)
+	require.NoError(t, core.policyStore.SetPolicy(ctx, pol))
+
+	// Create a non-root token that has this policy attached
+	testMakeServiceTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"ui-res-acl-test"})
+
+	// Call the endpoint as the non-root token; this endpoint evaluates the caller.
+	req := logical.TestRequest(t, logical.ReadOperation, "internal/ui/resultant-acl")
+	req.ClientToken = "tokenid"
+
+	resp, err := b.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
+
+	// Validate response shape.
+	schema.ValidateResponse(
+		t,
+		schema.GetResponseSchema(t, b.(*SystemBackend).Route(req.Path), req.Operation),
+		resp,
+		true,
+	)
+
+	// Basic flags we expect back for a non-root token we’re inspecting.
+	if v, ok := resp.Data["root"].(bool); ok {
+		require.False(t, v, "expected non-root token")
+	}
+
+	// Extract glob paths and ensure both entries are present with expected caps.
+	globPaths, ok := resp.Data["glob_paths"].(map[string]interface{})
+	require.True(t, ok, "glob_paths missing or wrong type")
+
+	getCaps := func(m map[string]interface{}) []string {
+		raw := m["capabilities"]
+		switch a := raw.(type) {
+		case []string:
+			return a
+		case []interface{}:
+			out := make([]string, 0, len(a))
+			for _, x := range a {
+				if s, ok := x.(string); ok {
+					out = append(out, s)
+				}
+			}
+			return out
+		default:
+			return nil
+		}
+	}
+
+	// 1) segment wildcard preserved
+	segRaw, ok := globPaths["+/auth/*"]
+	require.True(t, ok, "segment wildcard path not found")
+	seg, ok := segRaw.(map[string]interface{})
+	require.True(t, ok, "segment wildcard value wrong type")
+	require.Equal(t, []string{"read"}, getCaps(seg))
+
+	// 2) prefix glob preserved (the backend may normalize to "sys/*" or "sys/")
+	prefixKey := "sys/*"
+	if _, ok := globPaths["sys/"]; ok {
+		prefixKey = "sys/"
+	}
+	prefRaw, ok := globPaths[prefixKey]
+	require.True(t, ok, "prefix glob path not found")
+	pref, ok := prefRaw.(map[string]interface{})
+	require.True(t, ok, "prefix glob value wrong type")
+	require.Contains(t, getCaps(pref), "update")
 }
 
 func TestSystemBackend_OpenAPI(t *testing.T) {

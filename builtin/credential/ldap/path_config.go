@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package ldap
@@ -20,6 +20,8 @@ import (
 const userFilterWarning = "userfilter configured does not consider userattr and may result in colliding entity aliases on logins"
 
 const rootRotationJobName = "ldap-auth-root-creds"
+
+const rootRotationUrlKey = "rotation_url"
 
 func pathConfig(b *backend) *framework.Path {
 	p := &framework.Path{
@@ -62,6 +64,13 @@ func pathConfig(b *backend) *framework.Path {
 	}
 
 	automatedrotationutil.AddAutomatedRotationFields(p.Fields)
+
+	p.Fields[rootRotationUrlKey] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "LDAP URL to connect to for password rotation if it is different from the configured LDAP URL",
+		Default:     "",
+		Required:    false,
+	}
 
 	return p
 }
@@ -149,6 +158,7 @@ func (b *backend) pathConfigRead(ctx context.Context, req *logical.Request, d *f
 	cfg.PopulateAutomatedRotationData(data)
 
 	data["password_policy"] = cfg.PasswordPolicy
+	data[rootRotationUrlKey] = cfg.RotationUrl
 
 	resp := &logical.Response{
 		Data: data,
@@ -224,6 +234,9 @@ func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, d *
 
 	if passwordPolicy, ok := d.GetOk("password_policy"); ok {
 		cfg.PasswordPolicy = passwordPolicy.(string)
+	}
+	if rotationUrl, ok := d.GetOk(rootRotationUrlKey); ok {
+		cfg.RotationUrl = rotationUrl.(string)
 	}
 
 	var rotOp string
@@ -316,6 +329,7 @@ type ldapConfigEntry struct {
 	automatedrotationutil.AutomatedRotationParams
 
 	PasswordPolicy string `json:"password_policy"`
+	RotationUrl    string `json:"rotation_url"`
 }
 
 const pathConfigHelpSyn = `

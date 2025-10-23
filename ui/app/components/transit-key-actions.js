@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -167,6 +167,16 @@ export default class TransitKeyActions extends Component {
 
   @action toggleEncodeBase64() {
     this.props.encodedBase64 = !this.props.encodedBase64;
+  }
+
+  @action updateContext(newValue) {
+    this.props.context = newValue;
+    this.props = { ...this.props }; // Trigger reactivity
+  }
+
+  @action updateNonce(newValue) {
+    this.props.nonce = newValue;
+    this.props = { ...this.props }; // Trigger reactivity
   }
 
   @action clearSpecificProps(arrayToClear) {

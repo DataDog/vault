@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package git
@@ -127,13 +127,9 @@ func (e *ExecResponse) String() string {
 	b := strings.Builder{}
 	b.WriteString(e.Cmd)
 	b.WriteString("\n")
-	for _, line := range strings.Split(string(e.Stdout), "\n") {
-		b.WriteString(line)
-	}
+	b.WriteString(string(e.Stdout))
 	b.WriteString("\n")
-	for _, line := range strings.Split(string(e.Stderr), "\n") {
-		b.WriteString(line)
-	}
+	b.WriteString(string(e.Stderr))
 	b.WriteString("\n")
 
 	return b.String()

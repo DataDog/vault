@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -13,12 +13,13 @@ import { POSSIBLE_FIELDS } from 'vault/utils/auth-form-helpers';
 import { ResponseError } from '@hashicorp/vault-client-typescript';
 
 import type { HTMLElementEvent } from 'vault/forms';
-import type { LoginFields, NormalizedAuthData, NormalizeAuthResponseKeys } from 'vault/vault/auth/form';
-import type { AuthResponseAuthKey, AuthResponseDataKey } from 'vault/vault/auth/methods';
+import type { LoginFields, NormalizedAuthData, NormalizeAuthResponseKeys } from 'vault/auth/form';
+import type { AuthResponseAuthKey, AuthResponseDataKey } from 'vault/auth/methods';
 import type ApiService from 'vault/services/api';
 import type ClusterModel from 'vault/models/cluster';
 import type FlagsService from 'vault/services/flags';
 import type VersionService from 'vault/services/version';
+import type AuthService from 'vault/services/auth';
 
 /**
  * @module Auth::Base
@@ -26,14 +27,14 @@ import type VersionService from 'vault/services/version';
  * @param {string} authType - chosen login method type
  * @param {object} cluster - The cluster model which contains information such as cluster id, name and boolean for if the cluster is in standby
  * @param {function} onError - callback if there is a login error
- * @param {function} onSuccess - calls onAuthResponse in auth/page redirects if successful
+ * @param {function} handleAuthResponse - calls onAuthResponse in auth/page redirects if successful
  */
 
 interface Args {
   authType: string;
   cluster: ClusterModel;
+  handleAuthResponse: CallableFunction;
   onError: CallableFunction;
-  onSuccess: CallableFunction;
 }
 
 // This an "abstract" class because it is not meant to be instantiated directly and should be extended from by each auth method type.
@@ -43,6 +44,7 @@ export default abstract class AuthBase extends Component<Args> {
   @service declare readonly api: ApiService;
   @service declare readonly flags: FlagsService;
   @service declare readonly version: VersionService;
+  @service declare readonly auth: AuthService;
 
   @action
   onSubmit(event: HTMLElementEvent<HTMLFormElement>) {
@@ -57,7 +59,7 @@ export default abstract class AuthBase extends Component<Args> {
       try {
         const normalizedAuthData = await this.loginRequest(formData);
         // calls onAuthResponse in parent auth/page.js component
-        this.args.onSuccess(normalizedAuthData);
+        this.args.handleAuthResponse(normalizedAuthData);
       } catch (error) {
         this.onError(error as ResponseError);
       }
@@ -131,14 +133,13 @@ export default abstract class AuthBase extends Component<Args> {
     authResponse: AuthResponseAuthKey | AuthResponseDataKey,
     { authMountPath, displayName, token, ttl }: NormalizeAuthResponseKeys
   ) => {
-    return {
-      // authResponse will include enforcement data in the `mfaRequirement` key - if MFA is configured.
-      ...authResponse,
+    // authResponse will include enforcement data in the `mfa_requirement` key - if MFA is configured.
+    return this.auth.normalizeAuthData(authResponse, {
       authMethodType: this.args.authType,
       authMountPath,
       displayName,
       token,
       ttl,
-    };
+    });
   };
 }

@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 // Given the architecture, distro, version, edition, and desired package type,
@@ -152,13 +152,13 @@ locals {
     }
     rhel = {
       "8.10" = "RHEL/8/${local.release_sub_path_rpm}"
-      "9.5"  = "RHEL/9/${local.release_sub_path_rpm}"
+      "9.6"  = "RHEL/9/${local.release_sub_path_rpm}"
+      "10.0" = "RHEL/10/${local.release_sub_path_rpm}"
     }
     sles = {
       "15.6" = "RHEL/9/${local.release_sub_path_rpm}"
     }
     ubuntu = {
-      "20.04" = local.release_path_deb,
       "22.04" = local.release_path_deb,
       "24.04" = local.release_path_deb,
     }

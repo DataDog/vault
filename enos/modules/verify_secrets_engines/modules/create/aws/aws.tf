@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 terraform {
@@ -59,7 +59,7 @@ locals {
     aws_access_key = aws_iam_access_key.aws_enos_test_user.id
     aws_secret_key = aws_iam_access_key.aws_enos_test_user.secret
     mount          = local.aws_mount
-    region         = data.aws_region.current.name
+    region         = data.aws_region.current.region
     vault_aws_role = local.vault_aws_role
   }
 }

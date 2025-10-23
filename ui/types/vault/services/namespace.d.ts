@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,6 +11,9 @@ interface PathsResponse {
     capabilities: string[];
   };
 }
+
+export const ROOT_NAMESPACE: string;
+
 export default class NamespaceService extends Service {
   accessibleNamespaces: string[];
   userRootNamespace: string;

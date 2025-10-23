@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -31,13 +31,13 @@ export default class DestinationsTabsToolbar extends Component<Args> {
   get showSyncBtn() {
     const { destination, capabilities } = this.args;
     const path = this.capabilities.pathFor('syncSetAssociation', destination);
-    return capabilities[path]?.canUpdate && !destination.purgeInitiatedAt;
+    return capabilities[path]?.canUpdate && !destination.purge_initiated_at;
   }
 
   get showEditBtn() {
     const { destination, capabilities } = this.args;
     const path = this.capabilities.pathFor('syncDestination', destination);
-    return capabilities[path]?.canUpdate && !destination.purgeInitiatedAt;
+    return capabilities[path]?.canUpdate && !destination.purge_initiated_at;
   }
 
   @action

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -33,4 +33,8 @@ func (observations *ObservationSystem) RecordObservationToLedger(_ context.Conte
 
 func NewObservationSystem(_ *NewObservationSystemConfig) (*ObservationSystem, error) {
 	return &ObservationSystem{}, nil
+}
+
+func (observations *ObservationSystem) Reload() error {
+	return nil
 }

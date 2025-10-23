@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,7 +10,7 @@ import { tracked } from '@glimmer/tracking';
 import { buildWaiter } from '@ember/test-waiters';
 
 const waiter = buildWaiter('namespaces');
-const ROOT_NAMESPACE = '';
+export const ROOT_NAMESPACE = '';
 export default class NamespaceService extends Service {
   @service auth;
   @service flags;

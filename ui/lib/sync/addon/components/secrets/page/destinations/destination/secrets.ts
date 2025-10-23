@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -51,8 +51,8 @@ export default class SyncSecretsDestinationsPageComponent extends Component<Args
   async update(association: AssociatedSecret, operation: string) {
     try {
       const { name, type } = this.args.destination;
-      const { mount, secretName } = association;
-      const body = { mount, secretName };
+      const { mount, secret_name } = association;
+      const body = { mount, secret_name };
 
       if (operation === 'set') {
         await this.api.sys.systemWriteSyncDestinationsTypeNameAssociationsSet(name, type, body);

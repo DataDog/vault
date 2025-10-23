@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -35,7 +35,7 @@ const appConfig = {
     throwUnlessParallelizable: true,
   },
   hinting: isTest,
-  tests: isTest,
+  tests: !isProd,
   sourcemaps: {
     enabled: !isProd,
   },
@@ -49,7 +49,7 @@ const appConfig = {
       './node_modules/@hashicorp/design-system-tokens/dist/products/css',
       './node_modules/ember-basic-dropdown/',
       './node_modules/ember-power-select/',
-      './node_modules/@hashicorp/vault-reporting/dist/styles',
+      './node_modules/@hashicorp-internal/vault-reporting/dist/styles',
     ],
   },
   minifyCSS: {
@@ -80,11 +80,10 @@ module.exports = function (defaults) {
   const app = new EmberApp(defaults, appConfig);
 
   app.import('node_modules/jsonlint/lib/jsonlint.js');
-  app.import('node_modules/codemirror/addon/lint/lint.css');
-  app.import('node_modules/codemirror/lib/codemirror.css');
   app.import('node_modules/text-encoder-lite/text-encoder-lite.js');
-  app.import('node_modules/jsondiffpatch/dist/jsondiffpatch.umd.js');
-  app.import('node_modules/jsondiffpatch/dist/formatters-styles/html.css');
+  app.import('vendor/jsondiffpatch.umd.js');
+  app.import('vendor/htmlformatter.umd.js');
+  app.import('node_modules/jsondiffpatch/lib/formatters/styles/html.css');
 
   app.import('app/styles/bulma/bulma-radio-checkbox.css');
   app.import(

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/vault/builtin/plugin"
 	"github.com/hashicorp/vault/helper/metricsutil"
 	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/helper/pluginconsts"
 	"github.com/hashicorp/vault/helper/versions"
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/helper/jsonutil"
@@ -83,6 +84,7 @@ const (
 	mountTypeNSCubbyhole = "ns_cubbyhole"
 	mountTypeToken       = "token"
 	mountTypeNSToken     = "ns_token"
+	mountTypeDatabase    = "database"
 
 	MountTableUpdateStorage   = true
 	MountTableNoUpdateStorage = false
@@ -1774,6 +1776,12 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 	conf["plugin_type"] = consts.PluginTypeSecrets.String()
 	conf["plugin_version"] = pluginVersion
 
+	pluginOptionsVersion := entry.Options["version"]
+	// If Version isn't specified for a KV mount, it must be version 1.
+	if pluginOptionsVersion == "" && entry.Type == pluginconsts.SecretEngineKV {
+		pluginOptionsVersion = "1"
+	}
+
 	backendLogger := c.baseLogger.Named(fmt.Sprintf("secrets.%s.%s", t, entry.Accessor))
 	c.AddLogger(backendLogger)
 	pluginEventSender, err := c.events.WithPlugin(entry.namespace, &logical.EventPluginInfo{
@@ -1782,10 +1790,15 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 		MountPath:     entry.Path,
 		Plugin:        entry.Type,
 		PluginVersion: pluginVersion,
-		Version:       entry.Options["version"],
+		Version:       pluginOptionsVersion,
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	pluginRunningVersion := pluginVersion
+	if pluginRunningVersion == "" && runningSha == "" {
+		pluginRunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
 	}
 
 	pluginObservationRecorder, err := c.observations.WithPlugin(entry.namespace, &logical.ObservationPluginInfo{
@@ -1794,8 +1807,8 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 		MountPath:            entry.Path,
 		Plugin:               entry.Type,
 		PluginVersion:        pluginVersion,
-		RunningPluginVersion: entry.RunningVersion,
-		Version:              entry.Options["version"],
+		RunningPluginVersion: pluginRunningVersion,
+		Version:              pluginOptionsVersion,
 		Local:                entry.Local,
 	})
 	if err != nil {
@@ -1822,11 +1835,8 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 		return nil, fmt.Errorf("nil backend of type %q returned from factory", t)
 	}
 
-	entry.RunningVersion = pluginVersion
+	entry.RunningVersion = pluginRunningVersion
 	entry.RunningSha256 = runningSha
-	if entry.RunningVersion == "" && entry.RunningSha256 == "" {
-		entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
-	}
 	addLicenseCallback(c, backend)
 
 	return backend, nil

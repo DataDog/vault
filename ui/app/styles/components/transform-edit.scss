@@ -1,22 +1,20 @@
-@use '../utils/color_variables';
-@use '../utils/font_variables';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .copy-text {
-  background: color_variables.$ui-gray-010;
+  background: var(--token-color-surface-faint);
 
   & > code {
-    color: color_variables.$ui-gray-800;
+    color: var(--token-color-foreground-primary);
     padding: 14px;
   }
 }
 .transform-pattern-text div:not(:first-child) {
-  font-family: font_variables.$family-monospace;
+  font-family: var(--token-typography-font-stack-code);
 }
 .transform-decode-formats:not(:last-child) {
   margin-bottom: size_variables.$spacing-12;

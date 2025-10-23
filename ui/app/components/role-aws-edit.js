@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -43,12 +43,12 @@ export default RoleEdit.extend({
       });
     },
 
-    codemirrorUpdated(attr, val, codemirror) {
-      codemirror.performLint();
-      const hasErrors = codemirror.state.lint.marked.length > 0;
-
-      if (!hasErrors) {
-        set(this.model, attr, val);
+    editorUpdated(attr, val) {
+      // wont set invalid JSON to the model
+      try {
+        set(this.model, attr, JSON.parse(val));
+      } catch {
+        // linting is handled by the component
       }
     },
   },

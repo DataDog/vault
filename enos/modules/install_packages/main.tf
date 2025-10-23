@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 terraform {
@@ -27,7 +27,8 @@ locals {
     }
     "rhel" = {
       "8.10" = "https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm"
-      "9.5"  = "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm"
+      "9.6"  = "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm"
+      "10.0" = "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
     }
   }
 }

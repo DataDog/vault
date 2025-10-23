@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -30,14 +30,14 @@ export default class SyncDestinationSecretsRoute extends Route {
     ) as DestinationRouteModel;
 
     const {
-      associatedSecrets = {},
-      storeName,
-      storeType,
+      associated_secrets = {},
+      store_name,
+      store_type,
     } = await this.api.sys.systemReadSyncDestinationsTypeNameAssociations(destination.name, destination.type);
 
-    const associations = Object.values(associatedSecrets).map((association) => ({
-      destinationName: storeName,
-      destinationType: storeType,
+    const associations = Object.values(associated_secrets).map((association) => ({
+      destination_name: store_name,
+      destination_type: store_type,
       ...association,
     }));
 

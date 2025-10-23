@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package pb
@@ -92,6 +92,7 @@ func TestTranslation_Request(t *testing.T) {
 				},
 			},
 			RequiresSnapshotID: "abcd",
+			RecoverSourcePath:  "path",
 		},
 		{
 			ID:                 "ID",
@@ -172,6 +173,7 @@ func TestTranslation_Request(t *testing.T) {
 			PolicyOverride:           true,
 			Unauthenticated:          true,
 			RequiresSnapshotID:       "abcd",
+			RecoverSourcePath:        "path",
 		},
 	}
 

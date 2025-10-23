@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -15,12 +15,10 @@
  */
 
 import Component from '@glimmer/component';
-import { setComponentTemplate } from '@ember/component';
 import { capitalize, dasherize } from '@ember/string';
 import { humanize } from 'vault/helpers/humanize';
-import layout from '../templates/components/readonly-form-field';
 
-class ReadonlyFormField extends Component {
+export default class ReadonlyFormField extends Component {
   get labelString() {
     if (!this.args.attr) {
       return '';
@@ -36,5 +34,3 @@ class ReadonlyFormField extends Component {
     return '';
   }
 }
-
-export default setComponentTemplate(layout, ReadonlyFormField);

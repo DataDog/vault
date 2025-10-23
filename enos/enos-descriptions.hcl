@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 globals {
@@ -23,6 +23,10 @@ globals {
       create a SoftHSM slot and associated token which can be distributed to all target nodes. When
       using 'awskms' a new AWSKMS key will be created. The necessary security groups and policies
       for Vault target nodes to access it the AWSKMS key are handled in the target modules.
+    EOF
+
+    create_external_integration_target = <<-EOF
+      Creates the infrastructure necessary to host external services that we need to test some integrations.
     EOF
 
     create_vault_cluster = <<-EOF
@@ -102,6 +106,10 @@ globals {
       start the Vault agent.
     EOF
 
+    set_up_external_integration_target = <<-EOF
+      Installs and configures software services on those target machines to test integrations.
+    EOF
+
     stop_vault = <<-EOF
       Stop the Vault cluster by stopping the vault service via systemctl.
     EOF
@@ -168,15 +176,25 @@ globals {
         - v1/identity/*
         - v1/kv/*
         - v1/sys/policy/*
+        - v1/kmip/*
+        - v1/ldap/*
     EOF
 
     verify_secrets_engines_read = <<-EOF
-      Verify that data that we've created previously is still valid, consistent, and duarable.
+      Verify that data that we've created previously is still valid, consistent, and durable.
       This includes:
         - v1/auth/userpass/*
         - v1/identity/*
         - v1/kv/*
         - v1/sys/policy/*
+        - v1/kmip/*
+        - v1/ldap/*
+    EOF
+
+    verify_secrets_engines_delete = <<-EOF
+      Verify that data that we've created previously can be deleted with no errors.
+      This includes:
+        - v1/ssh/*
     EOF
 
     verify_ui = <<-EOF

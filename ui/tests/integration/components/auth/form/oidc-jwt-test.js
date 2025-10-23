@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -35,7 +35,7 @@ const authUrlRequestTests = (test) => {
       const { role } = JSON.parse(req.requestBody);
       assert.true(true, 'it makes request to auth_url');
       assert.strictEqual(role, '', 'role is empty');
-      return { data: { authUrl: '123-example.com' } };
+      return { data: { auth_url: '123-example.com' } };
     });
     await this.renderComponent();
   });
@@ -100,7 +100,7 @@ const oidcLoginTests = (test) => {
   // true success has to be asserted in acceptance tests because it's not possible to mock a trusted message event
   test('it opens the popup window on submit', async function (assert) {
     this.server.post(`/auth/${this.authType}/oidc/auth_url`, () => {
-      return { data: { authUrl: '123-example.com' } };
+      return { data: { auth_url: '123-example.com' } };
     });
     sinon.replaceGetter(window, 'screen', () => ({ height: 600, width: 500 }));
     await this.renderComponent();
@@ -142,7 +142,7 @@ const oidcLoginTests = (test) => {
   });
 
   test('it fires onError callback on submit when auth_url request is successful but missing auth_url', async function (assert) {
-    this.server.post('/auth/:path/oidc/auth_url', () => ({ data: { authUrl: '' } }));
+    this.server.post('/auth/:path/oidc/auth_url', () => ({ data: { auth_url: '' } }));
     await this.renderComponent();
     await click(GENERAL.submitButton);
 
@@ -180,7 +180,7 @@ const oidcLoginTests = (test) => {
 
     cancelTimers();
     await settled();
-    assert.false(this.onSuccess.called, 'onSuccess is not called');
+    assert.false(this.handleAuthResponse.called, 'handleAuthResponse is not called');
 
     // Cleanup
     window.removeEventListener('message', assertEvent);
@@ -213,7 +213,7 @@ const oidcLoginTests = (test) => {
     window.dispatchEvent(new MessageEvent('message', message));
     cancelTimers();
     await settled();
-    assert.false(this.onSuccess.called, 'onSuccess is not called');
+    assert.false(this.handleAuthResponse.called, 'handleAuthResponse is not called');
 
     // Cleanup
     window.removeEventListener('message', assertEvent);
@@ -228,7 +228,7 @@ module('Integration | Component | auth | form | oidc-jwt', function (hooks) {
   hooks.beforeEach(function () {
     this.cluster = { id: 1 };
     this.onError = sinon.spy();
-    this.onSuccess = sinon.spy();
+    this.handleAuthResponse = sinon.spy();
     this.routerStub = sinon.stub(this.owner.lookup('service:router'), 'urlFor').returns('123-example.com');
     const api = this.owner.lookup('service:api');
 
@@ -270,7 +270,7 @@ module('Integration | Component | auth | form | oidc-jwt', function (hooks) {
             @authType={{this.authType}} 
             @cluster={{this.cluster}}
             @onError={{this.onError}}
-            @onSuccess={{this.onSuccess}}
+            @handleAuthResponse={{this.handleAuthResponse}}
           >
             <:advancedSettings>
               <label for="path">Mount path</label>
@@ -283,7 +283,7 @@ module('Integration | Component | auth | form | oidc-jwt', function (hooks) {
         @authType={{this.authType}}
         @cluster={{this.cluster}}
         @onError={{this.onError}}
-        @onSuccess={{this.onSuccess}}
+        @handleAuthResponse={{this.handleAuthResponse}}
         />
         `);
     };

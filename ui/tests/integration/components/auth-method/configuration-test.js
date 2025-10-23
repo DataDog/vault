@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,7 +16,7 @@ module('Integration | Component | auth-method/configuration', function (hooks) {
   hooks.beforeEach(function () {
     this.store = this.owner.lookup('service:store');
     this.createMethod = (path, type) => {
-      this.method = new AuthMethodResource({ path, type, config: { listingVisibility: 'hidden' } }, this);
+      this.method = new AuthMethodResource({ path, type, config: { listing_visibility: 'hidden' } }, this);
     };
     this.renderComponent = () => render(hbs`<AuthMethod::Configuration @method={{this.method}} />`);
   });

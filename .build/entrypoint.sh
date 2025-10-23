@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 set -e
@@ -34,6 +34,11 @@ if [[ "$host_arch" != "$GOARCH" ]]; then
       fail "Building for $GOARCH has not been implemented"
       ;;
   esac
+fi
+
+# Install our tools if necessary
+if ! ./tools.sh check-external; then
+  ./tools.sh install-external
 fi
 
 # Assume that /build is where we've mounted the vault repo.

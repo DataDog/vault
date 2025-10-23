@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -25,4 +25,4 @@ func (b *backend) periodicFuncEnt(_ *storageContext, _ *logical.Request) error {
 
 func (b *backend) cleanupEnt(_ *storageContext) {}
 
-func (b *backend) SetupEnt() {}
+func (b *backend) SetupEnt(conf *logical.BackendConfig) {}

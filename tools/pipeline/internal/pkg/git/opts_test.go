@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package git
@@ -789,11 +789,12 @@ func TestOptsStringers(t *testing.T) {
 				NoPatch:       true,
 				Output:        "/path/to/my.diff",
 				Patch:         true,
+				Quiet:         true,
 				Raw:           true,
 				Object:        "HEAD",
 				PathSpec:      []string{"go.mod", "go.sum"},
 			},
-			"--diff-algorithm=histogram --diff-merges=dense-combined --format=medium --no-color --no-patch --output=/path/to/my.diff --patch --raw HEAD -- go.mod go.sum",
+			"--diff-algorithm=histogram --diff-merges=dense-combined --format=medium --no-color --no-patch --output=/path/to/my.diff --patch --quiet --raw HEAD -- go.mod go.sum",
 		},
 		"status": {
 			&StatusOpts{

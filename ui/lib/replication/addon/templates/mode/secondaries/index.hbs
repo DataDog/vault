@@ -1,5 +1,5 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
 }}
 
@@ -22,7 +22,7 @@
   </Toolbar>
   {{#if this.model.replicationAttrs.knownSecondaries.length}}
     {{#each this.model.replicationAttrs.knownSecondaries as |secondary|}}
-      <div class="list-item-row" data-test-secondary-name={{secondary}}>
+      <div class="list-item-row overflow-wrap" data-test-secondary-name={{secondary}}>
         <div class="columns is-mobile">
           <div class="column is-10">
             {{secondary}}

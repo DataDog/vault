@@ -1,15 +1,13 @@
-@use '../utils/color_variables';
-@use '../utils/font_variables';
 @use '../utils/mixins';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .info-table-row {
-  box-shadow: 0 1px 0 color_variables.$grey-light;
+  box-shadow: 0 1px 0 var(--token-color-palette-neutral-300);
   margin: 0;
 
   &.has-no-shadow {
@@ -22,8 +20,8 @@
 
   &.thead {
     box-shadow:
-      0 1px 0 color_variables.$grey-light,
-      0 -1px 0 color_variables.$grey-light;
+      0 1px 0 var(--token-color-palette-neutral-300),
+      0 -1px 0 var(--token-color-palette-neutral-300);
     margin: 0;
     padding: 0 size_variables.$spacing-14 0 0;
 
@@ -46,7 +44,7 @@
     }
 
     .helper-text {
-      font-weight: normal;
+      font-weight: var(--token-typography-font-weight-regular);
     }
     &.justify-right {
       display: flex;
@@ -59,11 +57,11 @@
   }
 
   .icon-true {
-    color: color_variables.$green-500;
+    color: var(--token-color-foreground-success);
   }
 
   .icon-false {
-    color: color_variables.$ui-gray-300;
+    color: var(--token-color-palette-neutral-300);
   }
 
   a {
@@ -95,9 +93,9 @@
 
 .info-table-row-header {
   margin: 0;
-  font-size: size_variables.$size-8;
-  color: color_variables.$grey;
-  font-weight: font_variables.$font-weight-semibold;
+  font-size: var(--token-typography-body-200-font-size);
+  color: var(--token-color-palette-neutral-400);
+  font-weight: var(--token-typography-font-weight-semibold);
 
   @include mixins.until(size_variables.$mobile) {
     display: none;
@@ -108,15 +106,12 @@
 }
 
 .label-overflow {
-  white-space: nowrap;
   overflow: hidden;
+  max-width: 100%;
   text-overflow: ellipsis;
-
-  // inline display necessary for nested elements so ellipsis shows
-  > div {
-    display: inline;
-  }
-  > div > span {
+  display: inline;
+  // inline display necessary so ellipsis shows
+  > span {
     display: inline;
   }
 }

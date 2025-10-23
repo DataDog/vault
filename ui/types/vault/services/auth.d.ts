@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,7 +8,8 @@
 
 import Service from '@ember/service';
 import type { MfaRequirementApiResponse, ParsedMfaRequirement } from 'vault/auth/mfa';
-import type { NormalizedAuthData } from 'vault/auth/form';
+import type { NormalizedAuthData, NormalizeAuthResponseKeys } from 'vault/auth/form';
+import type { AuthResponseAuthKey, AuthResponseDataKey } from 'vault/auth/methods';
 
 interface AuthData {
   userRootNamespace: string;
@@ -28,6 +29,10 @@ export interface AuthResponseWithMfa {
   mfa_requirement: MfaRequirementApiResponse;
 }
 
+type NormalizedProps = NormalizeAuthResponseKeys & {
+  authMethodType: string;
+};
+
 export default class AuthService extends Service {
   authData: AuthData;
   currentToken: string;
@@ -45,4 +50,14 @@ export default class AuthService extends Service {
   ) => Promise<any>;
   getAuthType(): string | undefined;
   parseMfaResponse(mfaResponse: MfaRequirementApiResponse): ParsedMfaRequirement;
+  normalizeAuthData(
+    authResponse: AuthResponseAuthKey | AuthResponseDataKey,
+    normalizedProperties: NormalizedProps
+  ): NormalizedAuthData;
+  totpValidate({
+    clusterId: string,
+    mfaRequirement: ParsedMfaRequirement,
+    authMethodType: string,
+    authMountPath: string,
+  }): Promise<AuthSuccessResponse>;
 }

@@ -1,8 +1,8 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 module "create_aws_secrets_engine" {
-  count  = var.create_aws_secrets_engine ? 1 : 0
+  count  = var.aws_enabled ? 1 : 0
   source = "./aws"
 
   hosts             = var.hosts
@@ -13,7 +13,7 @@ module "create_aws_secrets_engine" {
 }
 
 locals {
-  aws_state = var.create_aws_secrets_engine ? module.create_aws_secrets_engine[0].state : null
+  aws_state = var.aws_enabled ? module.create_aws_secrets_engine[0].state : null
 }
 
 output "aws" {

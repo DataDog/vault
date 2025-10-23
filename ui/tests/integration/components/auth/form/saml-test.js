@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -29,7 +29,7 @@ module('Integration | Component | auth | form | saml', function (hooks) {
     this.tokenPollId = '4fe2ec01-1f56-b665-0ba2-09c7bca10ae8';
     this.cluster = { id: 1 };
     this.onError = sinon.spy();
-    this.onSuccess = sinon.spy();
+    this.handleAuthResponse = sinon.spy();
     // Window stub
     this.windowStub = windowStub();
     sinon.replaceGetter(window, 'screen', () => ({ height: 600, width: 500 }));
@@ -52,12 +52,12 @@ module('Integration | Component | auth | form | saml', function (hooks) {
     });
 
     this.assertSubmit = (assert, loginRequestArgs, loginData) => {
-      const [path, { clientVerifier, tokenPollId }] = loginRequestArgs;
+      const [path, { client_verifier, token_poll_id }] = loginRequestArgs;
       // if path is included in loginData, a custom path was submitted
       const expectedPath = loginData?.path || this.authType;
       assert.strictEqual(path, expectedPath, 'it calls samlWriteToken with expected path');
-      assert.strictEqual(clientVerifier, this.verifier, 'it calls samlWriteToken with verifier');
-      assert.strictEqual(tokenPollId, this.tokenPollId, 'it calls samlWriteToken with tokenPollId');
+      assert.strictEqual(client_verifier, this.verifier, 'it calls samlWriteToken with verifier');
+      assert.strictEqual(token_poll_id, this.tokenPollId, 'it calls samlWriteToken with tokenPollId');
     };
 
     this.renderComponent = ({ yieldBlock = false } = {}) => {
@@ -67,7 +67,7 @@ module('Integration | Component | auth | form | saml', function (hooks) {
             @authType={{this.authType}} 
             @cluster={{this.cluster}}
             @onError={{this.onError}}
-            @onSuccess={{this.onSuccess}}
+            @handleAuthResponse={{this.handleAuthResponse}}
           >
             <:advancedSettings>
               <label for="path">Mount path</label>
@@ -80,7 +80,7 @@ module('Integration | Component | auth | form | saml', function (hooks) {
         @authType={{this.authType}}
         @cluster={{this.cluster}}
         @onError={{this.onError}}
-        @onSuccess={{this.onSuccess}}
+        @handleAuthResponse={{this.handleAuthResponse}}
       />`);
     };
   });

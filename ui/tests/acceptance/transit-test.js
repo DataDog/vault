@@ -1,9 +1,9 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-import { click, fillIn, find, currentURL, settled, visit, findAll } from '@ember/test-helpers';
+import { click, fillIn, find, currentURL, settled, visit, findAll, waitFor } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { encodeString } from 'vault/utils/b64';
 import { login } from 'vault/tests/helpers/auth/auth-helpers';
 import { deleteEngineCmd, mountEngineCmd, runCmd } from 'vault/tests/helpers/commands';
-import codemirror from 'vault/tests/helpers/codemirror';
+import codemirror, { setCodeEditorValue } from 'vault/tests/helpers/codemirror';
 import { GENERAL } from 'vault/tests/helpers/general-selectors';
 import { SECRET_ENGINE_SELECTORS as SES } from 'vault/tests/helpers/secret-engine/secret-engine-selectors';
 
@@ -150,7 +150,9 @@ const testConvergentEncryption = async function (assert, keyName) {
   for (const testCase of tests) {
     await click('[data-test-transit-action-link="encrypt"]');
 
-    codemirror('#plaintext-control').setValue(testCase.plaintext);
+    await waitFor('.cm-editor');
+    const editor = codemirror('#plaintext-control');
+    setCodeEditorValue(editor, testCase.plaintext);
     await fillIn('[data-test-transit-input="context"]', testCase.context);
 
     if (!testCase.encodePlaintext) {
@@ -179,7 +181,8 @@ const testConvergentEncryption = async function (assert, keyName) {
       testCase.assertBeforeDecrypt(keyName);
     }
 
-    codemirror('#ciphertext-control').setValue(copiedCiphertext);
+    setCodeEditorValue(editor, copiedCiphertext);
+
     await click(GENERAL.submitButton);
 
     if (testCase.assertAfterDecrypt) {
@@ -216,7 +219,7 @@ module('Acceptance | transit', function (hooks) {
     };
     await runCmd(mountEngineCmd('transit', this.path));
     // Start test on backend main page
-    return visit(`/vault/secrets/${this.path}/list`);
+    return visit(`/vault/secrets-engines/${this.path}/list`);
   });
 
   hooks.afterEach(async function () {
@@ -235,12 +238,12 @@ module('Acceptance | transit', function (hooks) {
     await click(SELECTORS.form('exportable'));
     await click(SELECTORS.form('derived'));
     await click(SELECTORS.form('convergent-encryption'));
-    await click('[data-test-toggle-label="Auto-rotation period"]');
+    await click(GENERAL.ttl.toggle('Auto-rotation period'));
     await click(SELECTORS.form('create'));
 
     assert.strictEqual(
       currentURL(),
-      `/vault/secrets/${this.path}/show/${name}?tab=details`,
+      `/vault/secrets-engines/${this.path}/show/${name}?tab=details`,
       'it navigates to show page'
     );
     assert.dom(GENERAL.infoRowValue('Auto-rotation period')).hasText('30 days');
@@ -255,20 +258,20 @@ module('Acceptance | transit', function (hooks) {
     await click(SELECTORS.secretLink);
     assert.strictEqual(
       currentURL(),
-      `/vault/secrets/${this.path}/show/${name}?tab=actions`,
+      `/vault/secrets-engines/${this.path}/show/${name}?tab=actions`,
       'navigates to key actions tab'
     );
     await click(SELECTORS.actionsTab);
     assert.strictEqual(
       currentURL(),
-      `/vault/secrets/${this.path}/show/${name}?tab=actions`,
+      `/vault/secrets-engines/${this.path}/show/${name}?tab=actions`,
       'navigates back to transit actions'
     );
   });
 
   test('create form renders supported options for each key type', async function (assert) {
     assert.expect(30);
-    await visit(`/vault/secrets/${this.path}/create`);
+    await visit(`/vault/secrets-engines/${this.path}/create`);
     const KEY_OPTIONS = [
       {
         type: 'ed25519',
@@ -342,7 +345,7 @@ module('Acceptance | transit', function (hooks) {
     };
 
     const name = await this.generateTransitKey(keyData);
-    await visit(`vault/secrets/${this.path}/show/${name}`);
+    await visit(`vault/secrets-engines/${this.path}/show/${name}`);
     assert
       .dom(GENERAL.infoRowValue('Auto-rotation period'))
       .hasText('30 days', 'Has expected auto rotate value');
@@ -459,11 +462,11 @@ module('Acceptance | transit', function (hooks) {
     test(`transit backend: ${key.type}`, async function (assert) {
       assert.expect(key.convergent ? 43 : 7);
       const name = await this.generateTransitKey(key);
-      await visit(`vault/secrets/${this.path}/show/${name}`);
+      await visit(`vault/secrets-engines/${this.path}/show/${name}`);
 
       const expectedRotateValue = key.autoRotate ? '30 days' : 'Key will not be automatically rotated';
       assert
-        .dom('[data-test-row-value="Auto-rotation period"]')
+        .dom(GENERAL.infoRowValue('Auto-rotation period'))
         .hasText(expectedRotateValue, 'Has expected auto rotate value');
 
       await click(SELECTORS.versionsTab);
@@ -480,7 +483,7 @@ module('Acceptance | transit', function (hooks) {
 
       assert.strictEqual(
         currentURL(),
-        `/vault/secrets/${this.path}/show/${name}?tab=actions`,
+        `/vault/secrets-engines/${this.path}/show/${name}?tab=actions`,
         `${name}: navigates to transit actions`
       );
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -34,7 +34,7 @@ module('Integration | Component | sidebar-nav-tools', function (hooks) {
     });
   });
 
-  test('it should hide links user does not have access too', async function (assert) {
+  test('it should hide links user does not have access to', async function (assert) {
     await renderComponent();
     assert
       .dom('[data-test-sidebar-nav-link]')

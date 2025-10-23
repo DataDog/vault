@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package framework
@@ -268,6 +268,9 @@ type DisplayAttributes struct {
 	// EditType is the optional type of form field needed for a property
 	// This is only necessary for a "textarea" or "file"
 	EditType string `json:"editType,omitempty"`
+
+	// Identifier is the primary field rendered in the UI (e.g. name, path, url, etc.)
+	Identifier bool `json:"identifier,omitempty"`
 }
 
 // RequestExample is example of request data.

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 provider "aws" "default" {
@@ -23,4 +23,7 @@ provider "enos" "ubuntu" {
       private_key_path = abspath(var.aws_ssh_private_key_path)
     }
   }
+}
+
+provider "hcp" "default" {
 }

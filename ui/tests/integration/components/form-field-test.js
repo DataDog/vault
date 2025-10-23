@@ -1,19 +1,21 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import EmberObject from '@ember/object';
 import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
-import { render, click, fillIn, findAll, setupOnerror } from '@ember/test-helpers';
+import { render, click, fillIn, findAll, setupOnerror, waitFor } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
 import { create } from 'ember-cli-page-object';
 import sinon from 'sinon';
 import formFields from '../../pages/components/form-field';
 import { format, startOfDay } from 'date-fns';
+import codemirror, { getCodeEditorValue, setCodeEditorValue } from 'vault/tests/helpers/codemirror';
 
 import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import AuthMethodForm from 'vault/forms/auth/method';
 
 const component = create(formFields);
 
@@ -113,11 +115,16 @@ module('Integration | Component | form field', function (hooks) {
     assert.ok(component.hasJSONEditor, 'renders the json editor');
   });
 
-  test('it renders: string as json with clear button', async function (assert) {
+  test('it renders: string as json with clear button and resets input', async function (assert) {
     await setup.call(this, createAttr('foo', 'string', { editType: 'json', allowReset: true }));
     assert.dom('[data-test-component="json-editor-title"]').hasText('Foo', 'renders a label');
     assert.ok(component.hasJSONEditor, 'renders the json editor');
     assert.ok(component.hasJSONClearButton, 'renders button that will clear the JSON value');
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, 'some input');
+    await click('[data-test-json-clear-button]');
+    assert.strictEqual(getCodeEditorValue(editor), '', 'it clears the editor');
   });
 
   test('it renders: toggleButton', async function (assert) {
@@ -266,8 +273,8 @@ module('Integration | Component | form field', function (hooks) {
       this,
       createAttr('foo', 'string', { editType: 'stringArray', helpText: 'Here is some help text' })
     );
-    await component.tooltipTrigger();
-    assert.ok(component.hasTooltip, 'renders the tooltip component');
+    await click(GENERAL.tooltip('string-list'));
+    assert.dom(GENERAL.tooltipText).exists('renders the tooltip component');
   });
 
   test('it should not expand and toggle ttl when default 0s value is present', async function (assert) {
@@ -301,14 +308,10 @@ module('Integration | Component | form field', function (hooks) {
   });
 
   test('it should show validation warning', async function (assert) {
-    const model = this.owner.lookup('service:store').createRecord('auth-method');
-    model.path = 'foo bar';
-    this.validations = model.validate().state;
-    this.setProperties({
-      model,
-      attr: createAttr('path', 'string'),
-      onChange: () => {},
-    });
+    this.model = new AuthMethodForm({ path: 'foo bar' });
+    this.attr = createAttr('path', 'string');
+    this.onChange = () => {};
+    this.validations = this.model.toJSON().state;
 
     await render(
       hbs`<FormField @attr={{this.attr}} @model={{this.model}} @modelValidations={{this.validations}} @onChange={{this.onChange}} />`

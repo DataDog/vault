@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package ssh
@@ -55,6 +55,10 @@ func Backend(conf *logical.BackendConfig) (*backend, error) {
 				caPrivateKey,
 				caPrivateKeyStoragePath,
 				keysStoragePrefix,
+			},
+
+			AllowSnapshotRead: []string{
+				"config/ca",
 			},
 		},
 

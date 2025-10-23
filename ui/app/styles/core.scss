@@ -1,12 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 // Variables
-@use 'utils/color_variables'; // colors need to come first.
 @use 'utils/box-shadow_variables';
-@use 'utils/font_variables';
 @use 'utils/size_variables';
 
 // Element styling
@@ -23,7 +21,6 @@
 @use 'core/box';
 @use 'core/buttons';
 @use 'core/charts';
-@use 'core/charts-lineal';
 @use 'core/checkbox-and-radio';
 @use 'core/columns';
 @use 'core/containers';
@@ -56,10 +53,9 @@
 @use 'components/b64-toggle';
 @use 'components/box-label';
 @use 'components/calendar-widget';
-@use 'components/chart-container';
+@use 'components/clients-counts-card.scss';
 @use 'components/clients-date-range';
 @use 'components/cluster-banners';
-@use 'components/codemirror';
 @use 'components/console-ui-panel';
 @use 'components/control-group';
 @use 'components/doc-link';
@@ -76,7 +72,6 @@
 @use 'components/loader';
 @use 'components/masked-input';
 @use 'components/namespace-picker';
-@use 'components/namespace-reminder';
 @use 'components/navigate-input';
 @use 'components/overview-card';
 @use 'components/page-header-old';
@@ -102,10 +97,10 @@
 @use 'components/tabs-component';
 @use 'components/text-file';
 @use 'components/toolbar';
-@use 'components/tool-tip';
 @use 'components/transform-edit';
 @use 'components/transit-card';
 @use 'components/ttl-picker';
+@use 'components/type-form';
 @use 'components/unseal-warning';
 @use 'components/usage-page';
 @use 'components/vault-loading';

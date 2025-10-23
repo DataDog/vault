@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package seal
@@ -14,6 +14,12 @@ import (
 
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 )
+
+var RequireFullWrap = struct{}{}
+
+func ContextWithFullRewrapRequired(ctx context.Context) context.Context {
+	return context.WithValue(ctx, RequireFullWrap, true)
+}
 
 type PartialSealWrapError struct {
 	Err error

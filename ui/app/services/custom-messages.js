@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -34,10 +34,10 @@ export default class CustomMessagesService extends Service {
     try {
       const type = this.auth.currentToken ? 'Authenticated' : 'Unauthenticated';
       const method = `internalUiRead${type}ActiveCustomMessages`;
-      const { keys = [], keyInfo } = await this.api.sys[method]();
+      const { keys = [], key_info } = await this.api.sys[method]();
 
       this.messages = keys.map((key) => {
-        const data = keyInfo[key];
+        const data = key_info[key];
         return {
           id: key,
           ...data,

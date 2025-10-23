@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -1037,6 +1037,7 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 
 	conf["plugin_type"] = consts.PluginTypeCredential.String()
 	conf["plugin_version"] = pluginVersion
+	pluginOptionsVersion := entry.Options["version"]
 
 	authLogger := c.baseLogger.Named(fmt.Sprintf("auth.%s.%s", t, entry.Accessor))
 	c.AddLogger(authLogger)
@@ -1046,10 +1047,15 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 		MountPath:     entry.Path,
 		Plugin:        entry.Type,
 		PluginVersion: pluginVersion,
-		Version:       entry.Options["version"],
+		Version:       pluginOptionsVersion,
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	pluginRunningVersion := pluginVersion
+	if pluginRunningVersion == "" && runningSha == "" {
+		pluginRunningVersion = versions.GetBuiltinVersion(consts.PluginTypeCredential, entry.Type)
 	}
 
 	pluginObservationRecorder, err := c.observations.WithPlugin(entry.namespace, &logical.ObservationPluginInfo{
@@ -1058,8 +1064,8 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 		MountPath:            entry.Path,
 		Plugin:               entry.Type,
 		PluginVersion:        pluginVersion,
-		RunningPluginVersion: entry.RunningVersion,
-		Version:              entry.Options["version"],
+		RunningPluginVersion: pluginRunningVersion,
+		Version:              pluginOptionsVersion,
 		Local:                entry.Local,
 	})
 	if err != nil {
@@ -1081,11 +1087,8 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 		return nil, err
 	}
 	if backend != nil {
-		entry.RunningVersion = pluginVersion
+		entry.RunningVersion = pluginRunningVersion
 		entry.RunningSha256 = runningSha
-		if entry.RunningVersion == "" && entry.RunningSha256 == "" {
-			entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeCredential, entry.Type)
-		}
 	}
 
 	return backend, nil

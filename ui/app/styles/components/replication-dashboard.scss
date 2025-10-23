@@ -1,10 +1,8 @@
-@use '../utils/color_variables';
-@use '../utils/font_variables';
 @use '../utils/mixins';
 @use '../utils/size_variables';
 
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -15,16 +13,16 @@
     line-height: normal;
 
     &:hover {
-      box-shadow: 0 0 0 1px rgba(color_variables.$grey-dark, 0.3);
+      box-shadow: 0 0 0 1px rgba(var(--token-color-palette-neutral-500), 0.3);
     }
 
     .toolbar-link {
-      color: color_variables.$blue-500;
+      color: var(--token-color-foreground-action);
     }
   }
 
   .helper-text {
-    font-weight: font_variables.$font-weight-normal;
+    font-weight: var(--token-typography-font-weight-regular);
   }
 
   .title.is-6 {
@@ -61,7 +59,7 @@
       grid-template-columns: 1fr 1fr;
       grid-template-rows: 0.2fr 0.2fr 0.2fr;
       padding: size_variables.$spacing-24;
-      line-height: 1.5;
+      line-height: var(--token-typography-body-300-line-height);
 
       &.summary {
         grid-template-rows: 0.2fr 1fr 0.2fr 1fr;
@@ -130,7 +128,7 @@
   }
   .summary-state {
     padding-bottom: size_variables.$spacing-36;
-    border-bottom: 1px solid rgba(color_variables.$grey-dark, 0.3);
+    border-bottom: 1px solid rgba(var(--token-color-palette-neutral-500), 0.3);
   }
 
   // prevent double lines at the bottom of the dashboard

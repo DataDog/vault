@@ -1,12 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { alias } from '@ember/object/computed';
 import Component from '@ember/component';
 import ReplicationActions from 'core/mixins/replication-actions';
-import layout from '../templates/components/replication-actions';
 
 const DEFAULTS = {
   token: null,
@@ -18,10 +17,10 @@ const DEFAULTS = {
 };
 
 export default Component.extend(ReplicationActions, DEFAULTS, {
-  layout,
   replicationMode: null,
   model: null,
   cluster: alias('model'),
+
   reset() {
     if (!this || this.isDestroyed || this.isDestroying) {
       return;

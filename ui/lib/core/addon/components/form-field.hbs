@@ -1,5 +1,5 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
 }}
 
@@ -395,10 +395,11 @@
         @checked={{if @attr.options.isOppositeValue (not this.toggleInputEnabled) this.toggleInputEnabled}}
         data-test-toggle={{@attr.name}}
         disabled={{this.disabled}}
+        aria-describedby={{concat @attr.name "-helper-text"}}
       >
         <span class="has-text-weight-bold is-large">{{this.labelString}}</span><br />
         <div class="description has-text-grey" data-test-toggle-subtext>
-          <span>
+          <span id={{concat @attr.name "-helper-text"}}>
             {{#if this.toggleInputEnabled}}
               {{if @attr.options.isOppositeValue @attr.options.helperTextDisabled @attr.options.helperTextEnabled}}
             {{else}}
@@ -414,8 +415,9 @@
         @onChange={{this.toggleTextShow}}
         @checked={{this.showToggleTextInput}}
         data-test-toggle={{@attr.name}}
+        aria-describedby={{concat @attr.name "-helper-text"}}
       >
-        <span class="ttl-picker-label is-large">{{this.labelString}}</span><br />
+        <span class="ttl-picker-label is-large" id={{concat @attr.name "-helper-text"}}>{{this.labelString}}</span><br />
         <div class="description has-text-grey">
           {{#if this.showToggleTextInput}}
             <span>
@@ -484,19 +486,19 @@
                 (if (eq @attr.options.mode "ruby") value (stringify (jsonify value)))
                 @attr.options.defaultValue
               }}
-              @valueUpdated={{fn this.codemirrorUpdated true}}
-              @theme={{or @attr.options.theme "hashi"}}
+              @valueUpdated={{fn this.editorUpdated true}}
               @helpText={{this.helpTextString}}
               @mode={{@attr.options.mode}}
               @example={{@attr.options.example}}
+              @onSetup={{fn (mut this.codemirrorEditor)}}
             >
               {{#if @attr.options.allowReset}}
                 <Hds::Button
                   @text="Clear"
                   @icon="reload"
-                  class="toolbar-button"
+                  @color="secondary"
                   disabled={{not value}}
-                  {{on "click" this.setAndBroadcast}}
+                  {{on "click" (fn this.editorUpdated true "")}}
                   data-test-json-clear-button
                 />
               {{/if}}
@@ -519,7 +521,7 @@
       <JsonEditor
         @title={{this.labelString}}
         @value={{if (get @model this.valuePath) (stringify (get @model this.valuePath)) this.emptyData}}
-        @valueUpdated={{fn this.codemirrorUpdated false}}
+        @valueUpdated={{fn this.editorUpdated false}}
         @helpText={{this.helpTextString}}
         @example={{@attr.options.example}}
       />

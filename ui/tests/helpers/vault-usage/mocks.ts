@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -32,5 +32,6 @@ export const mockedResponseWithData = {
       pr_state: 'enabled',
     },
     secret_engines: { cubbyhole: 45, nomad: 46, aws: 47 },
+    secret_sync: { total_destinations: 1, destinations: { aws: 1 } },
   },
 };

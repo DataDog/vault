@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -32,7 +32,7 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
         name: 'destination-aws',
         type: 'aws-sm',
         icon: 'aws-color',
-        typeDisplayName: 'AWS Secrets Manager',
+        type_display_name: 'AWS Secrets Manager',
       },
     ];
     this.destinations.meta = {

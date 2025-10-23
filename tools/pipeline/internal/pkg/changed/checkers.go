@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package changed
@@ -23,6 +23,7 @@ var DefaultFileGroupCheckers = []FileGroupCheck{
 	FileGroupCheckerDocs,
 	FileGroupCheckerEnos,
 	FileGroupCheckerEnterprise,
+	FileGroupCheckerGithub,
 	FileGroupCheckerGoToolchain,
 	FileGroupCheckerPipeline,
 	FileGroupCheckerProto,
@@ -160,7 +161,8 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 		hasBaseDir(name, "vault_ent"),
 		hasBaseDir(name, filepath.Join("scripts", "dev", "hsm")),
 		hasBaseDir(name, filepath.Join("scripts", "testing")),
-		hasBaseDir(name, filepath.Join("specs")):
+		hasBaseDir(name, filepath.Join("specs")),
+		hasBaseDir(name, filepath.Join(".release", "ibm-pao")):
 		return FileGroups{FileGroupEnterprise}
 	}
 
@@ -173,6 +175,15 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 	}
 
 	// File extension checks
+	switch {
+	case
+		// Short circuit for test and release files
+		hasBaseDir(name, filepath.Join(".release")),
+		hasBaseDir(name, filepath.Join("enos", "modules")),
+		hasBaseDir(name, filepath.Join("scripts", "docker")):
+		return nil
+	}
+
 	switch filepath.Ext(name) {
 	case ".go":
 		switch {
@@ -180,10 +191,6 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 			strings.HasSuffix(name, "_ent.go"),
 			strings.HasSuffix(name, "_ent_test.go"),
 			strings.Contains(name, "_ent") && strings.HasSuffix(name, ".pb.go"):
-			return FileGroups{FileGroupEnterprise}
-		}
-	case ".txt":
-		if hasBaseDir(name, "changelog") && strings.HasPrefix(filepath.Base(name), "_") {
 			return FileGroups{FileGroupEnterprise}
 		}
 	case
@@ -202,6 +209,15 @@ func FileGroupCheckerEnterprise(ctx context.Context, file *File) FileGroups {
 			strings.Contains(name, "merkle-tree"):
 			return FileGroups{FileGroupEnterprise}
 		}
+	}
+
+	return nil
+}
+
+// FileGroupCheckerGithub is a file group checker that groups Github files
+func FileGroupCheckerGithub(ctx context.Context, file *File) FileGroups {
+	if hasBaseDir(file.Name(), ".github") {
+		return FileGroups{FileGroupGithub}
 	}
 
 	return nil
@@ -230,10 +246,12 @@ func FileGroupCheckerPipeline(ctx context.Context, file *File) FileGroups {
 	switch {
 	case
 		hasBaseDir(name, ".build"),
-		hasBaseDir(name, ".github"),
+		hasBaseDir(name, filepath.Join(".github", "workflows")),
+		hasBaseDir(name, filepath.Join(".github", "actions")),
+		hasBaseDir(name, filepath.Join(".github", "scripts")),
+		hasBaseDir(name, ".release"),
 		hasBaseDir(name, "scripts"),
 		hasBaseDir(name, filepath.Join("tools", "pipeline")),
-		name == "CODEOWNERS",
 		name == "Dockerfile",
 		name == "Makefile":
 		return FileGroups{FileGroupPipeline}
