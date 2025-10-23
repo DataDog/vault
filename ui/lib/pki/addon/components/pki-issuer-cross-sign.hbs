@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <h3 class="title is-4">Intermediates</h3>
 <div class="box is-fullwidth has-only-top-shadow">
@@ -24,7 +24,9 @@
           <h2 data-test-info-table-label={{column.key}}>
             {{column.label}}
             {{#if column.helpText}}
-              <InfoTooltip @verticalPosition="above" @horizontalPosition="center">{{column.helpText}}</InfoTooltip>
+              <Hds::TooltipButton @text={{column.helpText}} aria-label="More information">
+                <Hds::Icon @name="info" />
+              </Hds::TooltipButton>
             {{/if}}
           </h2>
         </div>
@@ -93,14 +95,14 @@
           @icon={{if this.submit.isRunning "loading"}}
           type="submit"
           disabled={{this.submit.isRunning}}
-          data-test-cross-sign-submit
+          data-test-submit
         />
         <Hds::Button
           @text="Cancel"
           @color="secondary"
           @route="issuers.issuer.details"
           disabled={{this.submit.isRunning}}
-          data-test-cross-sign-cancel
+          data-test-cancel
         />
       </Hds::ButtonSet>
     </form>

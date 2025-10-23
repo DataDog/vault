@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package plugincatalog
@@ -33,6 +33,7 @@ func TestPluginCatalog_PinnedVersionCRUD(t *testing.T) {
 			Type:    consts.PluginTypeSecrets,
 			Version: version,
 			Command: filepath.Base(file.Name()),
+			Sha256:  []byte("sha256"),
 		})
 		require.NoError(t, err)
 	}

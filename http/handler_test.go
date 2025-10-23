@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -9,7 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/go-test/deep"
 	"github.com/hashicorp/go-cleanhttp"
+	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/helper/versions"
 	"github.com/hashicorp/vault/internalshared/configutil"
@@ -885,7 +886,7 @@ func TestHandler_Parse_Form(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Body = ioutil.NopCloser(strings.NewReader(values.Encode()))
+	req.Body = io.NopCloser(strings.NewReader(values.Encode()))
 	req.Header.Set("x-vault-token", cluster.RootToken)
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	resp, err := c.Do(req)
@@ -938,7 +939,7 @@ func TestHandler_MaxRequestSize(t *testing.T) {
 		"bar": strings.Repeat("a", 1025),
 	})
 
-	require.ErrorContains(t, err, "error parsing JSON")
+	require.ErrorContains(t, err, "http: request body too large")
 }
 
 // TestHandler_MaxRequestSize_Memory sets the max request size to 1024 bytes,
@@ -971,4 +972,260 @@ func TestHandler_MaxRequestSize_Memory(t *testing.T) {
 	client.Do(req)
 	runtime.ReadMemStats(&end)
 	require.Less(t, end.TotalAlloc-start.TotalAlloc, uint64(1024*1024))
+}
+
+// Test_requiresSnapshot verifies that a request is marked as requiring a
+// snapshot when it's a read, list, or create/update and has a snapshot query
+// parameter
+func Test_requiresSnapshot(t *testing.T) {
+	testCases := []struct {
+		name        string
+		method      string
+		queryParams map[string][]string
+		expected    bool
+	}{
+		{
+			name:        "get no snapshot",
+			method:      http.MethodGet,
+			queryParams: map[string][]string{"other": {"param"}},
+			expected:    false,
+		},
+		{
+			name:        "options with snapshot",
+			method:      http.MethodOptions,
+			queryParams: map[string][]string{VaultSnapshotRecoverParam: {"param"}},
+			expected:    false,
+		},
+		{
+			name:        "put with read snapshot",
+			method:      http.MethodPut,
+			queryParams: map[string][]string{VaultSnapshotReadParam: {"param"}},
+			expected:    false,
+		},
+		{
+			name:        "put with recover snapshot",
+			method:      http.MethodPut,
+			queryParams: map[string][]string{VaultSnapshotRecoverParam: {"param"}},
+			expected:    true,
+		},
+		{
+			name:        "list with snapshot",
+			method:      "LIST",
+			queryParams: map[string][]string{VaultSnapshotReadParam: {"param"}},
+			expected:    true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &http.Request{
+				Method: tc.method,
+				URL: &url.URL{
+					RawQuery: url.Values(tc.queryParams).Encode(),
+				},
+			}
+			require.Equal(t, tc.expected, requiresSnapshot(req))
+		})
+	}
+}
+
+// TestHandler_JSONLimitQuotaWrappers verifies that the handler properly orders
+// the normal quota checks, JSON size limits checks, and role-based quota checks
+func TestHandler_JSONLimitQuotaWrappers(t *testing.T) {
+	testCases := []struct {
+		name           string
+		setup          func(t *testing.T, client *api.Client, roleID string)
+		jsonStringSize int
+		wantError      string
+	}{
+		{
+			// set up a role-based rate limit, but don't exceed the rate
+			// because the JSON is too big the request will error with
+			// the JSON size error
+			name: "too big json with role quota",
+			setup: func(t *testing.T, client *api.Client, _ string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-role-quota", map[string]interface{}{
+					"path": "auth/approle",
+					"role": "my-role",
+					"rate": 5,
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5001,
+			wantError:      "JSON string value exceeds allowed length",
+		},
+		{
+			// set up a rate limit, but don't exceed the rate
+			// because the JSON is too big the request will error with
+			// the JSON size error
+			name: "too big json with non role quota",
+			setup: func(t *testing.T, client *api.Client, _ string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-quota", map[string]interface{}{
+					"path": "auth/approle",
+					"rate": 5,
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5001,
+			wantError:      "JSON string value exceeds allowed length",
+		},
+		{
+			// set up a rate limit without a role and exceed it
+			// even though the JSON is too big, the request will be blocked by
+			// the rate limit first
+			name: "too big json with non role quota blocked",
+			setup: func(t *testing.T, client *api.Client, roleID string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-quota", map[string]interface{}{
+					"path":     "auth/approle",
+					"rate":     1,
+					"interval": "60",
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5001,
+			wantError:      "rate limit quota exceeded",
+		},
+		{
+			// set up a rate limit with a role and exceed it
+			// the JSON is too big and the JSON check will trigger before
+			// the role-based quota check, so we'll get a JSON size error
+			name: "too big json with role quota blocked",
+			setup: func(t *testing.T, client *api.Client, roleID string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-role-quota", map[string]interface{}{
+					"path":     "auth/approle",
+					"role":     "my-role",
+					"rate":     1,
+					"interval": "60",
+				})
+				require.NoError(t, err)
+
+				// log in for the role to use up the quota
+				r, err := client.Logical().Write("auth/approle/role/my-role/secret-id", nil)
+				require.NoError(t, err)
+				secretID := r.Data["secret_id"].(string)
+
+				_, err = client.Logical().Write("auth/approle/login", map[string]interface{}{
+					"role_id":   roleID,
+					"secret_id": secretID,
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5001,
+			wantError:      "JSON string value exceeds allowed length",
+		},
+		{
+			// set up a rate limit with a role and exceed it
+			// the JSON is an ok size, so the role-based quota check will
+			// trigger
+			name: "normal json with role quota blocked",
+			setup: func(t *testing.T, client *api.Client, roleID string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-role-quota", map[string]interface{}{
+					"path":     "auth/approle",
+					"role":     "my-role",
+					"rate":     1,
+					"interval": "60",
+				})
+				require.NoError(t, err)
+
+				// log in for the role to use up the quota
+				r, err := client.Logical().Write("auth/approle/role/my-role/secret-id", nil)
+				require.NoError(t, err)
+				secretID := r.Data["secret_id"].(string)
+
+				_, err = client.Logical().Write("auth/approle/login", map[string]interface{}{
+					"role_id":   roleID,
+					"secret_id": secretID,
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5,
+			wantError:      "rate limit quota exceeded",
+		},
+		{
+			// set up a rate limit with a role but don't exceed it
+			// the JSON is an ok size, so the request will succeed
+			name: "normal json with role quota allowed",
+			setup: func(t *testing.T, client *api.Client, roleID string) {
+				_, err := client.Logical().Write("sys/quotas/rate-limit/my-role-quota", map[string]interface{}{
+					"path":     "auth/approle",
+					"role":     "my-role",
+					"rate":     1,
+					"interval": "60",
+				})
+				require.NoError(t, err)
+			},
+			jsonStringSize: 5,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := vault.NewTestCluster(t, &vault.CoreConfig{}, &vault.TestClusterOptions{
+				HandlerFunc: Handler,
+				DefaultHandlerProperties: vault.HandlerProperties{
+					ListenerConfig: &configutil.Listener{
+						CustomMaxJSONStringValueLength: 5000,
+					},
+				},
+			})
+			cluster.Start()
+			defer cluster.Cleanup()
+
+			client := cluster.Cores[0].Client
+			client.SetToken(cluster.RootToken)
+
+			err := client.Sys().EnableAuthWithOptions("approle", &api.EnableAuthOptions{
+				Type: "approle",
+			})
+			require.NoError(t, err)
+
+			_, err = client.Logical().Write("auth/approle/role/my-role", map[string]interface{}{
+				"token_policies": "default",
+				"token_ttl":      "1h",
+				"token_max_ttl":  "4h",
+			})
+			r, err := client.Logical().Read("auth/approle/role/my-role/role-id")
+			require.NoError(t, err)
+			roleID := r.Data["role_id"].(string)
+			require.NoError(t, err)
+			if tc.setup != nil {
+				tc.setup(t, client, roleID)
+			}
+			r, err = client.Logical().Write("auth/approle/role/my-role/secret-id", nil)
+			require.NoError(t, err)
+			secretID := r.Data["secret_id"].(string)
+
+			resp, err := client.Logical().Write("auth/approle/login", map[string]interface{}{
+				"role_id":         roleID,
+				"secret_id":       secretID,
+				"additional_data": strings.Repeat("a", tc.jsonStringSize),
+			})
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+		})
+	}
+}
+
+// TestAutoSnapshotLoadForwarded tests that a request to load from a cloud
+// snapshot is forwarded to the active node, rather than being redirected
+func TestAutoSnapshotLoadForwarded(t *testing.T) {
+	cluster := vault.NewTestCluster(t, &vault.CoreConfig{}, &vault.TestClusterOptions{
+		NumCores:    2,
+		HandlerFunc: Handler,
+	})
+
+	cluster.Start()
+	defer cluster.Cleanup()
+
+	client := cluster.Cores[1].Client
+	client.SetToken(cluster.RootToken)
+
+	_, err := client.Logical().Write("sys/storage/raft/snapshot-auto/snapshot-load/cfg1", nil)
+	// the request will fail, but all that we care about is that the error
+	// doesn't indicate a redirect
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "redirects not allowed in these tests")
 }

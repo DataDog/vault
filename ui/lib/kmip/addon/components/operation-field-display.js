@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,10 +16,8 @@
  *
  */
 import Component from '@ember/component';
-import layout from '../templates/components/operation-field-display';
 
 export default Component.extend({
-  layout,
   tagName: '',
   model: null,
 
@@ -30,7 +28,7 @@ export default Component.extend({
     if (model.operationNone) {
       return falseString;
     }
-    return model.get(field.name) ? trueString : falseString;
+    return model[field.name] ? trueString : falseString;
   },
 
   actions: {

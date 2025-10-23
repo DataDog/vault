@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,22 +9,12 @@ import { setupEngine } from 'ember-engines/test-support';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import { render, click, fillIn } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
-import { allowAllCapabilitiesStub } from 'vault/tests/helpers/stubs';
 import sinon from 'sinon';
 
 import { PAGE } from 'vault/tests/helpers/sync/sync-selectors';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
-const {
-  breadcrumb,
-  title,
-  tab,
-  filter,
-  searchSelect,
-  emptyStateTitle,
-  destinations,
-  menuTrigger,
-  confirmButton,
-} = PAGE;
+const { title, tab, filter, searchSelect, emptyStateTitle, destinations, confirmButton } = PAGE;
 
 module('Integration | Component | sync | Page::Destinations', function (hooks) {
   setupRenderingTest(hooks);
@@ -32,29 +22,34 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
   setupMirage(hooks);
 
   hooks.beforeEach(function () {
-    this.owner.lookup('service:version').type = 'enterprise';
+    this.version = this.owner.lookup('service:version');
+    this.version.type = 'enterprise';
+    this.version.features = ['Secrets Sync'];
 
-    this.server.post('/sys/capabilities-self', allowAllCapabilitiesStub());
-
-    const store = this.owner.lookup('service:store');
-    const modelName = 'sync/destinations/aws-sm';
-    const destination = this.server.create('sync-destination', 'aws-sm');
-    store.pushPayload(modelName, {
-      modelName,
-      ...destination,
-      id: destination.name,
-    });
-
-    this.destinations = store.peekAll(modelName).toArray();
+    this.destinations = [
+      {
+        id: 'aws-sm/destination-aws',
+        name: 'destination-aws',
+        type: 'aws-sm',
+        icon: 'aws-color',
+        type_display_name: 'AWS Secrets Manager',
+      },
+    ];
     this.destinations.meta = {
       filteredTotal: this.destinations.length,
       currentPage: 1,
       pageSize: 5,
     };
 
+    const path = this.owner.lookup('service:capabilities').pathFor('syncDestination', this.destinations[0]);
+    this.capabilities = {
+      [path]: { canRead: true, canUpdate: true, canDelete: true },
+    };
+
     this.renderComponent = () => {
       return render(
         hbs`<Secrets::Page::Destinations
+          @capabilities={{this.capabilities}}
           @destinations={{this.destinations}}
           @typeFilter={{this.typeFilter}}
           @nameFilter={{this.nameFilter}}
@@ -64,13 +59,12 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
     };
 
     this.transitionStub = sinon.stub(this.owner.lookup('service:router'), 'transitionTo');
-    this.clearDatasetStub = sinon.stub(store, 'clearDataset');
+    this.clearDatasetStub = sinon.stub(this.owner.lookup('service:pagination'), 'clearDataset');
   });
 
   test('it should render header and tabs', async function (assert) {
     await this.renderComponent();
-    assert.dom(breadcrumb).includesText('Secrets Sync', 'Breadcrumb renders');
-    assert.dom(title).hasText('Secrets Sync Beta', 'Page title renders');
+    assert.dom(title).hasText('Secrets Sync', 'Page title renders');
     assert.dom(tab('Overview')).exists('Overview tab renders');
     assert.dom(tab('Destinations')).exists('Destinations tab renders');
   });
@@ -107,7 +101,7 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
 
   test('it should render empty state when there are no filtered results', async function (assert) {
     this.destinations = [];
-    this.typeFilter = 'foo';
+    this.typeFilter = 'aws-sm';
     this.nameFilter = 'bar';
 
     await this.renderComponent();
@@ -115,14 +109,17 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
     assert
       .dom(emptyStateTitle)
       .hasText(
-        'There are no foo destinations matching "bar".',
+        'There are no AWS Secrets Manager destinations matching "bar".',
         'Renders correct empty state when both type and name filters are defined'
       );
 
     this.set('nameFilter', undefined);
     assert
       .dom(emptyStateTitle)
-      .hasText('There are no foo destinations.', 'Renders correct empty state when type filter is defined');
+      .hasText(
+        'There are no AWS Secrets Manager destinations.',
+        'Renders correct empty state when type filter is defined'
+      );
 
     this.setProperties({
       typeFilter: undefined,
@@ -132,7 +129,7 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
   });
 
   test('it should render destination list items', async function (assert) {
-    assert.expect(6);
+    assert.expect(5);
 
     this.server.delete('/sys/sync/destinations/aws-sm/destination-aws', () => {
       assert.ok('Request made to delete destination');
@@ -141,26 +138,21 @@ module('Integration | Component | sync | Page::Destinations', function (hooks) {
 
     await this.renderComponent();
 
-    const { icon, name, type, deleteAction } = destinations.list;
+    const { icon, name, type } = destinations.list;
 
-    assert.dom(icon).hasClass('flight-icon-aws-color', 'Correct icon renders');
+    assert.dom(icon).hasClass('hds-icon-aws-color', 'Correct icon renders');
     assert.dom(name).hasText('destination-aws', 'Name renders');
     assert.dom(type).hasText('AWS Secrets Manager', 'Type renders');
 
-    await click(menuTrigger);
+    await click(GENERAL.menuTrigger);
 
-    await click(deleteAction);
+    await click(GENERAL.menuItem('delete'));
     await click(confirmButton);
 
     assert.propEqual(
       this.transitionStub.lastCall.args,
       ['vault.cluster.sync.secrets.overview'],
       'Transition is triggered on delete success'
-    );
-    assert.propEqual(
-      this.clearDatasetStub.lastCall.args,
-      ['sync/destination'],
-      'Store dataset is cleared on delete success'
     );
   });
 });

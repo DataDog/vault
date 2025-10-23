@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,10 +9,7 @@ import { service } from '@ember/service';
 export default class SettingsIndexRouter extends Route {
   @service router;
 
-  beforeModel(transition) {
-    if (transition.targetName === this.routeName) {
-      transition.abort();
-      return this.router.replaceWith('vault.cluster.settings.mount-secret-backend');
-    }
+  redirect() {
+    return this.router.replaceWith('vault.cluster.secrets.enable.index');
   }
 }

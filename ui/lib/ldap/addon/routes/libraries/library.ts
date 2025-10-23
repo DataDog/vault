@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,7 +10,7 @@ import type Store from '@ember-data/store';
 import type SecretMountPath from 'vault/services/secret-mount-path';
 
 interface LdapLibraryRouteParams {
-  name: string;
+  name?: string;
 }
 
 export default class LdapLibraryRoute extends Route {

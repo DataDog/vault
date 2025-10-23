@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachememdb
@@ -240,7 +240,7 @@ func (c *CacheMemDB) SetCapabilitiesIndex(index *CapabilitiesIndex) error {
 // EvictCapabilitiesIndex removes a capabilities index from the cache based on index name and value.
 func (c *CacheMemDB) EvictCapabilitiesIndex(indexName string, indexValues ...interface{}) error {
 	index, err := c.GetCapabilitiesIndex(indexName, indexValues...)
-	if err == ErrCacheItemNotFound {
+	if errors.Is(err, ErrCacheItemNotFound) {
 		return nil
 	}
 	if err != nil {

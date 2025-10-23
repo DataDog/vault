@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,6 +11,7 @@ interface Extensions {
   hcl: string;
   sentinel: string;
   json: string;
+  jsonl: string;
   pem: string;
   txt: string;
 }
@@ -21,30 +22,33 @@ const EXTENSION_TO_MIME: Extensions = {
   hcl: 'text/plain',
   sentinel: 'text/plain',
   json: 'application/json',
+  jsonl: 'application/json',
   pem: 'application/x-pem-file',
   txt: 'text/plain',
 };
 
 export default class DownloadService extends Service {
-  download(filename: string, content: string, extension: string) {
-    // replace spaces with hyphens, append extension to filename
-    const formattedFilename =
-      `${filename?.replace(/\s+/g, '-')}.${extension}` ||
-      `vault-data-${timestamp.now().toISOString()}.${extension}`;
+  formatFilename(filename: string, extension: keyof Extensions = 'txt') {
+    const downloadTimestamp = timestamp.now().toISOString();
+    // replace spaces with underscores
+    const name = filename ? filename?.replace(/\s+/g, '_') : 'vault_data';
+    // appends extension to filename
+    return `${name}_${downloadTimestamp}.${extension}`;
+  }
+
+  download(filename: string, content: any, extension: keyof Extensions) {
+    const formattedFilename = this.formatFilename(filename, extension);
 
     // map extension to MIME type or use default
-    const mimetype = EXTENSION_TO_MIME[extension as keyof Extensions] || 'text/plain';
+    const mimetype = EXTENSION_TO_MIME[extension] || 'text/plain';
 
     // commence download
-    const { document, URL } = window;
     const downloadElement = document.createElement('a');
     const data = new File([content], formattedFilename, { type: mimetype });
     downloadElement.download = formattedFilename;
     downloadElement.href = URL.createObjectURL(data);
-    document.body.appendChild(downloadElement);
     downloadElement.click();
     URL.revokeObjectURL(downloadElement.href);
-    downloadElement.remove();
     return formattedFilename;
   }
 
@@ -61,7 +65,7 @@ export default class DownloadService extends Service {
     this.download(filename, content, 'pem');
   }
 
-  miscExtension(filename: string, content: string, extension: string) {
+  miscExtension(filename: string, content: string, extension: keyof Extensions) {
     this.download(filename, content, extension);
   }
 }

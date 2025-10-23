@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package totp
@@ -339,6 +339,8 @@ func TestBackend_keyCrudDefaultValues(t *testing.T) {
 			testAccStepReadKey(t, "test", expected),
 			testAccStepValidateCode(t, "test", code, true, false),
 			// Next step should fail because it should be in the used cache
+			testAccStepValidateCode(t, "test", code+" ", false, true),
+			testAccStepValidateCode(t, "test", "  "+code, false, true),
 			testAccStepValidateCode(t, "test", code, false, true),
 			testAccStepValidateCode(t, "test", invalidCode, false, false),
 			testAccStepDeleteKey(t, "test"),

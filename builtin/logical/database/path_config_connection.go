@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package database
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strings"
 
 	"github.com/fatih/structs"
 	"github.com/hashicorp/go-uuid"
@@ -17,9 +16,11 @@ import (
 	"github.com/hashicorp/vault/helper/versions"
 	v5 "github.com/hashicorp/vault/sdk/database/dbplugin/v5"
 	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/helper/automatedrotationutil"
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/helper/pluginutil"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/hashicorp/vault/sdk/rotation"
 )
 
 var (
@@ -40,7 +41,23 @@ type DatabaseConfig struct {
 
 	RootCredentialsRotateStatements []string `json:"root_credentials_rotate_statements" structs:"root_credentials_rotate_statements" mapstructure:"root_credentials_rotate_statements"`
 
-	PasswordPolicy string `json:"password_policy" structs:"password_policy" mapstructure:"password_policy"`
+	PasswordPolicy   string `json:"password_policy" structs:"password_policy" mapstructure:"password_policy"`
+	VerifyConnection bool   `json:"verify_connection" structs:"verify_connection" mapstructure:"verify_connection"`
+
+	// SkipStaticRoleImportRotation is a flag to toggle wether or not a given
+	// static account's password should be rotated on creation of the static
+	// roles associated with this DB config. This can be overridden at the
+	// role-level by the role's skip_import_rotation field. The default is
+	// false. Enterprise only.
+	SkipStaticRoleImportRotation bool `json:"skip_static_role_import_rotation" structs:"skip_static_role_import_rotation" mapstructure:"skip_static_role_import_rotation"`
+
+	automatedrotationutil.AutomatedRotationParams
+}
+
+// ConnectionDetails represents the DatabaseConfig.ConnectionDetails map as a
+// struct
+type ConnectionDetails struct {
+	SelfManaged bool `json:"self_managed" structs:"self_managed" mapstructure:"self_managed"`
 }
 
 func (c *DatabaseConfig) SupportsCredentialType(credentialType v5.CredentialType) bool {
@@ -100,6 +117,7 @@ func (b *databaseBackend) pathConnectionReset() framework.OperationFunc {
 		}
 
 		b.dbEvent(ctx, "reset", req.Path, name, false)
+		recordDatabaseObservation(ctx, b, req, name, ObservationTypeDatabaseConnectionReset)
 		return nil, nil
 	}
 }
@@ -159,6 +177,7 @@ func (b *databaseBackend) reloadPlugin() framework.OperationFunc {
 			return nil, err
 		}
 		reloaded := []string{}
+		reloadFailed := []string{}
 		for _, connName := range connNames {
 			entry, err := req.Storage.Get(ctx, fmt.Sprintf("config/%s", connName))
 			if err != nil {
@@ -174,17 +193,25 @@ func (b *databaseBackend) reloadPlugin() framework.OperationFunc {
 			}
 			if config.PluginName == pluginName {
 				if err := b.reloadConnection(ctx, req.Storage, connName); err != nil {
-					var successfullyReloaded string
-					if len(reloaded) > 0 {
-						successfullyReloaded = fmt.Sprintf("successfully reloaded %d connection(s): %s; ",
-							len(reloaded),
-							strings.Join(reloaded, ", "))
-					}
-					return nil, fmt.Errorf("%sfailed to reload connection %q: %w", successfullyReloaded, connName, err)
+					b.Logger().Error("failed to reload connection", "name", connName, "error", err)
+					b.dbEvent(ctx, "reload-connection-fail", req.Path, "", false, "name", connName)
+					recordDatabaseObservation(ctx, b, req, connName, ObservationTypeDatabaseReloadFail,
+						AdditionalDatabaseMetadata{key: "plugin_name", value: pluginName})
+					reloadFailed = append(reloadFailed, connName)
+				} else {
+					b.Logger().Debug("reloaded connection", "name", connName)
+					b.dbEvent(ctx, "reload-connection", req.Path, "", true, "name", connName)
+					recordDatabaseObservation(ctx, b, req, connName, ObservationTypeDatabaseReloadSuccess,
+						AdditionalDatabaseMetadata{key: "plugin_name", value: pluginName})
+					reloaded = append(reloaded, connName)
 				}
-				reloaded = append(reloaded, connName)
 			}
 		}
+
+		recordDatabaseObservation(ctx, b, req, "", ObservationTypeDatabaseReloadPlugin,
+			AdditionalDatabaseMetadata{key: "plugin_name", value: pluginName},
+			AdditionalDatabaseMetadata{key: "reloaded", value: reloaded},
+			AdditionalDatabaseMetadata{key: "reload_failed", value: reloadFailed})
 
 		resp := &logical.Response{
 			Data: map[string]interface{}{
@@ -193,10 +220,12 @@ func (b *databaseBackend) reloadPlugin() framework.OperationFunc {
 			},
 		}
 
-		if len(reloaded) == 0 {
-			resp.AddWarning(fmt.Sprintf("no connections were found with plugin_name %q", pluginName))
+		if len(reloaded) > 0 {
+			b.dbEvent(ctx, "reload", req.Path, "", true, "plugin_name", pluginName)
+		} else if len(reloaded) == 0 && len(reloadFailed) == 0 {
+			b.Logger().Debug("no connections were found", "plugin_name", pluginName)
 		}
-		b.dbEvent(ctx, "reload", req.Path, "", true, "plugin_name", pluginName)
+
 		return resp, nil
 	}
 }
@@ -204,6 +233,53 @@ func (b *databaseBackend) reloadPlugin() framework.OperationFunc {
 // pathConfigurePluginConnection returns a configured framework.Path setup to
 // operate on plugins.
 func pathConfigurePluginConnection(b *databaseBackend) *framework.Path {
+	fields := map[string]*framework.FieldSchema{
+		"name": {
+			Type:        framework.TypeString,
+			Description: "Name of this database connection",
+		},
+
+		"plugin_name": {
+			Type: framework.TypeString,
+			Description: `The name of a builtin or previously registered
+				plugin known to vault. This endpoint will create an instance of
+				that plugin type.`,
+		},
+
+		"plugin_version": {
+			Type:        framework.TypeString,
+			Description: `The version of the plugin to use.`,
+		},
+
+		"verify_connection": {
+			Type:    framework.TypeBool,
+			Default: true,
+			Description: `If true, the connection details are verified by
+				actually connecting to the database. Defaults to true.`,
+		},
+
+		"allowed_roles": {
+			Type: framework.TypeCommaStringSlice,
+			Description: `Comma separated string or array of the role names
+				allowed to get creds from this database connection. If empty no
+				roles are allowed. If "*" all roles are allowed.`,
+		},
+
+		"root_rotation_statements": {
+			Type: framework.TypeStringSlice,
+			Description: `Specifies the database statements to be executed
+				to rotate the root user's credentials. See the plugin's API 
+				page for more information on support and formatting for this 
+				parameter.`,
+		},
+		"password_policy": {
+			Type:        framework.TypeString,
+			Description: `Password policy to use when generating passwords.`,
+		},
+	}
+	AddConnectionFieldsEnt(fields)
+	automatedrotationutil.AddAutomatedRotationFields(fields)
+
 	return &framework.Path{
 		Pattern: fmt.Sprintf("config/%s", framework.GenericNameRegex("name")),
 
@@ -211,50 +287,7 @@ func pathConfigurePluginConnection(b *databaseBackend) *framework.Path {
 			OperationPrefix: operationPrefixDatabase,
 		},
 
-		Fields: map[string]*framework.FieldSchema{
-			"name": {
-				Type:        framework.TypeString,
-				Description: "Name of this database connection",
-			},
-
-			"plugin_name": {
-				Type: framework.TypeString,
-				Description: `The name of a builtin or previously registered
-				plugin known to vault. This endpoint will create an instance of
-				that plugin type.`,
-			},
-
-			"plugin_version": {
-				Type:        framework.TypeString,
-				Description: `The version of the plugin to use.`,
-			},
-
-			"verify_connection": {
-				Type:    framework.TypeBool,
-				Default: true,
-				Description: `If true, the connection details are verified by
-				actually connecting to the database. Defaults to true.`,
-			},
-
-			"allowed_roles": {
-				Type: framework.TypeCommaStringSlice,
-				Description: `Comma separated string or array of the role names
-				allowed to get creds from this database connection. If empty no
-				roles are allowed. If "*" all roles are allowed.`,
-			},
-
-			"root_rotation_statements": {
-				Type: framework.TypeStringSlice,
-				Description: `Specifies the database statements to be executed
-				to rotate the root user's credentials. See the plugin's API 
-				page for more information on support and formatting for this 
-				parameter.`,
-			},
-			"password_policy": {
-				Type:        framework.TypeString,
-				Description: `Password policy to use when generating passwords.`,
-			},
-		},
+		Fields: fields,
 
 		ExistenceCheck: b.connectionExistenceCheck(),
 
@@ -265,6 +298,8 @@ func pathConfigurePluginConnection(b *databaseBackend) *framework.Path {
 					OperationVerb:   "configure",
 					OperationSuffix: "connection",
 				},
+				ForwardPerformanceSecondary: true,
+				ForwardPerformanceStandby:   true,
 			},
 			logical.UpdateOperation: &framework.PathOperation{
 				Callback: b.connectionWriteHandler(),
@@ -272,6 +307,8 @@ func pathConfigurePluginConnection(b *databaseBackend) *framework.Path {
 					OperationVerb:   "configure",
 					OperationSuffix: "connection",
 				},
+				ForwardPerformanceSecondary: true,
+				ForwardPerformanceStandby:   true,
 			},
 			logical.ReadOperation: &framework.PathOperation{
 				Callback: b.connectionReadHandler(),
@@ -378,7 +415,7 @@ func (b *databaseBackend) connectionReadHandler() framework.OperationFunc {
 		delete(config.ConnectionDetails, "service_account_json")
 
 		resp := &logical.Response{}
-		if dbi, err := b.GetConnection(ctx, req.Storage, name); err == nil {
+		if dbi, err := b.GetConnectionSkipVerify(ctx, req.Storage, name); err == nil {
 			config.RunningPluginVersion = dbi.runningPluginVersion
 			if config.PluginVersion != "" && config.PluginVersion != config.RunningPluginVersion {
 				warning := fmt.Sprintf("Plugin version is configured as %q, but running %q", config.PluginVersion, config.RunningPluginVersion)
@@ -392,6 +429,13 @@ func (b *databaseBackend) connectionReadHandler() framework.OperationFunc {
 		}
 
 		resp.Data = structs.New(config).Map()
+		config.PopulateAutomatedRotationData(resp.Data)
+		// remove extra nested AutomatedRotationParams key
+		// before returning response
+		delete(resp.Data, "AutomatedRotationParams")
+
+		recordDatabaseObservation(ctx, b, req, name, ObservationTypeDatabaseConfigRead)
+
 		return resp, nil
 	}
 }
@@ -414,6 +458,7 @@ func (b *databaseBackend) connectionDeleteHandler() framework.OperationFunc {
 		}
 
 		b.dbEvent(ctx, "config-delete", req.Path, name, true)
+		recordDatabaseObservation(ctx, b, req, name, ObservationTypeDatabaseConfigDelete)
 		return nil, nil
 	}
 }
@@ -422,15 +467,15 @@ func (b *databaseBackend) connectionDeleteHandler() framework.OperationFunc {
 // both builtin and plugin database types.
 func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 	return func(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-		verifyConnection := data.Get("verify_connection").(bool)
-
 		name := data.Get("name").(string)
 		if name == "" {
 			return logical.ErrorResponse(respErrEmptyName), nil
 		}
 
 		// Baseline
-		config := &DatabaseConfig{}
+		config := &DatabaseConfig{
+			VerifyConnection: true,
+		}
 
 		entry, err := req.Storage.Get(ctx, fmt.Sprintf("config/%s", name))
 		if err != nil {
@@ -440,6 +485,13 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 			if err := entry.DecodeJSON(config); err != nil {
 				return nil, err
 			}
+		}
+
+		// If this value was provided as part of the request we want to set it to this value
+		if verifyConnectionRaw, ok := data.GetOk("verify_connection"); ok {
+			config.VerifyConnection = verifyConnectionRaw.(bool)
+		} else if req.Operation == logical.CreateOperation {
+			config.VerifyConnection = data.Get("verify_connection").(bool)
 		}
 
 		if pluginNameRaw, ok := data.GetOk("plugin_name"); ok {
@@ -472,6 +524,14 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 			config.PasswordPolicy = passwordPolicyRaw.(string)
 		}
 
+		if skipImportRotationRaw, ok := data.GetOk("skip_static_role_import_rotation"); ok {
+			config.SkipStaticRoleImportRotation = skipImportRotationRaw.(bool)
+		}
+
+		if err := config.ParseAutomatedRotationFields(data); err != nil {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+
 		// Remove these entries from the data before we store it keyed under
 		// ConnectionDetails.
 		delete(data.Raw, "name")
@@ -481,6 +541,11 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 		delete(data.Raw, "verify_connection")
 		delete(data.Raw, "root_rotation_statements")
 		delete(data.Raw, "password_policy")
+		delete(data.Raw, "skip_static_role_import_rotation")
+		delete(data.Raw, "rotation_schedule")
+		delete(data.Raw, "rotation_window")
+		delete(data.Raw, "rotation_period")
+		delete(data.Raw, "disable_automated_rotation")
 
 		id, err := uuid.GenerateUUID()
 		if err != nil {
@@ -509,7 +574,7 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 
 		initReq := v5.InitializeRequest{
 			Config:           config.ConnectionDetails,
-			VerifyConnection: verifyConnection,
+			VerifyConnection: config.VerifyConnection,
 		}
 		initResp, err := dbw.Initialize(ctx, initReq)
 		if err != nil {
@@ -531,6 +596,36 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 			oldConn.Close()
 		}
 
+		var performedRotationManagerOpern string
+		if config.ShouldDeregisterRotationJob() {
+			performedRotationManagerOpern = rotation.PerformedDeregistration
+			// Disable Automated Rotation and Deregister credentials if required
+			deregisterReq := &rotation.RotationJobDeregisterRequest{
+				MountPoint: req.MountPoint,
+				ReqPath:    req.Path,
+			}
+
+			b.Logger().Debug("Deregistering rotation job", "mount", req.MountPoint+req.Path)
+			if err := b.System().DeregisterRotationJob(ctx, deregisterReq); err != nil {
+				return logical.ErrorResponse("error deregistering rotation job: %s", err), nil
+			}
+		} else if config.ShouldRegisterRotationJob() {
+			performedRotationManagerOpern = rotation.PerformedRegistration
+			// Register the rotation job if it's required.
+			cfgReq := &rotation.RotationJobConfigureRequest{
+				MountPoint:       req.MountPoint,
+				ReqPath:          req.Path,
+				RotationSchedule: config.RotationSchedule,
+				RotationWindow:   config.RotationWindow,
+				RotationPeriod:   config.RotationPeriod,
+			}
+
+			b.Logger().Debug("Registering rotation job", "mount", req.MountPoint+req.Path)
+			if _, err = b.System().RegisterRotationJob(ctx, cfgReq); err != nil {
+				return logical.ErrorResponse("error registering rotation job: %s", err), nil
+			}
+		}
+
 		// 1.12.0 and 1.12.1 stored builtin plugins in storage, but 1.12.2 reverted
 		// that, so clean up any pre-existing stored builtin versions on write.
 		if versions.IsBuiltinVersion(config.PluginVersion) {
@@ -538,7 +633,14 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 		}
 		err = storeConfig(ctx, req.Storage, name, config)
 		if err != nil {
-			return nil, err
+			wrappedError := err
+			if performedRotationManagerOpern != "" {
+				b.Logger().Error("write to storage failed but the rotation manager still succeeded.",
+					"operation", performedRotationManagerOpern, "mount", req.MountPoint, "path", req.Path)
+				wrappedError = fmt.Errorf("write to storage failed but the rotation manager still succeeded; "+
+					"operation=%s, mount=%s, path=%s, storageError=%s", performedRotationManagerOpern, req.MountPoint, req.Path, err)
+			}
+			return nil, wrappedError
 		}
 
 		resp := &logical.Response{}
@@ -560,7 +662,24 @@ func (b *databaseBackend) connectionWriteHandler() framework.OperationFunc {
 				"Vault (or the sdk if using a custom plugin) to gain password policy support", config.PluginName))
 		}
 
+		// We can ignore the error at this point since we're simply adding a warning.
+		dbType, _ := dbw.Type()
+		if dbType == "snowflake" && config.ConnectionDetails["password"] != nil {
+			resp.AddWarning(`[DEPRECATED] Single-factor password authentication is deprecated in Snowflake and will
+be removed by November 2025. Key pair authentication will be required after this date. Please
+see the Vault documentation for details on the removal of this feature. More information is
+available at https://www.snowflake.com/en/blog/blocking-single-factor-password-authentification`)
+		}
+
+		var rotationPeriodString string
+		if config.RotationPeriod != 0 {
+			rotationPeriodString = config.RotationPeriod.String()
+		}
 		b.dbEvent(ctx, "config-write", req.Path, name, true)
+		recordDatabaseObservation(ctx, b, req, name, ObservationTypeDatabaseConfigWrite,
+			AdditionalDatabaseMetadata{key: "root_rotation_period", value: rotationPeriodString},
+			AdditionalDatabaseMetadata{key: "root_rotation_schedule", value: config.RotationSchedule})
+
 		if len(resp.Warnings) == 0 {
 			return nil, nil
 		}

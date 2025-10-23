@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,25 +10,18 @@ import { action } from '@ember/object';
 import { tracked } from '@glimmer/tracking';
 import { resolve } from 'rsvp';
 import { filterOptions, defaultMatcher } from 'ember-power-select/utils/group-utils';
+import { removeFromArray } from 'vault/helpers/remove-from-array';
+import { addToArray } from 'vault/helpers/add-to-array';
+import { assert } from '@ember/debug';
 /**
  * @module SearchSelect
  * The `SearchSelect` is an implementation of the [ember-power-select](https://github.com/cibernox/ember-power-select) used for form elements where options come dynamically from the API.
+ * 
  * @example
- *  <SearchSelect
- *    @id="policy"
- *    @models={{array "policies/acl"}}
- *    @onChange={{this.onChange}}
- *    @inputValue={{get @model this.valuePath}}
- *    @wildcardLabel="role"
- *    @fallbackComponent="string-list"
- *    @selectLimit={{1}}
- *    @backend={{@model.backend}}
- *    @disallowNewItems={{true}}
- *    class={{if this.validationError "dropdown-has-error-border"}}
- * />
+ *  <SearchSelect @id="policy" @models={{array "policies/acl"}} @onChange={{this.onChange}} @inputValue={{get @model this.valuePath}} @wildcardLabel="role" @fallbackComponent="string-list" @selectLimit={{1}} @backend={{@model.backend}} @disallowNewItems={{true}} class={{if this.validationError "dropdown-has-error-border"}} />
  *
  // * component functionality
- * @param {function} onChange - The onchange action for this form field. ** SEE UTIL ** search-select-has-many.js if selecting models from a hasMany relationship
+ * @param {function} onChange - The onchange action for this form field. ** SEE EXAMPLE ** mfa-login-enforcement-form.js (onMethodChange) for example when selecting models from a hasMany relationship
  * @param {array} [inputValue] - Array of strings corresponding to the input's initial value, e.g. an array of model ids that on edit will appear as selected items below the input
  * @param {boolean} [disallowNewItems=false] - Controls whether or not the user can add a new item if none found
  * @param {boolean} [shouldRenderName=false] - By default an item's id renders in the dropdown, `true` displays the name with its id in smaller text beside it *NOTE: the boolean flips automatically with 'identity' models or if this.idKey !== 'id'
@@ -47,14 +40,14 @@ import { filterOptions, defaultMatcher } from 'ember-power-select/utils/group-ut
  * @param {string} id - The name of the form field
  * @param {string} [label] - Label for this form field
  * @param {string} [labelClass] - overwrite default label size (14px) from class="is-label"
+ * @param {string} [ariaLabel] - fallback accessible label if label is not provided
  * @param {string} [subText] - Text to be displayed below the label
  * @param {string} fallbackComponent - name of component to be rendered if the API call 403s
  * @param {string} [helpText] - Text to be displayed in the info tooltip for this form field
  * @param {string} [wildcardLabel] - string (singular) for rendering label tag beside a wildcard selection (i.e. 'role*'), for the number of items it includes, e.g. @wildcardLabel="role" -> "includes 4 roles"
  * @param {string} [placeholder] - text you wish to replace the default "search" with
  * @param {boolean} [displayInherit=false] - if you need the search select component to display inherit instead of box.
- * @param {boolean} [renderInPlace] - pass `true` when power select renders in a modal
- * @param {function} [renderInfoTooltip] - receives each inputValue string and list of dropdownOptions as args, so parent can determine when to render a tooltip beside a selectedOption and the tooltip text. see 'oidc/provider-form.js'
+ * @param {function} [renderTooltip] - receives each inputValue string and list of dropdownOptions as args, so parent can determine when to render a tooltip beside a selectedOption and the tooltip text. see 'oidc/provider-form.js'
  * @param {boolean} [disabled] - if true sets the disabled property on the ember-power-select component and makes it unusable.
  *
  // * advanced customization
@@ -70,6 +63,14 @@ export default class SearchSelect extends Component {
   @tracked selectedOptions = []; // array of selected options (initially set by @inputValue)
   @tracked dropdownOptions = []; // options that will render in dropdown, updates as selections are added/discarded
   @tracked allOptions = []; // both selected and unselected options, used for wildcard filter
+
+  constructor() {
+    super(...arguments);
+    assert(
+      'one of @id, @label, or @ariaLabel must be passed to search-select component',
+      this.args.id || this.args.label || this.args.ariaLabel
+    );
+  }
 
   get hidePowerSelect() {
     return this.selectedOptions.length >= this.args.selectLimit;
@@ -100,7 +101,7 @@ export default class SearchSelect extends Component {
 
   addSearchText(optionsToFormat) {
     // maps over array of objects or response from query
-    return optionsToFormat.toArray().map((option) => {
+    return optionsToFormat.map((option) => {
       const id = option[this.idKey] ? option[this.idKey] : option.id;
       option.searchText = `${option[this.nameKey]} ${id}`;
       return option;
@@ -113,12 +114,12 @@ export default class SearchSelect extends Component {
     return inputValues.map((option) => {
       const matchingOption = this.dropdownOptions.find((opt) => opt[this.idKey] === option);
       // tooltip text comes from return of parent function
-      const addTooltip = this.args.renderInfoTooltip
-        ? this.args.renderInfoTooltip(option, this.dropdownOptions)
+      const addTooltip = this.args.renderTooltip
+        ? this.args.renderTooltip(option, this.dropdownOptions)
         : false;
 
       // remove any matches from dropdown list
-      this.dropdownOptions.removeObject(matchingOption);
+      this.dropdownOptions = removeFromArray(this.dropdownOptions, matchingOption);
       return {
         id: option,
         name: matchingOption ? matchingOption[this.nameKey] : option,
@@ -140,7 +141,7 @@ export default class SearchSelect extends Component {
     }
 
     if (!this.args.models) {
-      if (this.args.options) {
+      if (Array.isArray(this.args.options)) {
         const { options } = this.args;
         // if options are nested, let parent handle formatting - see path-filter-config-list.js
         this.dropdownOptions = options.some((e) => Object.keys(e).includes('groupName'))
@@ -263,9 +264,9 @@ export default class SearchSelect extends Component {
 
   @action
   discardSelection(selected) {
-    this.selectedOptions.removeObject(selected);
+    this.selectedOptions = removeFromArray(this.selectedOptions, selected);
     if (!selected.new) {
-      this.dropdownOptions.pushObject(selected);
+      this.dropdownOptions = addToArray(this.dropdownOptions, selected);
     }
     this.handleChange();
   }
@@ -278,9 +279,6 @@ export default class SearchSelect extends Component {
     }
     if (this.args.search) {
       return resolve(this.args.search(term, select)).then((results) => {
-        if (results.toArray) {
-          results = results.toArray();
-        }
         this.addCreateOption(term, results);
         return results;
       });
@@ -294,10 +292,10 @@ export default class SearchSelect extends Component {
   selectOrCreate(selection) {
     if (selection && selection.__isSuggestion__) {
       const name = selection.__value__;
-      this.selectedOptions.pushObject({ name, id: name, new: true });
+      this.selectedOptions = addToArray(this.selectedOptions, { name, id: name, new: true });
     } else {
-      this.selectedOptions.pushObject(selection);
-      this.dropdownOptions.removeObject(selection);
+      this.selectedOptions = addToArray(this.selectedOptions, selection);
+      this.dropdownOptions = removeFromArray(this.dropdownOptions, selection);
     }
     this.handleChange();
   }

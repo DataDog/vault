@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 import type { WithFormFieldsAndValidationsModel } from 'vault/app-types';
@@ -13,10 +13,12 @@ import type {
 export default interface LdapLibraryModel extends WithFormFieldsAndValidationsModel {
   backend: string;
   name: string;
+  path_to_library: string;
   service_account_names: string;
   default_ttl: number;
   max_ttl: number;
   disable_check_in_enforcement: string;
+  get completeLibraryName(): string;
   get displayFields(): Array<FormField>;
   libraryPath: CapabilitiesModel;
   statusPath: CapabilitiesModel;

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -12,6 +12,15 @@ export default function (server) {
     return {
       data: {
         feature_flags: featuresResponse ? featuresResponse.feature_flags : null,
+      },
+    };
+  });
+
+  server.get('/sys/activation-flags', () => {
+    return {
+      data: {
+        activated: [''],
+        unactivated: ['secrets-sync'],
       },
     };
   });
@@ -34,14 +43,6 @@ export default function (server) {
       cluster_name: 'vault-cluster-e779cd7c',
       cluster_id: '5f20f5ab-acea-0481-787e-71ec2ff5a60b',
       last_wal: 121,
-    };
-  });
-
-  server.get('/sys/internal/ui/version', function () {
-    return {
-      data: {
-        version: '1.9.0+ent',
-      },
     };
   });
 

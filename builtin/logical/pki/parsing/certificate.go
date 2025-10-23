@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package parsing
@@ -11,6 +11,14 @@ import (
 
 	"github.com/hashicorp/vault/sdk/helper/certutil"
 )
+
+func SerialFromCert(cert *x509.Certificate) string {
+	return SerialFromBigInt(cert.SerialNumber)
+}
+
+func SerialFromBigInt(serial *big.Int) string {
+	return strings.TrimSpace(certutil.GetHexFormatted(serial.Bytes(), ":"))
+}
 
 // NormalizeSerialForStorageFromBigInt given a serial number, format it as a string
 // that is safe to store within a filesystem

@@ -1,33 +1,33 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
-import { render } from '@ember/test-helpers';
+import { click, find, render } from '@ember/test-helpers';
 import { hbs } from 'ember-cli-htmlbars';
-import clientsHandler from 'vault/mirage/handlers/clients';
+import clientsHandler, { LICENSE_START, STATIC_NOW } from 'vault/mirage/handlers/clients';
 import sinon from 'sinon';
-import { formatRFC3339, getUnixTime } from 'date-fns';
+import { getUnixTime } from 'date-fns';
 import { findAll } from '@ember/test-helpers';
 import { formatNumber } from 'core/helpers/format-number';
 import timestamp from 'core/utils/timestamp';
-import { setRunOptions } from 'ember-a11y-testing/test-support';
-import { SELECTORS as ts } from 'vault/tests/helpers/clients';
+import { CLIENT_COUNT, CHARTS } from 'vault/tests/helpers/clients/client-count-selectors';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import { parseAPITimestamp } from 'core/utils/date-formatters';
 
-const START_TIME = getUnixTime(new Date('2023-10-01T00:00:00Z'));
+const START_TIME = getUnixTime(LICENSE_START);
 
 module('Integration | Component | clients/running-total', function (hooks) {
   setupRenderingTest(hooks);
   setupMirage(hooks);
 
-  hooks.before(function () {
-    sinon.stub(timestamp, 'now').callsFake(() => new Date('2024-01-31T23:59:59Z'));
-  });
-
   hooks.beforeEach(async function () {
+    this.flags = this.owner.lookup('service:flags');
+    this.flags.activatedFlags = ['secrets-sync'];
+    sinon.replace(timestamp, 'now', sinon.fake.returns(STATIC_NOW));
     clientsHandler(this.server);
     const store = this.owner.lookup('service:store');
     const activityQuery = {
@@ -35,160 +35,162 @@ module('Integration | Component | clients/running-total', function (hooks) {
       end_time: { timestamp: getUnixTime(timestamp.now()) },
     };
     this.activity = await store.queryRecord('clients/activity', activityQuery);
-    this.newActivity = this.activity.byMonth.map((d) => d.new_clients);
-    this.totalUsageCounts = this.activity.total;
-    this.set('timestamp', formatRFC3339(timestamp.now()));
-    this.set('chartLegend', [
-      { label: 'entity clients', key: 'entity_clients' },
-      { label: 'non-entity clients', key: 'non_entity_clients' },
-    ]);
-    // Fails on #ember-testing-container
-    setRunOptions({
-      rules: {
-        'scrollable-region-focusable': { enabled: false },
-      },
-    });
-  });
+    this.byMonthNewClients = this.activity.byMonth.map((d) => d.new_clients);
 
-  hooks.after(function () {
-    timestamp.now.restore();
+    this.renderComponent = async () => {
+      await render(hbs`
+      <Clients::RunningTotal
+        @byMonthNewClients={{this.byMonthNewClients}}
+        @runningTotals={{this.activity.total}}
+      />
+    `);
+    };
   });
 
   test('it renders with full monthly activity data', async function (assert) {
-    const expectedTotalEntity = formatNumber([this.totalUsageCounts.entity_clients]);
-    const expectedTotalNonEntity = formatNumber([this.totalUsageCounts.non_entity_clients]);
-    // const expectedTotalSync = formatNumber([this.totalUsageCounts.secret_syncs]);
+    await this.renderComponent();
 
-    await render(hbs`
-      <Clients::RunningTotal
-        @byMonthActivityData={{this.activity.byMonth}}
-        @runningTotals={{this.totalUsageCounts}}
-        @upgradeData={{this.upgradeDuringActivity}}
-        @responseTimestamp={{this.timestamp}}
-        @isHistoricalMonth={{false}}
-      />
-    `);
-
-    assert.dom(ts.charts.chart('running total')).exists('running total component renders');
-    assert.dom(ts.charts.lineChart).exists('line chart renders');
     assert
-      .dom(ts.charts.statTextValue('Entity clients'))
-      .hasText(`${expectedTotalEntity}`, `renders correct total entity average ${expectedTotalEntity}`);
-    assert
-      .dom(ts.charts.statTextValue('Non-entity clients'))
-      .hasText(
-        `${expectedTotalNonEntity}`,
-        `renders correct total nonentity average ${expectedTotalNonEntity}`
-      );
-    // * unavailable during SYNC BETA (1.16.0), planned for 1.16.1 release
-    // assert
-    //   .dom(ts.charts.statTextValue('Secrets sync clients'))
-    //   .hasText(`${expectedTotalSync}`, `renders correct total sync ${expectedTotalSync}`);
+      .dom(CLIENT_COUNT.card('Client usage trends for selected billing period'))
+      .exists('running total component renders');
+    assert.dom(CHARTS.chart('Client usage by month')).exists('bar chart renders');
+    assert.dom(CHARTS.legend).hasText('New clients');
+    const expectedColor = 'rgb(28, 52, 95)';
+    const color = getComputedStyle(find(CHARTS.legendDot(1))).backgroundColor;
+    assert.strictEqual(color, expectedColor, `actual color: ${color}, expected color: ${expectedColor}`);
 
-    // assert line chart is correct
-    findAll(ts.charts.line.xAxisLabel).forEach((e, i) => {
+    const expectedValues = {
+      'Entity clients': formatNumber([this.activity.total.entity_clients]),
+      'Non-entity clients': formatNumber([this.activity.total.non_entity_clients]),
+      'ACME clients': formatNumber([this.activity.total.acme_clients]),
+      'Secret sync clients': formatNumber([this.activity.total.secret_syncs]),
+    };
+    for (const label in expectedValues) {
       assert
-        .dom(e)
+        .dom(CLIENT_COUNT.statLegendValue(label))
         .hasText(
-          `${this.activity.byMonth[i].month}`,
-          `renders x-axis labels for line chart: ${this.activity.byMonth[i].month}`
+          `${expectedValues[label]} ${label}`,
+          `stat label: ${label} renders correct total: ${expectedValues[label]}`
         );
+    }
+
+    // assert bar chart is correct
+    findAll(CHARTS.xAxisLabel).forEach((e, i) => {
+      const timestamp = this.byMonthNewClients[i].timestamp;
+      const displayMonth = parseAPITimestamp(timestamp, 'M/yy');
+      assert.dom(e).hasText(displayMonth, `renders x-axis labels for bar chart: ${displayMonth}`);
     });
     assert
-      .dom(ts.charts.line.plotPoint)
-      .exists(
-        { count: this.activity.byMonth.filter((m) => m.counts !== null).length },
-        'renders correct number of plot points'
-      );
+      .dom(CHARTS.verticalBar)
+      .exists({ count: this.byMonthNewClients.length }, 'renders correct number of bars ');
   });
 
-  test('it renders with no new monthly data', async function (assert) {
-    this.set(
-      'monthlyWithoutNew',
-      this.activity.byMonth.map((d) => ({
-        ...d,
-        new_clients: { month: d.month },
-      }))
-    );
-    const expectedTotalEntity = formatNumber([this.totalUsageCounts.entity_clients]);
-    const expectedTotalNonEntity = formatNumber([this.totalUsageCounts.non_entity_clients]);
-    // const expectedTotalSync = formatNumber([this.totalUsageCounts.secret_syncs]);
-
-    await render(hbs`
-      <Clients::RunningTotal
-        @byMonthActivityData={{this.monthlyWithoutNew}}
-        @runningTotals={{this.totalUsageCounts}}
-        @responseTimestamp={{this.timestamp}}
-        @isHistoricalMonth={{false}}
-      />
-    `);
-    assert.dom(ts.charts.chart('running total')).exists('running total component renders');
-    assert.dom(ts.charts.lineChart).exists('line chart renders');
+  test('it toggles to split chart by client type', async function (assert) {
+    await this.renderComponent();
+    await click(GENERAL.inputByAttr('toggle view'));
 
     assert
-      .dom(ts.charts.statTextValue('Entity clients'))
-      .hasText(`${expectedTotalEntity}`, `renders correct total entity average ${expectedTotalEntity}`);
+      .dom(CLIENT_COUNT.card('Client usage trends for selected billing period'))
+      .exists('running total component renders');
+    assert.dom(CHARTS.chart('Client usage by month')).exists('bar chart renders');
     assert
-      .dom(ts.charts.statTextValue('Non-entity clients'))
+      .dom(CHARTS.legend)
       .hasText(
-        `${expectedTotalNonEntity}`,
-        `renders correct total nonentity average ${expectedTotalNonEntity}`
+        'Entity clients Non-entity clients ACME clients Secret sync clients',
+        'it renders legend in order that matches the stacked bar data and secret sync clients is last'
       );
-    // * unavailable during SYNC BETA (1.16.0), planned for 1.16.1 release
-    // assert
-    //   .dom(ts.charts.statTextValue('Secrets sync clients'))
-    //   .hasText(`${expectedTotalSync}`, `renders correct total sync ${expectedTotalSync}`);
+
+    // assert each legend item is correct
+    const expectedLegend = [
+      { label: 'Entity clients', color: 'rgb(66, 105, 208)' },
+      { label: 'Non-entity clients', color: 'rgb(239, 177, 23)' },
+      { label: 'ACME clients', color: 'rgb(255, 114, 92)' },
+      { label: 'Secret sync clients', color: 'rgb(108, 197, 176)' },
+    ];
+
+    findAll('.legend-item').forEach((e, i) => {
+      const { label, color } = expectedLegend[i];
+      assert.dom(e).hasText(label, `legend renders label: ${label}`);
+      const dotColor = getComputedStyle(find(CHARTS.legendDot(i + 1))).backgroundColor;
+      assert.strictEqual(dotColor, color, `${label} - actual color: ${dotColor}, expected: ${color}`);
+    });
+
+    // assert bar chart is correct
+    findAll(CHARTS.xAxisLabel).forEach((e, i) => {
+      const timestamp = this.byMonthNewClients[i].timestamp;
+      const displayMonth = parseAPITimestamp(timestamp, 'M/yy');
+      assert.dom(e).hasText(`${displayMonth}`, `renders x-axis labels for bar chart: ${displayMonth}`);
+    });
+
+    const months = this.byMonthNewClients.length;
+    const barsPerMonth = expectedLegend.length;
+    assert
+      .dom(CHARTS.verticalBar)
+      .exists({ count: months * barsPerMonth }, `renders ${barsPerMonth} bars per month`);
   });
 
-  test('it renders with single historical month data', async function (assert) {
-    const singleMonth = this.activity.byMonth[this.activity.byMonth.length - 1];
-    const singleMonthNew = this.newActivity[this.newActivity.length - 1];
-    this.set('singleMonth', [singleMonth]);
-    const expectedTotalClients = formatNumber([singleMonth.clients]);
-    const expectedTotalEntity = formatNumber([singleMonth.entity_clients]);
-    const expectedTotalNonEntity = formatNumber([singleMonth.non_entity_clients]);
-    // const expectedTotalSync = formatNumber([singleMonth.secret_syncs]);
-    const expectedNewClients = formatNumber([singleMonthNew.clients]);
-    const expectedNewEntity = formatNumber([singleMonthNew.entity_clients]);
-    const expectedNewNonEntity = formatNumber([singleMonthNew.non_entity_clients]);
-    // const expectedNewSyncs = formatNumber([singleMonthNew.secret_syncs]);
-    const { statTextValue } = ts.charts;
+  test('it renders when no monthly breakdown is available', async function (assert) {
+    this.byMonthNewClients = [];
+    await this.renderComponent();
+    const expectedStats = {
+      Entity: formatNumber([this.activity.total.entity_clients]),
+      'Non-entity': formatNumber([this.activity.total.non_entity_clients]),
+      ACME: formatNumber([this.activity.total.acme_clients]),
+      'Secret sync': formatNumber([this.activity.total.secret_syncs]),
+    };
+    for (const label in expectedStats) {
+      assert
+        .dom(CLIENT_COUNT.statTextValue(label))
+        .hasText(
+          `${expectedStats[label]}`,
+          `stat label: ${label} renders single month new clients: ${expectedStats[label]}`
+        );
+    }
+    assert.dom(CHARTS.chart('Client usage by month')).doesNotExist('bar chart does not render');
+    assert.dom(CLIENT_COUNT.statTextValue()).exists({ count: 5 }, 'renders 5 stat text containers');
+  });
 
-    await render(hbs`
-      <Clients::RunningTotal
-        @byMonthActivityData={{this.singleMonth}}
-        @runningTotals={{this.totalUsageCounts}}
-        @responseTimestamp={{this.timestamp}}
-        @isHistoricalMonth={{true}}
-      />
-    `);
-    assert.dom(ts.charts.lineChart).doesNotExist('line chart does not render');
-    assert.dom(statTextValue()).exists({ count: 6 }, 'renders 6 stat text containers'); // after SYNC BETA update to 8
+  test('it hides secret sync totals when feature is not activated', async function (assert) {
+    this.flags.activatedFlags = [];
+    // reset secret sync clients to 0
+    this.byMonthNewClients = this.byMonthNewClients.map((obj) => ({ ...obj, secret_syncs: 0 }));
+
+    await this.renderComponent();
+
     assert
-      .dom(`[data-test-new] ${statTextValue('New clients')}`)
-      .hasText(`${expectedNewClients}`, `renders correct total new clients: ${expectedNewClients}`);
+      .dom(CLIENT_COUNT.card('Client usage trends for selected billing period'))
+      .exists('running total component renders');
+    assert.dom(CHARTS.chart('Client usage by month')).exists('bar chart renders');
+    assert.dom(CLIENT_COUNT.statLegendValue('Entity clients')).exists();
+    assert.dom(CLIENT_COUNT.statLegendValue('Non-entity clients')).exists();
     assert
-      .dom(`[data-test-new] ${statTextValue('Entity clients')}`)
-      .hasText(`${expectedNewEntity}`, `renders correct total new entity: ${expectedNewEntity}`);
+      .dom(CLIENT_COUNT.statLegendValue('Secret sync clients'))
+      .doesNotExist('does not render secret syncs');
+
+    // check toggle view
+    await click(GENERAL.inputByAttr('toggle view'));
     assert
-      .dom(`[data-test-new] ${statTextValue('Non-entity clients')}`)
-      .hasText(`${expectedNewNonEntity}`, `renders correct total new non-entity: ${expectedNewNonEntity}`);
-    // * unavailable during SYNC BETA (1.16.0), planned for 1.16.1 release
-    // assert
-    //   .dom(`[data-test-new] ${statTextValue('Secrets sync clients')}`)
-    //   .hasText(`${expectedNewSyncs}`, `renders correct total new non-entity: ${expectedNewSyncs}`);
+      .dom(CHARTS.legend)
+      .hasText('Entity clients Non-entity clients ACME clients', 'legend does not include sync clients');
+
+    // assert each legend item is correct
+    const expectedLegend = [
+      { label: 'Entity clients', color: 'rgb(66, 105, 208)' },
+      { label: 'Non-entity clients', color: 'rgb(239, 177, 23)' },
+      { label: 'ACME clients', color: 'rgb(255, 114, 92)' },
+    ];
+
+    findAll('.legend-item').forEach((e, i) => {
+      const { label, color } = expectedLegend[i];
+      assert.dom(e).hasText(label, `legend renders label: ${label}`);
+      const dotColor = getComputedStyle(find(CHARTS.legendDot(i + 1))).backgroundColor;
+      assert.strictEqual(dotColor, color, `${label} - actual color: ${dotColor}, expected: ${color}`);
+    });
+
+    const months = this.byMonthNewClients.length;
+    const barsPerMonth = expectedLegend.length;
     assert
-      .dom(`[data-test-total] ${statTextValue('Total monthly clients')}`)
-      .hasText(`${expectedTotalClients}`, `renders correct total clients: ${expectedTotalClients}`);
-    assert
-      .dom(`[data-test-total] ${statTextValue('Entity clients')}`)
-      .hasText(`${expectedTotalEntity}`, `renders correct total entity: ${expectedTotalEntity}`);
-    assert
-      .dom(`[data-test-total] ${statTextValue('Non-entity clients')}`)
-      .hasText(`${expectedTotalNonEntity}`, `renders correct total non-entity: ${expectedTotalNonEntity}`);
-    // * unavailable during SYNC BETA (1.16.0), planned for 1.16.1 release
-    // assert
-    //   .dom(`[data-test-total] ${statTextValue('Secrets sync clients')}`)
-    //   .hasText(`${expectedTotalSync}`, `renders correct total sync: ${expectedTotalSync}`);
+      .dom(CHARTS.verticalBar)
+      .exists({ count: months * barsPerMonth }, `renders ${barsPerMonth} bars per month`);
   });
 });

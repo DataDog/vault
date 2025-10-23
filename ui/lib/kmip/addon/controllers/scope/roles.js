@@ -1,12 +1,12 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import ListController from 'core/mixins/list-controller';
 import Controller from '@ember/controller';
 import { computed } from '@ember/object';
-import { getOwner } from '@ember/application';
+import { getOwner } from '@ember/owner';
 
 export default Controller.extend(ListController, {
   mountPoint: computed(function () {

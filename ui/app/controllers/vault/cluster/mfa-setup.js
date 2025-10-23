@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -15,8 +15,12 @@ export default class VaultClusterMfaSetupController extends Controller {
   @tracked uuid = '';
   @tracked qrCode = '';
 
+  header = 'MFA Setup';
+  description =
+    'TOTP Multi-factor authentication (MFA) can be enabled here if it is required by your administrator. This will ensure that you are not prevented from logging into Vault in the future, once MFA is fully enforced.';
+
   get entityId() {
-    return this.auth.authData.entity_id;
+    return this.auth.authData.entityId;
   }
 
   @action isUUIDVerified(verified) {

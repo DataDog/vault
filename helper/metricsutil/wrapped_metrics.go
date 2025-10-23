@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package metricsutil
@@ -44,6 +44,7 @@ type TelemetryConstConfig struct {
 }
 
 type Metrics interface {
+	SetGauge(key []string, val float32)
 	SetGaugeWithLabels(key []string, val float32, labels []Label)
 	IncrCounterWithLabels(key []string, val float32, labels []Label)
 	AddSampleWithLabels(key []string, val float32, labels []Label)

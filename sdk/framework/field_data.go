@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package framework
@@ -33,7 +33,7 @@ type FieldData struct {
 // trying to get data out.  Data not in the schema is not
 // an error at this point, so we don't worry about it.
 func (d *FieldData) Validate() error {
-	for field, value := range d.Raw {
+	for field := range d.Raw {
 
 		schema, ok := d.Schema[field]
 		if !ok {
@@ -46,7 +46,7 @@ func (d *FieldData) Validate() error {
 			TypeKVPairs, TypeCommaIntSlice, TypeHeader, TypeFloat, TypeTime:
 			_, _, err := d.getPrimitive(field, schema)
 			if err != nil {
-				return errwrap.Wrapf(fmt.Sprintf("error converting input %v for field %q: {{err}}", value, field), err)
+				return errwrap.Wrapf(fmt.Sprintf("error converting input for field %q: {{err}}", field), err)
 			}
 		default:
 			return fmt.Errorf("unknown field type %q for field %q", schema.Type, field)

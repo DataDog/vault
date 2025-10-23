@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package quotas
@@ -30,28 +30,15 @@ const (
 	TypeLeaseCount Type = "lease-count"
 )
 
+//go:generate enumer -type=LeaseAction -trimprefix=LeaseAction -transform=snake
+
 // LeaseAction is the action taken by the expiration manager on the lease. The
 // quota manager will use this information to update the lease path cache and
 // updating counters for relevant quota rules.
 type LeaseAction uint32
 
-// String converts each lease action into its string equivalent value
-func (la LeaseAction) String() string {
-	switch la {
-	case LeaseActionLoaded:
-		return "loaded"
-	case LeaseActionCreated:
-		return "created"
-	case LeaseActionDeleted:
-		return "deleted"
-	case LeaseActionAllow:
-		return "allow"
-	}
-	return "unknown"
-}
-
 const (
-	_ LeaseAction = iota
+	LeaseActionUnknown LeaseAction = iota
 
 	// LeaseActionLoaded indicates loading of lease in the expiration manager after
 	// unseal.
@@ -82,6 +69,22 @@ func (q Type) String() string {
 	}
 	return "unknown"
 }
+
+// GroupBy identifies the attribute by which a rate limit quota rule will group the requests
+type GroupBy string
+
+const (
+	// GroupByIp groups requests to which the RLQ applies by the client IP address
+	GroupByIp = "ip"
+	// GroupByNone groups all requests to which the RLQ applies together (i.e. collective rate limit)
+	GroupByNone = "none"
+	// GroupByEntityThenIp groups requests to which the RLQ applies by entity Id if available, otherwise
+	// by the client IP address (e.g. login or root token requests)
+	GroupByEntityThenIp = "entity_then_ip"
+	// GroupByEntityThenNone groups requests to which the RLQ applies by entity Id if available, and all
+	// entity-less requests together (e.g. login or root token requests)
+	GroupByEntityThenNone = "entity_then_none"
+)
 
 const (
 	indexID                 = "id"
@@ -282,6 +285,8 @@ type Request struct {
 	// ClientAddress is client unique addressable string (e.g. IP address). It can
 	// be empty if the quota type does not need it.
 	ClientAddress string
+
+	entRateLimitRequest
 }
 
 // NewManager creates and initializes a new quota manager to hold all the quota

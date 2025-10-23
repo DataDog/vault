@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -64,6 +64,9 @@ export default Component.extend({
   ),
 
   actions: {
+    handleToggle(e) {
+      set(this.key, 'enterAsText', e.target.checked);
+    },
     pickedFile(e) {
       const { files } = e.target;
       if (!files.length) {

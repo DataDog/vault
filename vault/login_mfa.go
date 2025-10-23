@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -10,9 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/vault/helper/constants"
 	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/helper/identity/mfa"
 	"github.com/hashicorp/vault/helper/namespace"
@@ -38,8 +40,7 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/vault/quotas"
 	"github.com/mitchellh/mapstructure"
-	"github.com/okta/okta-sdk-golang/v2/okta"
-	"github.com/okta/okta-sdk-golang/v2/okta/query"
+	"github.com/okta/okta-sdk-golang/v5/okta"
 	"github.com/patrickmn/go-cache"
 	otplib "github.com/pquerna/otp"
 	totplib "github.com/pquerna/otp/totp"
@@ -336,7 +337,7 @@ func (i *IdentityStore) handleMFAMethodWriteCommon(ctx context.Context, req *log
 
 	switch methodType {
 	case mfaMethodTypeTOTP:
-		err = parseTOTPConfig(mConfig, d)
+		err = parseTOTPConfig(mConfig, d, constants.IsEnterprise, true)
 		if err != nil {
 			return logical.ErrorResponse(err.Error()), nil
 		}
@@ -728,7 +729,7 @@ func (b *LoginMFABackend) handleMFALoginValidate(ctx context.Context, req *logic
 		return nil, fmt.Errorf("original request was issued in a different namesapce %v, current namespace is %v", cachedResponseAuth.RequestNSPath, ns.Path)
 	}
 
-	entity, _, err := b.Core.fetchEntityAndDerivedPolicies(ctx, ns, cachedResponseAuth.CachedAuth.EntityID, true)
+	entity, err := b.Core.fetchEntity(cachedResponseAuth.CachedAuth.EntityID, true)
 	if err != nil || entity == nil {
 		return nil, fmt.Errorf("MFA validation failed. entity not found: %v", err)
 	}
@@ -743,10 +744,18 @@ func (b *LoginMFABackend) handleMFALoginValidate(ctx context.Context, req *logic
 		return nil, fmt.Errorf("found nil or empty MFAEnforcement configuration")
 	}
 
+	potentialMFASecret := cachedResponseAuth.SelfEnrollmentMFASecret
+
 	for _, eConfig := range matchedMfaEnforcementList {
-		err = b.Core.validateLoginMFA(ctx, eConfig, entity, req.Connection.RemoteAddr, mfaCreds)
+		err = b.Core.validateLoginMFA(ctx, eConfig, entity, req.Connection.RemoteAddr, mfaCreds, potentialMFASecret)
 		if err != nil {
 			return logical.ErrorResponse(fmt.Sprintf("failed to satisfy enforcement %s. error: %s", eConfig.Name, err.Error())), logical.ErrPermissionDenied
+		}
+		if cachedResponseAuth.SelfEnrollmentMFASecret != nil && entity.MFASecrets[potentialMFASecret.MethodID] == nil {
+			err := possiblyForwardPendingLoginMFASecretWrite(ctx, b.Core, entity.ID, potentialMFASecret)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -757,6 +766,46 @@ func (b *LoginMFABackend) handleMFALoginValidate(ctx context.Context, req *logic
 	}
 
 	return resp, nil
+}
+
+// writeTOTPMFASecretAndKey persists the pending TOTP MFA secret on the entity
+// and the key in storage. This method should only be called on the active node
+// of the primary cluster, since it attempts to write to storage. Note that this
+// The identity store lock is not used consistently, so this method also opens a
+// transaction to ensure no modifications happen between fetching it and
+// upserting the entity, to avoid unwittingly clobbering changes to it.
+func (c *Core) writeTOTPMFASecretAndKey(ctx context.Context, entityID string, pendingSecret *selfEnrollmentPendingMFASecret) error {
+	if c.identityStore == nil {
+		return fmt.Errorf("identity store is not configured")
+	}
+	c.identityStore.lock.Lock()
+	defer c.identityStore.lock.Unlock()
+	txn := c.identityStore.db.Txn(true)
+	defer txn.Abort()
+
+	entity, err := c.identityStore.fetchEntityInTxn(txn, entityID, false)
+	if err != nil {
+		return fmt.Errorf("failed to find entity with ID %q: error: %w", entityID, err)
+	}
+	if entity.MFASecrets == nil {
+		entity.MFASecrets = map[string]*mfa.Secret{}
+	}
+
+	entity.MFASecrets[pendingSecret.MethodID] = pendingSecret.Secret
+	_, err = c.identityStore.upsertEntityInTxn(ctx, txn, entity, nil, true, true)
+	if err != nil {
+		c.loginMFABackend.mfaLogger.Error("failed to persist self-enrollment MFA secret in entity", "entity_id", entity.ID)
+		return fmt.Errorf("failed to persist self-enrollment MFA secret in entity: %w", err)
+	}
+	err = c.PersistTOTPKey(ctx, pendingSecret.MethodID, entity.ID, pendingSecret.Key)
+	if err != nil {
+		c.loginMFABackend.mfaLogger.Error("failed to persist self-enrollment MFA secret key in storage", "entity_id", entity.ID)
+		return fmt.Errorf("failed to persist self-enrollment MFA secret key: %w", err)
+	}
+
+	// Commit the transaction to persist the entity changes.
+	txn.Commit()
+	return nil
 }
 
 func (c *Core) teardownLoginMFA() error {
@@ -1272,7 +1321,7 @@ func (b *LoginMFABackend) mfaConfigReadByMethodID(id string) (map[string]interfa
 		return nil, nil
 	}
 
-	return b.mfaConfigToMap(mConfig)
+	return b.mfaConfigToMap(mConfig, constants.IsEnterprise, true)
 }
 
 func (b *LoginMFABackend) mfaMethodList(ctx context.Context, methodType string) ([]string, map[string]interface{}, error) {
@@ -1332,7 +1381,7 @@ func (b *LoginMFABackend) mfaMethodList(ctx context.Context, methodType string) 
 		}
 
 		keys = append(keys, config.ID)
-		configInfoEntry, err := b.mfaConfigToMap(config)
+		configInfoEntry, err := b.mfaConfigToMap(config, constants.IsEnterprise, true)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to convert config to map: %w", err)
 		}
@@ -1418,7 +1467,11 @@ func (b *LoginMFABackend) mfaLoginEnforcementConfigToMap(eConfig *mfa.MFAEnforce
 	return resp, nil
 }
 
-func (b *MFABackend) mfaConfigToMap(mConfig *mfa.Config) (map[string]interface{}, error) {
+// mfaConfigToMap converts a mfa.Config to a map used for responses to MFA
+// method endpoints. The `isLoginMFA` parameter indicates whether the
+// configuration is for login MFA, which includes additional fields on the
+// shared mfa.Config object for the TOTP type MFA method.
+func (b *MFABackend) mfaConfigToMap(mConfig *mfa.Config, isEnterprise, isLoginMFA bool) (map[string]interface{}, error) {
 	respData := make(map[string]interface{})
 
 	switch mConfig.Config.(type) {
@@ -1432,6 +1485,11 @@ func (b *MFABackend) mfaConfigToMap(mConfig *mfa.Config) (map[string]interface{}
 		respData["qr_size"] = totpConfig.QRSize
 		respData["algorithm"] = otplib.Algorithm(totpConfig.Algorithm).String()
 		respData["max_validation_attempts"] = totpConfig.MaxValidationAttempts
+		if isEnterprise && isLoginMFA {
+			// Login MFA and policy (i.e. enterprise step-up) MFA share the same protobuf message for TOTPConfig,
+			// but the login MFA has an additional field for self-enrollment, which is an enterprise feature.
+			respData["enable_self_enrollment"] = totpConfig.GetEnableSelfEnrollment()
+		}
 	case *mfa.Config_OktaConfig:
 		oktaConfig := mConfig.GetOktaConfig()
 		respData["org_name"] = oktaConfig.OrgName
@@ -1475,7 +1533,12 @@ func (b *MFABackend) mfaConfigToMap(mConfig *mfa.Config) (map[string]interface{}
 	return respData, nil
 }
 
-func parseTOTPConfig(mConfig *mfa.Config, d *framework.FieldData) error {
+// parseTOTPConfig parses the TOTP configuration from the field data and updates the mConfig.
+// The `isEnterprise` parameter indicates whether the configuration is for an enterprise setup,
+// which affects the validation of certain fields like `enable_self_enrollment`.
+// The `isLoginMfa` parameter indicates whether the configuration is for login MFA,
+// which allows for self-enrollment and includes an additional field in the TOTPConfig.
+func parseTOTPConfig(mConfig *mfa.Config, d *framework.FieldData, isEnterprise, isLoginMfa bool) error {
 	if mConfig == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -1539,6 +1602,17 @@ func parseTOTPConfig(mConfig *mfa.Config, d *framework.FieldData) error {
 		maxValidationAttempt = defaultMaxTOTPValidateAttempts
 	}
 
+	enableSelfEnrollment := false
+	if isLoginMfa {
+		enableSelfEnrollmentRaw, ok := d.GetOk("enable_self_enrollment")
+		if ok {
+			enableSelfEnrollment = enableSelfEnrollmentRaw.(bool)
+		}
+		if !isEnterprise && enableSelfEnrollment {
+			return fmt.Errorf("enable_self_enrollment is an enterprise only feature")
+		}
+
+	}
 	config := &mfa.TOTPConfig{
 		Issuer:                issuer,
 		Period:                uint32(period),
@@ -1548,6 +1622,7 @@ func parseTOTPConfig(mConfig *mfa.Config, d *framework.FieldData) error {
 		KeySize:               uint32(keySize),
 		QRSize:                int32(d.Get("qr_size").(int)),
 		MaxValidationAttempts: uint32(maxValidationAttempt),
+		EnableSelfEnrollment:  enableSelfEnrollment,
 	}
 	mConfig.Config = &mfa.Config_TOTPConfig{
 		TOTPConfig: config,
@@ -1613,7 +1688,7 @@ func parseOktaConfig(mConfig *mfa.Config, d *framework.FieldData) error {
 	return nil
 }
 
-func (c *Core) validateLoginMFA(ctx context.Context, eConfig *mfa.MFAEnforcementConfig, entity *identity.Entity, requestConnRemoteAddr string, mfaCredsMap logical.MFACreds) error {
+func (c *Core) validateLoginMFA(ctx context.Context, eConfig *mfa.MFAEnforcementConfig, entity *identity.Entity, requestConnRemoteAddr string, mfaCredsMap logical.MFACreds, potentialTOTPSecret *selfEnrollmentPendingMFASecret) error {
 	sanitizedMfaCreds, err := c.loginMFABackend.sanitizeMFACredsWithLoginEnforcementMethodIDs(ctx, mfaCredsMap, eConfig.MFAMethodIDs)
 	if err != nil {
 		return fmt.Errorf("failed to sanitize MFA creds, %w", err)
@@ -1631,7 +1706,7 @@ func (c *Core) validateLoginMFA(ctx context.Context, eConfig *mfa.MFAEnforcement
 			continue
 		}
 
-		err := c.validateLoginMFAInternal(ctx, methodID, entity, requestConnRemoteAddr, mfaCreds)
+		err := c.validateLoginMFAInternal(ctx, methodID, entity, requestConnRemoteAddr, mfaCreds, potentialTOTPSecret)
 		if err != nil {
 			retErr = multierror.Append(retErr, err)
 			continue
@@ -1642,7 +1717,7 @@ func (c *Core) validateLoginMFA(ctx context.Context, eConfig *mfa.MFAEnforcement
 	return multierror.Append(retErr, fmt.Errorf("login MFA validation failed for methodID: %v", eConfig.MFAMethodIDs))
 }
 
-func (c *Core) validateLoginMFAInternal(ctx context.Context, methodID string, entity *identity.Entity, reqConnectionRemoteAddress string, mfaCreds []string) (retErr error) {
+func (c *Core) validateLoginMFAInternal(ctx context.Context, methodID string, entity *identity.Entity, reqConnectionRemoteAddress string, mfaCreds []string, potentialTOTPSecret *selfEnrollmentPendingMFASecret) (retErr error) {
 	if entity == nil {
 		return fmt.Errorf("entity is nil")
 	}
@@ -1690,15 +1765,21 @@ func (c *Core) validateLoginMFAInternal(ctx context.Context, methodID string, en
 	switch mConfig.Type {
 	case mfaMethodTypeTOTP:
 		// Get the MFA secret data required to validate the supplied credentials
-		if entity.MFASecrets == nil {
-			return fmt.Errorf("MFA secret for method ID %q not present in entity %q", mConfig.ID, entity.ID)
+		var entityMFASecret *mfa.Secret
+		var mfaSecretKey string
+		switch {
+		case entity.MFASecrets != nil && entity.MFASecrets[mConfig.ID] != nil:
+			// Use the existing secret stored on the entity
+			entityMFASecret = entity.MFASecrets[mConfig.ID]
+		case (entity.MFASecrets == nil || entity.MFASecrets[mConfig.ID] == nil) && potentialTOTPSecret != nil &&
+			potentialTOTPSecret.MethodID == methodID && potentialTOTPSecret.Secret != nil && potentialTOTPSecret.Key != "":
+			// Use the self-enrollment secret generated during this login request
+			entityMFASecret = potentialTOTPSecret.Secret
+			mfaSecretKey = potentialTOTPSecret.Key
+		default:
+			return fmt.Errorf("MFA secret for method ID %q not present in entity %q or cached MFA auth response", mConfig.ID, entity.ID)
 		}
-		entityMFASecret := entity.MFASecrets[mConfig.ID]
-		if entityMFASecret == nil {
-			return fmt.Errorf("MFA secret for method name %q not present in entity %q", mConfig.Name, entity.ID)
-		}
-
-		return c.validateTOTP(ctx, mfaFactors, entityMFASecret, mConfig.ID, entity.ID, c.loginMFABackend.usedCodes, mConfig.GetTOTPConfig().MaxValidationAttempts)
+		return c.validateTOTP(ctx, mfaFactors, entityMFASecret, mConfig.ID, entity.ID, c.loginMFABackend.usedCodes, mConfig.GetTOTPConfig().MaxValidationAttempts, mfaSecretKey)
 
 	case mfaMethodTypeOkta:
 		return c.validateOkta(ctx, mConfig, finalUsername)
@@ -1740,7 +1821,7 @@ ECONFIG_LOOP:
 		// i.e. is it the req's ns or an ancestor of req's ns?
 		eConfigNS, err := c.NamespaceByID(ctx, eConfig.NamespaceID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find the MFAEnforcementConfig namespace")
+			return nil, fmt.Errorf("failed to find the MFAEnforcementConfig namespace: %w", err)
 		}
 
 		if eConfig == nil || eConfigNS == nil || (eConfigNS.ID != ns.ID && !ns.HasParent(eConfigNS)) {
@@ -1908,9 +1989,9 @@ func (c *Core) validateDuo(ctx context.Context, mfaFactors *MFAFactor, mConfig *
 	case "allow":
 		return nil
 	case "deny":
-		return fmt.Errorf(preauth.Response.Status_Msg)
+		return errors.New(preauth.Response.Status_Msg)
 	case "enroll":
-		return fmt.Errorf(fmt.Sprintf("%q - %q", preauth.Response.Status_Msg, preauth.Response.Enroll_Portal_Url))
+		return fmt.Errorf("%q - %q", preauth.Response.Status_Msg, preauth.Response.Enroll_Portal_Url)
 	case "auth":
 		break
 	default:
@@ -1990,7 +2071,7 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 		return err
 	}
 
-	ctx, client, err := okta.NewClient(ctx,
+	cfg, err := okta.NewConfiguration(
 		okta.WithToken(oktaConfig.APIToken),
 		okta.WithOrgUrl(orgURL.String()),
 		// Do not use cache or polling MFA will not refresh
@@ -1999,15 +2080,15 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 	if err != nil {
 		return fmt.Errorf("error creating client: %s", err)
 	}
+	client := okta.NewAPIClient(cfg)
 
 	filterField := "profile.login"
 	if oktaConfig.PrimaryEmail {
 		filterField = "profile.email"
 	}
 	filterQuery := fmt.Sprintf("%s eq %q", filterField, username)
-	filter := query.NewQueryParams(query.WithFilter(filterQuery))
 
-	users, _, err := client.User.ListUsers(ctx, filter)
+	users, _, err := client.UserAPI.ListUsers(client.GetConfig().Context).Filter(filterQuery).Execute()
 	if err != nil {
 		return err
 	}
@@ -2020,7 +2101,7 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 
 	user := users[0]
 
-	factors, _, err := client.UserFactor.ListFactors(ctx, user.Id)
+	factors, _, err := client.UserFactorAPI.ListFactors(ctx, user.GetId()).Execute()
 	if err != nil {
 		return err
 	}
@@ -2030,14 +2111,12 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 	}
 
 	var factorFound bool
-	var userFactor *okta.UserFactor
+	var userFactor *okta.UserFactorPush
 	for _, factor := range factors {
-		if factor.IsUserFactorInstance() {
-			userFactor = factor.(*okta.UserFactor)
-			if userFactor.FactorType == "push" {
-				factorFound = true
-				break
-			}
+		if factor.UserFactorPush != nil {
+			userFactor = factor.UserFactorPush
+			factorFound = true
+			break
 		}
 	}
 
@@ -2045,13 +2124,13 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 		return fmt.Errorf("no push-type MFA factor found for user")
 	}
 
-	result, _, err := client.UserFactor.VerifyFactor(ctx, user.Id, userFactor.Id, okta.VerifyFactorRequest{}, userFactor, nil)
+	result, _, err := client.UserFactorAPI.VerifyFactor(ctx, user.GetId(), userFactor.GetId()).Execute()
 	if err != nil {
 		return err
 	}
 
-	if result.FactorResult != "WAITING" {
-		return fmt.Errorf("expected WAITING status for push status, got %q", result.FactorResult)
+	if result.GetFactorResult() != "WAITING" {
+		return fmt.Errorf("expected WAITING status for push status, got %q", result.GetFactorResult())
 	}
 
 	// Parse links to get polling link
@@ -2070,27 +2149,33 @@ func (c *Core) validateOkta(ctx context.Context, mConfig *mfa.Config, username s
 		return err
 	}
 
+	// Okta doesn't return the transactionID as a parameter in the response, but it's encoded in the URL
+	// this approach comes from: https://github.com/okta/okta-sdk-golang/issues/300, but it's not ideal.
+	// It is, however, what the dotnet library by Okta themselves does.
+	txRx := regexp.MustCompile("^.*/transactions/(.*)$")
+	matches := txRx.FindStringSubmatch(url.Path)
+	if len(matches) != 2 {
+		return fmt.Errorf("couldn't determine transaction id from url")
+	}
+	transactionID := matches[1]
+
+	// poll verifyfactor until termination (e.g., the user responds to the push factor)
 	for {
-		// Okta provides an SDK method `GetFactorTransactionStatus` but does not provide the transaction id in
-		// the VerifyFactor respone. This code effectively reimplements that method.
-		rq := client.CloneRequestExecutor()
-		req, err := rq.WithAccept("application/json").WithContentType("application/json").NewRequest("GET", url.String(), nil)
-		if err != nil {
-			return err
-		}
-		var result *okta.VerifyUserFactorResponse
-		_, err = rq.Do(ctx, req, &result)
+		result, _, err := client.UserFactorAPI.GetFactorTransactionStatus(client.GetConfig().Context, user.GetId(), userFactor.GetId(), transactionID).Execute()
 		if err != nil {
 			return err
 		}
 
-		switch result.FactorResult {
-		case "WAITING":
-		case "SUCCESS":
+		// the transaction status returns an inner object set based on what the factor status is.
+		// the other ones are nil. This is (probably) because the structure of the returned JSON
+		// varies based on what the factor status is.
+		switch {
+		case result.UserFactorPushTransactionWaiting != nil:
+		case result.UserFactorPushTransaction != nil:
 			return nil
-		case "REJECTED":
+		case result.UserFactorPushTransactionRejected != nil:
 			return fmt.Errorf("push verification explicitly rejected")
-		case "TIMEOUT":
+		case result.UserFactorPushTransactionTimeout != nil:
 			return fmt.Errorf("push verification timed out")
 		default:
 			return fmt.Errorf("unknown status code")
@@ -2159,7 +2244,7 @@ func (c *Core) validatePingID(ctx context.Context, mConfig *mfa.Config, username
 		req = req.WithContext(ctx)
 		req.Method = "POST"
 		req.URL = reqURL
-		req.Body = ioutil.NopCloser(bytes.NewBufferString(signedToken))
+		req.Body = io.NopCloser(bytes.NewBufferString(signedToken))
 		if req.Header == nil {
 			req.Header = make(http.Header)
 		}
@@ -2317,7 +2402,7 @@ func (c *Core) validatePingID(ctx context.Context, mConfig *mfa.Config, username
 	return nil
 }
 
-func (c *Core) validateTOTP(ctx context.Context, mfaFactors *MFAFactor, entityMethodSecret *mfa.Secret, configID, entityID string, usedCodes *cache.Cache, maximumValidationAttempts uint32) error {
+func (c *Core) validateTOTP(ctx context.Context, mfaFactors *MFAFactor, entityMethodSecret *mfa.Secret, configID, entityID string, usedCodes *cache.Cache, maximumValidationAttempts uint32, key string) error {
 	if mfaFactors == nil || mfaFactors.passcode == "" {
 		return fmt.Errorf("MFA credentials not supplied")
 	}
@@ -2328,15 +2413,19 @@ func (c *Core) validateTOTP(ctx context.Context, mfaFactors *MFAFactor, entityMe
 		return fmt.Errorf("entity does not contain the TOTP secret")
 	}
 
+	if len(passcode) != int(totpSecret.GetDigits()) {
+		return fmt.Errorf("failed to validate TOTP passcode")
+	}
+
 	usedName := fmt.Sprintf("%s_%s", configID, passcode)
 
 	_, ok := usedCodes.Get(usedName)
 	if ok {
-		return fmt.Errorf("code already used; new code is available in %v seconds", totpSecret.Period)
+		return fmt.Errorf("failed to validate TOTP passcode")
 	}
 
-	// The duration in which a passcode is stored in cache to enforce
-	// rate limit on failed totp passcode validation
+	// The duration in which a rateLimitID (configID_entityID) is used to limit the number of TOTP validation attempts.
+	// The passcode will be added to the usedCodes cache later, with a different TTL, with the skew and period.
 	passcodeTTL := time.Duration(int64(time.Second) * int64(totpSecret.Period))
 
 	// Enforcing rate limit per MethodID per EntityID
@@ -2359,13 +2448,15 @@ func (c *Core) validateTOTP(ctx context.Context, mfaFactors *MFAFactor, entityMe
 		}
 	}
 
-	key, err := c.fetchTOTPKey(ctx, configID, entityID)
-	if err != nil {
-		return errwrap.Wrapf("error fetching TOTP key: {{err}}", err)
-	}
-
 	if key == "" {
-		return fmt.Errorf("empty key for entity's TOTP secret")
+		var err error
+		key, err = c.fetchTOTPKey(ctx, configID, entityID)
+		if err != nil {
+			return fmt.Errorf("error fetching TOTP key: %w", err)
+		}
+		if key == "" {
+			return fmt.Errorf("empty key for entity's TOTP secret")
+		}
 	}
 
 	validateOpts := totplib.ValidateOpts{
@@ -2653,6 +2744,31 @@ func (b *LoginMFABackend) MemDBMFALoginEnforcementConfigByNameAndNamespace(name,
 	return eConfig.Clone()
 }
 
+func (b *LoginMFABackend) MemDBMFALoginEnforcementConfigByID(id string) (*mfa.MFAEnforcementConfig, error) {
+	if id == "" {
+		return nil, fmt.Errorf("missing config id")
+	}
+
+	txn := b.db.Txn(false)
+	defer txn.Abort()
+
+	eConfigRaw, err := txn.First(memDBMFALoginEnforcementsTable, "id", id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch MFA login enforcement config from memdb using id: %w", err)
+	}
+
+	if eConfigRaw == nil {
+		return nil, nil
+	}
+
+	eConfig, ok := eConfigRaw.(*mfa.MFAEnforcementConfig)
+	if !ok {
+		return nil, fmt.Errorf("invalid type for MFA login enforcement config in memdb")
+	}
+
+	return eConfig.Clone()
+}
+
 func (b *LoginMFABackend) MemDBMFALoginEnforcementConfigIterator() (memdb.ResultIterator, error) {
 	txn := b.db.Txn(false)
 	defer txn.Abort()
@@ -2704,6 +2820,32 @@ func (b *LoginMFABackend) deleteMFALoginEnforcementConfigByNameAndNamespace(ctx 
 	err = txn.Delete(memDBMFALoginEnforcementsTable, eConfig)
 	if err != nil {
 		return fmt.Errorf("failed to delete MFA login enforcement config from memdb: %w", err)
+	}
+
+	txn.Commit()
+	return nil
+}
+
+func (b *LoginMFABackend) MemDBDeleteMFALoginEnforcementConfigByID(id string) error {
+	if id == "" {
+		return nil
+	}
+
+	txn := b.db.Txn(true)
+	defer txn.Abort()
+
+	eConfig, err := b.MemDBMFALoginEnforcementConfigByID(id)
+	if err != nil {
+		return err
+	}
+
+	if eConfig == nil {
+		return nil
+	}
+
+	err = txn.Delete(memDBMFALoginEnforcementsTable, eConfig)
+	if err != nil {
+		return err
 	}
 
 	txn.Commit()

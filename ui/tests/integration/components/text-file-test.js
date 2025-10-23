@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,15 +8,15 @@ import { setupRenderingTest } from 'vault/tests/helpers';
 import { click, fillIn, render, triggerEvent } from '@ember/test-helpers';
 import { hbs } from 'ember-cli-htmlbars';
 import sinon from 'sinon';
-import { componentPemBundle } from 'vault/tests/helpers/pki/values';
 import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { CERTIFICATES } from 'vault/tests/helpers/pki/pki-helpers';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 const SELECTORS = {
   label: '[data-test-text-file-label]',
-  toggle: '[data-test-text-toggle]',
-  textarea: '[data-test-text-file-textarea]',
   fileUpload: '[data-test-text-file-input]',
 };
+const { componentPemBundle } = CERTIFICATES;
 module('Integration | Component | text-file', function (hooks) {
   setupRenderingTest(hooks);
 
@@ -30,7 +30,7 @@ module('Integration | Component | text-file', function (hooks) {
     await render(hbs`<TextFile @onChange={{this.onChange}} />`);
 
     assert.dom(SELECTORS.label).hasText('File', 'renders default label');
-    assert.dom(SELECTORS.toggle).exists({ count: 1 }, 'toggle exists');
+    assert.dom(GENERAL.textToggle).exists({ count: 1 }, 'toggle exists');
     assert.dom(SELECTORS.fileUpload).exists({ count: 1 }, 'File input shown');
   });
 
@@ -46,7 +46,7 @@ module('Integration | Component | text-file', function (hooks) {
     await render(hbs`<TextFile @onChange={{this.onChange}} @uploadOnly={{true}} />`);
 
     assert.dom(SELECTORS.label).doesNotExist('Label no longer rendered');
-    assert.dom(SELECTORS.toggle).doesNotExist('toggle no longer rendered');
+    assert.dom(GENERAL.textToggle).doesNotExist('toggle no longer rendered');
     assert.dom(SELECTORS.fileUpload).exists({ count: 1 }, 'File input shown');
   });
 
@@ -54,9 +54,9 @@ module('Integration | Component | text-file', function (hooks) {
     await render(hbs`<TextFile @onChange={{this.onChange}} />`);
 
     assert.dom(SELECTORS.fileUpload).exists({ count: 1 }, 'File input shown');
-    assert.dom(SELECTORS.textarea).doesNotExist('Texarea hidden');
-    await click(SELECTORS.toggle);
-    assert.dom(SELECTORS.textarea).exists({ count: 1 }, 'Textarea shown');
+    assert.dom(GENERAL.maskedInput).doesNotExist('Texarea hidden');
+    await click(GENERAL.textToggle);
+    assert.dom(GENERAL.maskedInput).exists({ count: 1 }, 'Textarea shown');
     assert.dom(SELECTORS.fileUpload).doesNotExist('File upload hidden');
   });
 
@@ -79,8 +79,8 @@ module('Integration | Component | text-file', function (hooks) {
     const PEM_BUNDLE = componentPemBundle;
 
     await render(hbs`<TextFile @onChange={{this.onChange}} />`);
-    await click(SELECTORS.toggle);
-    await fillIn(SELECTORS.textarea, PEM_BUNDLE);
+    await click(GENERAL.textToggle);
+    await fillIn(GENERAL.maskedInput, PEM_BUNDLE);
     assert.propEqual(
       this.onChange.lastCall.args[0],
       {
@@ -96,9 +96,7 @@ module('Integration | Component | text-file', function (hooks) {
     await render(hbs`<TextFile @onChange={{this.onChange}} />`);
 
     await triggerEvent(SELECTORS.fileUpload, 'change', { files: [this.file] });
-    assert
-      .dom('[data-test-field-validation="text-file"]')
-      .hasText('There was a problem uploading. Please try again.');
+    assert.dom(GENERAL.inlineAlert).hasText('There was a problem uploading. Please try again.');
     assert.propEqual(
       this.onChange.lastCall.args[0],
       {

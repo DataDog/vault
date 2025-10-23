@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package configutil
@@ -16,15 +16,47 @@ import (
 // ensure that we only attempt to parse templates when the input contains a
 // template placeholder (see: go-sockaddr/template).
 func TestListener_ParseSingleIPTemplate(t *testing.T) {
+	t.Parallel()
+
 	tests := map[string]struct {
 		arg             string
 		want            string
 		isErrorExpected bool
 		errorMessage    string
 	}{
-		"test https addr": {
+		"test hostname": {
 			arg:             "https://vaultproject.io:8200",
 			want:            "https://vaultproject.io:8200",
+			isErrorExpected: false,
+		},
+		"test ipv4": {
+			arg:             "https://10.10.1.10:8200",
+			want:            "https://10.10.1.10:8200",
+			isErrorExpected: false,
+		},
+		"test ipv6 RFC-5952 4.1 conformance leading zeroes": {
+			arg:             "https://[2001:0db8::0001]:8200",
+			want:            "https://[2001:db8::1]:8200",
+			isErrorExpected: false,
+		},
+		"test ipv6 RFC-5952 4.2.2 conformance one 16-bit 0 field": {
+			arg:             "https://[2001:db8:0:1:1:1:1:1]:8200",
+			want:            "https://[2001:db8:0:1:1:1:1:1]:8200",
+			isErrorExpected: false,
+		},
+		"test ipv6 RFC-5952 4.2.3 conformance longest run of 0 bits shortened": {
+			arg:             "https://[2001:0:0:1:0:0:0:1]:8200",
+			want:            "https://[2001:0:0:1::1]:8200",
+			isErrorExpected: false,
+		},
+		"test ipv6 RFC-5952 4.2.3 conformance equal runs of 0 bits shortened": {
+			arg:             "https://[2001:db8:0:0:1:0:0:1]:8200",
+			want:            "https://[2001:db8::1:0:0:1]:8200",
+			isErrorExpected: false,
+		},
+		"test ipv6 RFC-5952 4.3 conformance downcase hex letters": {
+			arg:             "https://[2001:DB8:AC3:FE4::1]:8200",
+			want:            "https://[2001:db8:ac3:fe4::1]:8200",
 			isErrorExpected: false,
 		},
 		"test invalid template func": {
@@ -43,6 +75,7 @@ func TestListener_ParseSingleIPTemplate(t *testing.T) {
 		name := name
 		tc := tc
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ParseSingleIPTemplate(tc.arg)
 
 			if tc.isErrorExpected {
@@ -181,16 +214,26 @@ func TestListener_parseRequestSettings(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		rawMaxRequestSize             any
-		expectedMaxRequestSize        int64
-		rawMaxRequestDuration         any
-		expectedDuration              time.Duration
-		rawRequireRequestHeader       any
-		expectedRequireRequestHeader  bool
-		rawDisableRequestLimiter      any
-		expectedDisableRequestLimiter bool
-		isErrorExpected               bool
-		errorMessage                  string
+		rawMaxRequestSize                      any
+		expectedMaxRequestSize                 int64
+		rawMaxRequestDuration                  any
+		expectedDuration                       time.Duration
+		rawRequireRequestHeader                any
+		expectedRequireRequestHeader           bool
+		rawDisableRequestLimiter               any
+		expectedDisableRequestLimiter          bool
+		rawCustomMaxJSONDepth                  any
+		expectedCustomMaxJSONDepth             int64
+		rawCustomMaxJSONStringValueLength      any
+		expectedCustomMaxJSONStringValueLength int64
+		rawCustomMaxJSONObjectEntryCount       any
+		expectedCustomMaxJSONObjectEntryCount  int64
+		rawCustomMaxJSONArrayElementCount      any
+		expectedCustomMaxJSONArrayElementCount int64
+		rawCustomMaxJSONToken                  any
+		expectedCustomMaxJSONToken             int64
+		isErrorExpected                        bool
+		errorMessage                           string
 	}{
 		"nil": {
 			isErrorExpected: false,
@@ -205,37 +248,80 @@ func TestListener_parseRequestSettings(t *testing.T) {
 			expectedMaxRequestSize: 5,
 			isErrorExpected:        false,
 		},
-		"max-request-duration-bad": {
-			rawMaxRequestDuration: "juan",
+		"max-json-depth-bad": {
+			rawCustomMaxJSONDepth: "badvalue",
 			isErrorExpected:       true,
-			errorMessage:          "error parsing max_request_duration",
+			errorMessage:          "error parsing max_json_depth",
 		},
-		"max-request-duration-good": {
-			rawMaxRequestDuration: "30s",
-			expectedDuration:      30 * time.Second,
-			isErrorExpected:       false,
+		"max-json-depth-negative": {
+			rawCustomMaxJSONDepth: "-1",
+			isErrorExpected:       true,
+			errorMessage:          "max_json_depth cannot be negative",
 		},
-		"require-request-header-bad": {
-			rawRequireRequestHeader:      "juan",
-			expectedRequireRequestHeader: false,
-			isErrorExpected:              true,
-			errorMessage:                 "invalid value for require_request_header",
+		"max-json-depth-good": {
+			rawCustomMaxJSONDepth:      "100",
+			expectedCustomMaxJSONDepth: 100,
+			isErrorExpected:            false,
 		},
-		"require-request-header-good": {
-			rawRequireRequestHeader:      "true",
-			expectedRequireRequestHeader: true,
-			isErrorExpected:              false,
+		"max-json-string-value-length-bad": {
+			rawCustomMaxJSONStringValueLength: "badvalue",
+			isErrorExpected:                   true,
+			errorMessage:                      "error parsing max_json_string_value_length",
 		},
-		"disable-request-limiter-bad": {
-			rawDisableRequestLimiter:      "badvalue",
-			expectedDisableRequestLimiter: false,
-			isErrorExpected:               true,
-			errorMessage:                  "invalid value for disable_request_limiter",
+		"max-json-string-value-length-negative": {
+			rawCustomMaxJSONStringValueLength: "-1",
+			isErrorExpected:                   true,
+			errorMessage:                      "max_json_string_value_length cannot be negative",
 		},
-		"disable-request-limiter-good": {
-			rawDisableRequestLimiter:      "true",
-			expectedDisableRequestLimiter: true,
-			isErrorExpected:               false,
+		"max-json-string-value-length-good": {
+			rawCustomMaxJSONStringValueLength:      "2048",
+			expectedCustomMaxJSONStringValueLength: 2048,
+			isErrorExpected:                        false,
+		},
+		"custom-max-json-object-entry-count-bad": {
+			rawCustomMaxJSONObjectEntryCount: "badvalue",
+			isErrorExpected:                  true,
+			errorMessage:                     "error parsing max_json_object_entry_count",
+		},
+		"max-json-object-entry-count-negative": {
+			rawCustomMaxJSONObjectEntryCount: "-1",
+			isErrorExpected:                  true,
+			errorMessage:                     "max_json_object_entry_count cannot be negative",
+		},
+		"max-json-object-entry-count-good": {
+			rawCustomMaxJSONObjectEntryCount:      "500",
+			expectedCustomMaxJSONObjectEntryCount: 500,
+			isErrorExpected:                       false,
+		},
+		"max-json-array-element-count-bad": {
+			rawCustomMaxJSONArrayElementCount: "badvalue",
+			isErrorExpected:                   true,
+			errorMessage:                      "error parsing max_json_array_element_count",
+		},
+		"max-json-array-element-count-negative": {
+			rawCustomMaxJSONArrayElementCount: "-1",
+			isErrorExpected:                   true,
+			errorMessage:                      "max_json_array_element_count cannot be negative",
+		},
+		"max-json-array-element-count-good": {
+			rawCustomMaxJSONArrayElementCount:      "500",
+			expectedCustomMaxJSONArrayElementCount: 500,
+			isErrorExpected:                        false,
+		},
+		"max-json-token-bad": {
+			rawCustomMaxJSONToken: "badvalue",
+			isErrorExpected:       true,
+			errorMessage:          "error parsing max_json_token",
+		},
+		"max-json-token-negative": {
+			rawCustomMaxJSONToken: "-1",
+			isErrorExpected:       true,
+			errorMessage:          "max_json_token cannot be negative",
+		},
+		"max-json-token-good": {
+			rawCustomMaxJSONToken:      "500000",
+			expectedCustomMaxJSONToken: 500000,
+			isErrorExpected:            false,
 		},
 	}
 
@@ -245,12 +331,16 @@ func TestListener_parseRequestSettings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			// Configure listener with raw values
 			l := &Listener{
-				MaxRequestSizeRaw:        tc.rawMaxRequestSize,
-				MaxRequestDurationRaw:    tc.rawMaxRequestDuration,
-				RequireRequestHeaderRaw:  tc.rawRequireRequestHeader,
-				DisableRequestLimiterRaw: tc.rawDisableRequestLimiter,
+				MaxRequestSizeRaw:                 tc.rawMaxRequestSize,
+				MaxRequestDurationRaw:             tc.rawMaxRequestDuration,
+				RequireRequestHeaderRaw:           tc.rawRequireRequestHeader,
+				DisableRequestLimiterRaw:          tc.rawDisableRequestLimiter,
+				CustomMaxJSONDepthRaw:             tc.rawCustomMaxJSONDepth,
+				CustomMaxJSONStringValueLengthRaw: tc.rawCustomMaxJSONStringValueLength,
+				CustomMaxJSONObjectEntryCountRaw:  tc.rawCustomMaxJSONObjectEntryCount,
+				CustomMaxJSONArrayElementCountRaw: tc.rawCustomMaxJSONArrayElementCount,
+				CustomMaxJSONTokenRaw:             tc.rawCustomMaxJSONToken,
 			}
 
 			err := l.parseRequestSettings()
@@ -260,15 +350,23 @@ func TestListener_parseRequestSettings(t *testing.T) {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tc.errorMessage)
 			default:
-				// Assert we got the relevant values.
 				require.NoError(t, err)
 				require.Equal(t, tc.expectedMaxRequestSize, l.MaxRequestSize)
-				require.Equal(t, tc.expectedDuration, l.MaxRequestDuration)
+				require.Equal(t, tc.expectedCustomMaxJSONDepth, l.CustomMaxJSONDepth)
+				require.Equal(t, tc.expectedCustomMaxJSONStringValueLength, l.CustomMaxJSONStringValueLength)
+				require.Equal(t, tc.expectedCustomMaxJSONObjectEntryCount, l.CustomMaxJSONObjectEntryCount)
+				require.Equal(t, tc.expectedCustomMaxJSONArrayElementCount, l.CustomMaxJSONArrayElementCount)
+				require.Equal(t, tc.expectedCustomMaxJSONToken, l.CustomMaxJSONToken)
 				require.Equal(t, tc.expectedRequireRequestHeader, l.RequireRequestHeader)
 				require.Equal(t, tc.expectedDisableRequestLimiter, l.DisableRequestLimiter)
+				require.Equal(t, tc.expectedDuration, l.MaxRequestDuration)
 
-				// Ensure the state was modified for the raw values.
 				require.Nil(t, l.MaxRequestSizeRaw)
+				require.Nil(t, l.CustomMaxJSONDepthRaw)
+				require.Nil(t, l.CustomMaxJSONStringValueLengthRaw)
+				require.Nil(t, l.CustomMaxJSONObjectEntryCountRaw)
+				require.Nil(t, l.CustomMaxJSONArrayElementCountRaw)
+				require.Nil(t, l.CustomMaxJSONTokenRaw)
 				require.Nil(t, l.MaxRequestDurationRaw)
 				require.Nil(t, l.RequireRequestHeaderRaw)
 				require.Nil(t, l.DisableRequestLimiterRaw)
@@ -529,7 +627,7 @@ func TestListener_parseProxySettings(t *testing.T) {
 		"behavior-deny": {
 			rawProxyProtocolAuthorizedAddrs: "10.0.0.1,10.0.2.1",
 			expectedNumAddrs:                2,
-			proxyBehavior:                   "deny_authorized",
+			proxyBehavior:                   "deny_unauthorized",
 			isErrorExpected:                 false,
 		},
 	}

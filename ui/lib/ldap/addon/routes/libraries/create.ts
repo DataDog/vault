@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -36,8 +36,8 @@ export default class LdapLibrariesCreateRoute extends Route {
 
     controller.breadcrumbs = [
       { label: resolvedModel.backend, route: 'overview' },
-      { label: 'libraries', route: 'libraries' },
-      { label: 'create' },
+      { label: 'Libraries', route: 'libraries' },
+      { label: 'Create' },
     ];
   }
 }

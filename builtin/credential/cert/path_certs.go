@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cert
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-secure-stdlib/parseutil"
 	"github.com/hashicorp/go-sockaddr"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/tokenutil"
@@ -90,6 +91,16 @@ from the AuthorityInformationAccess extension on the certificate being inspected
 				Default:     false,
 				Description: "If set to true, rather than accepting the first successful OCSP response, query all servers and consider the certificate valid only if all servers agree.",
 			},
+			"ocsp_this_update_max_age": {
+				Type:        framework.TypeDurationSecond,
+				Default:     0,
+				Description: "If greater than 0, specifies the maximum age of an OCSP thisUpdate field to avoid accepting old responses without a nextUpdate field.",
+			},
+			"ocsp_max_retries": {
+				Type:        framework.TypeInt,
+				Default:     4,
+				Description: "The number of retries the OCSP client should attempt per query.",
+			},
 			"allowed_names": {
 				Type: framework.TypeCommaStringSlice,
 				Description: `A comma-separated list of names.
@@ -152,6 +163,17 @@ At least one must exist in the OU field.`,
 				DisplayAttrs: &framework.DisplayAttributes{
 					Group:       "Constraints",
 					Description: "A list of Organizational Units names. At least one must exist in the OU field.",
+				},
+			},
+
+			"allowed_organizations": {
+				Type: framework.TypeCommaStringSlice,
+				Description: `A comma-separated list of Organization names.
+At least one must exist in the O field. Supports globbing.`,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:        "Allowed Organizations",
+					Group:       "Constraints",
+					Description: "A list of Organization names.  At least one must exist in the O field.",
 				},
 			},
 
@@ -242,7 +264,7 @@ func (b *backend) Cert(ctx context.Context, s logical.Storage, n string) (*CertE
 		return nil, nil
 	}
 
-	var result CertEntry
+	result := CertEntry{OcspMaxRetries: defaultOcspMaxRetries} // Specify our defaults if the key is missing
 	if err := entry.DecodeJSON(&result); err != nil {
 		return nil, err
 	}
@@ -301,6 +323,7 @@ func (b *backend) pathCertRead(ctx context.Context, req *logical.Request, d *fra
 		"allowed_email_sans":           cert.AllowedEmailSANs,
 		"allowed_uri_sans":             cert.AllowedURISANs,
 		"allowed_organizational_units": cert.AllowedOrganizationalUnits,
+		"allowed_organizations":        cert.AllowedOrganizations,
 		"required_extensions":          cert.RequiredExtensions,
 		"allowed_metadata_extensions":  cert.AllowedMetadataExtensions,
 		"ocsp_ca_certificates":         cert.OcspCaCertificates,
@@ -308,6 +331,8 @@ func (b *backend) pathCertRead(ctx context.Context, req *logical.Request, d *fra
 		"ocsp_servers_override":        cert.OcspServersOverride,
 		"ocsp_fail_open":               cert.OcspFailOpen,
 		"ocsp_query_all_servers":       cert.OcspQueryAllServers,
+		"ocsp_this_update_max_age":     int64(cert.OcspThisUpdateMaxAge.Seconds()),
+		"ocsp_max_retries":             cert.OcspMaxRetries,
 	}
 	cert.PopulateTokenData(data)
 
@@ -343,7 +368,8 @@ func (b *backend) pathCertWrite(ctx context.Context, req *logical.Request, d *fr
 
 	if cert == nil {
 		cert = &CertEntry{
-			Name: name,
+			Name:           name,
+			OcspMaxRetries: defaultOcspMaxRetries,
 		}
 	}
 
@@ -366,6 +392,19 @@ func (b *backend) pathCertWrite(ctx context.Context, req *logical.Request, d *fr
 	if ocspQueryAll, ok := d.GetOk("ocsp_query_all_servers"); ok {
 		cert.OcspQueryAllServers = ocspQueryAll.(bool)
 	}
+	if ocspThisUpdateMaxAge, ok := d.GetOk("ocsp_this_update_max_age"); ok {
+		maxAgeDuration, err := parseutil.ParseDurationSecond(ocspThisUpdateMaxAge)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ocsp_this_update_max_age: %w", err)
+		}
+		cert.OcspThisUpdateMaxAge = maxAgeDuration
+	}
+	if ocspMaxRetries, ok := d.GetOk("ocsp_max_retries"); ok {
+		cert.OcspMaxRetries = ocspMaxRetries.(int)
+		if cert.OcspMaxRetries < 0 {
+			return nil, fmt.Errorf("ocsp_max_retries can not be a negative number")
+		}
+	}
 	if displayNameRaw, ok := d.GetOk("display_name"); ok {
 		cert.DisplayName = displayNameRaw.(string)
 	}
@@ -386,6 +425,9 @@ func (b *backend) pathCertWrite(ctx context.Context, req *logical.Request, d *fr
 	}
 	if allowedOrganizationalUnitsRaw, ok := d.GetOk("allowed_organizational_units"); ok {
 		cert.AllowedOrganizationalUnits = allowedOrganizationalUnitsRaw.([]string)
+	}
+	if allowedOrganizations, ok := d.GetOk("allowed_organizations"); ok {
+		cert.AllowedOrganizations = allowedOrganizations.([]string)
 	}
 	if requiredExtensionsRaw, ok := d.GetOk("required_extensions"); ok {
 		cert.RequiredExtensions = requiredExtensionsRaw.([]string)
@@ -507,15 +549,18 @@ type CertEntry struct {
 	AllowedEmailSANs           []string
 	AllowedURISANs             []string
 	AllowedOrganizationalUnits []string
+	AllowedOrganizations       []string
 	RequiredExtensions         []string
 	AllowedMetadataExtensions  []string
 	BoundCIDRs                 []*sockaddr.SockAddrMarshaler
 
-	OcspCaCertificates  string
-	OcspEnabled         bool
-	OcspServersOverride []string
-	OcspFailOpen        bool
-	OcspQueryAllServers bool
+	OcspCaCertificates   string
+	OcspEnabled          bool
+	OcspServersOverride  []string
+	OcspFailOpen         bool
+	OcspQueryAllServers  bool
+	OcspThisUpdateMaxAge time.Duration
+	OcspMaxRetries       int
 }
 
 const pathCertHelpSyn = `

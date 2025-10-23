@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -15,7 +15,7 @@ import sinon from 'sinon';
 import waitForError from 'vault/tests/helpers/wait-for-error';
 import searchSelect from '../../pages/components/search-select';
 import { isWildcardString } from 'vault/helpers/is-wildcard-string';
-import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 const component = create(searchSelect);
 
@@ -86,20 +86,10 @@ module('Integration | Component | search select', function (hooks) {
         isWildcardString([selection]);
       return !modelExists ? 'The model associated with this id no longer exists' : false;
     };
-    this.set('renderInfoTooltip', mockFunctionFromParent);
+    this.set('renderTooltip', mockFunctionFromParent);
     run(() => {
       this.owner.unregister('service:store');
       this.owner.register('service:store', storeService);
-    });
-    setRunOptions({
-      rules: {
-        // TODO: Fix this component
-        'color-contrast': { enabled: false },
-        label: { enabled: false },
-        'aria-input-field-name': { enabled: false },
-        'aria-required-attr': { enabled: false },
-        'aria-valid-attr-value': { enabled: false },
-      },
     });
   });
 
@@ -167,6 +157,10 @@ module('Integration | Component | search select', function (hooks) {
       component.selectedOptionText,
       'first object in list is focused'
     );
+
+    // verify overflow styling on input field exists
+    assert.dom('.list-item-text').exists('selected option field has width set');
+    assert.dom('.text-overflow-ellipsis').exists('selected option text has overflow class');
   });
 
   test('it filters options and adds option to create new item when text is entered', async function (assert) {
@@ -652,7 +646,7 @@ module('Integration | Component | search select', function (hooks) {
     await component.selectOption();
     assert.strictEqual(component.selectedOptions.length, 1, 'there is 1 selected option');
     assert
-      .dom('[data-test-selected-option]')
+      .dom(GENERAL.searchSelect.selectedOption(0))
       .hasText('model-a-id', 'does not render name if first objectKey is id');
     assert.ok(this.onChange.calledOnce);
     assert.ok(
@@ -706,7 +700,7 @@ module('Integration | Component | search select', function (hooks) {
     await component.selectOption();
     assert.strictEqual(component.selectedOptions.length, 1, 'there is 1 selected option');
     assert
-      .dom('[data-test-selected-option]')
+      .dom(GENERAL.searchSelect.selectedOption(0))
       .hasText('model-a a123', `renders name and ${objectKeys[0]} if first objectKey is not id`);
     assert.dom('[data-test-smaller-id]').exists();
     assert.propEqual(
@@ -746,7 +740,7 @@ module('Integration | Component | search select', function (hooks) {
     await component.selectOption();
     assert.strictEqual(component.selectedOptions.length, 1, 'there is 1 selected option');
     assert
-      .dom('[data-test-selected-option]')
+      .dom(GENERAL.searchSelect.selectedOption(0))
       .hasText('1', 'renders model id if does not have objectKey as an attribute');
     assert.propEqual(spy.args[0][0], ['1'], 'onClick is called with array of single id string');
   });
@@ -773,7 +767,9 @@ module('Integration | Component | search select', function (hooks) {
     // First select existing option
     await component.selectOption();
     assert.strictEqual(component.selectedOptions.length, 1, 'there is 1 selected option');
-    assert.dom('[data-test-selected-option]').hasText('1', 'renders model id if does not have objectKey');
+    assert
+      .dom(GENERAL.searchSelect.selectedOption(0))
+      .hasText('1', 'renders model id if does not have objectKey');
     assert.propEqual(
       spy.args[0][0],
       [
@@ -869,7 +865,7 @@ module('Integration | Component | search select', function (hooks) {
     assert.propEqual(spy.args[1][0], ['1', 'model-a-id'], 'onClick is called with array of id strings');
   });
 
-  test('it renders an info tooltip beside selection if does not match a record returned from query when passObject=false, passed objectKeys', async function (assert) {
+  test('it renders a tooltip beside selection if does not match a record returned from query when passObject=false, passed objectKeys', async function (assert) {
     const models = ['some/model'];
     const spy = sinon.spy();
     const objectKeys = ['uuid'];
@@ -885,22 +881,22 @@ module('Integration | Component | search select', function (hooks) {
         @onChange={{this.onChange}}
         @objectKeys={{this.objectKeys}}
         @inputValue={{this.inputValue}}
-        @renderInfoTooltip={{this.renderInfoTooltip}}
+        @renderTooltip={{this.renderTooltip}}
       />
       `);
     assert.strictEqual(component.selectedOptions.length, 2, 'there are two selected options');
-    assert.dom('[data-test-selected-option="0"]').hasText('model-a a123');
-    assert.dom('[data-test-selected-option="1"]').hasText('non-existent-model');
+    assert.dom(GENERAL.searchSelect.selectedOption(0)).hasText('model-a a123');
+    assert.dom(GENERAL.searchSelect.selectedOption(1)).hasText('non-existent-model');
     assert
-      .dom('[data-test-selected-option="0"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(0)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model that exists');
 
     assert
-      .dom('[data-test-selected-option="1"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(1)} ${GENERAL.tooltip('search-select')}`)
       .exists('renders info tooltip for model not returned from query');
   });
 
-  test('it renders an info tooltip beside selection if does not match a record returned from query when passObject=true, passed objectKeys', async function (assert) {
+  test('it renders a tooltip beside selection if does not match a record returned from query when passObject=true, passed objectKeys', async function (assert) {
     const models = ['some/model'];
     const spy = sinon.spy();
     const objectKeys = ['uuid'];
@@ -917,23 +913,23 @@ module('Integration | Component | search select', function (hooks) {
         @objectKeys={{this.objectKeys}}
         @inputValue={{this.inputValue}}
         @passObject={{true}}
-        @renderInfoTooltip={{this.renderInfoTooltip}}
+        @renderTooltip={{this.renderTooltip}}
       />
     `);
 
     assert.strictEqual(component.selectedOptions.length, 2, 'there are two selected options');
-    assert.dom('[data-test-selected-option="0"]').hasText('model-a a123');
-    assert.dom('[data-test-selected-option="1"]').hasText('non-existent-model');
+    assert.dom(GENERAL.searchSelect.selectedOption(0)).hasText('model-a a123');
+    assert.dom(GENERAL.searchSelect.selectedOption(1)).hasText('non-existent-model');
     assert
-      .dom('[data-test-selected-option="0"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(0)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model that exists');
 
     assert
-      .dom('[data-test-selected-option="1"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(1)} ${GENERAL.tooltip('search-select')}`)
       .exists('renders info tooltip for model not returned from query');
   });
 
-  test('it renders an info tooltip beside selection if does not match a record returned from query when passObject=true and idKey=id', async function (assert) {
+  test('it renders a tooltip beside selection if does not match a record returned from query when passObject=true and idKey=id', async function (assert) {
     const models = ['some/model'];
     const spy = sinon.spy();
     const inputValue = ['model-a-id', 'non-existent-model'];
@@ -947,23 +943,23 @@ module('Integration | Component | search select', function (hooks) {
         @onChange={{this.onChange}}
         @inputValue={{this.inputValue}}
         @passObject={{true}}
-        @renderInfoTooltip={{this.renderInfoTooltip}}
+        @renderTooltip={{this.renderTooltip}}
       />
     `);
 
     assert.strictEqual(component.selectedOptions.length, 2, 'there are two selected options');
-    assert.dom('[data-test-selected-option="0"]').hasText('model-a-id');
-    assert.dom('[data-test-selected-option="1"]').hasText('non-existent-model');
+    assert.dom(GENERAL.searchSelect.selectedOption(0)).hasText('model-a-id');
+    assert.dom(GENERAL.searchSelect.selectedOption(1)).hasText('non-existent-model');
     assert
-      .dom('[data-test-selected-option="0"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(0)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model that exists');
 
     assert
-      .dom('[data-test-selected-option="1"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(1)} ${GENERAL.tooltip('search-select')}`)
       .exists('renders info tooltip for model not returned from query');
   });
 
-  test('it renders an info tooltip beside selection if does not match a record returned from query when passObject=false and idKey=id', async function (assert) {
+  test('it renders a tooltip beside selection if does not match a record returned from query when passObject=false and idKey=id', async function (assert) {
     const models = ['some/model'];
     const spy = sinon.spy();
     const inputValue = ['model-a-id', 'non-existent-model', 'wildcard*'];
@@ -977,25 +973,25 @@ module('Integration | Component | search select', function (hooks) {
         @onChange={{this.onChange}}
         @inputValue={{this.inputValue}}
         @passObject={{false}}
-        @renderInfoTooltip={{this.renderInfoTooltip}}
+        @renderTooltip={{this.renderTooltip}}
       />
     `);
     assert.strictEqual(component.selectedOptions.length, 3, 'there are three selected options');
-    assert.dom('[data-test-selected-option="0"]').hasText('model-a-id');
-    assert.dom('[data-test-selected-option="1"]').hasText('non-existent-model');
-    assert.dom('[data-test-selected-option="2"]').hasText('wildcard*');
+    assert.dom(GENERAL.searchSelect.selectedOption(0)).hasText('model-a-id');
+    assert.dom(GENERAL.searchSelect.selectedOption(1)).hasText('non-existent-model');
+    assert.dom(GENERAL.searchSelect.selectedOption(2)).hasText('wildcard*');
     assert
-      .dom('[data-test-selected-option="0"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(0)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model that exists');
     assert
-      .dom('[data-test-selected-option="1"] [data-test-component="info-tooltip"]')
-      .exists('renders info tooltip for model not returned from query');
+      .dom(`${GENERAL.searchSelect.selectedOption(1)} ${GENERAL.tooltip('search-select')}`)
+      .exists('renders a tooltip for model not returned from query');
     assert
-      .dom('[data-test-selected-option="2"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(2)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for wildcard option');
   });
 
-  test('it does not render an info tooltip beside selection if not passed @renderInfoTooltip', async function (assert) {
+  test('it does not render a tooltip beside selection if not passed @renderTooltip', async function (assert) {
     const models = ['some/model'];
     const spy = sinon.spy();
     const inputValue = ['model-a-id', 'non-existent-model', 'wildcard*'];
@@ -1012,13 +1008,13 @@ module('Integration | Component | search select', function (hooks) {
       />
     `);
     assert
-      .dom('[data-test-selected-option="0"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(0)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model that exists');
     assert
-      .dom('[data-test-selected-option="1"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(1)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for model not returned from query');
     assert
-      .dom('[data-test-selected-option="2"] [data-test-component="info-tooltip"]')
+      .dom(`${GENERAL.searchSelect.selectedOption(2)} ${GENERAL.tooltip('search-select')}`)
       .doesNotExist('does not render info tooltip for wildcard option');
   });
 });

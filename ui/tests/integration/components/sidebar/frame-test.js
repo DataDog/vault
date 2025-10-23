@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,6 +9,7 @@ import { render, click } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
 import sinon from 'sinon';
 import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 module('Integration | Component | sidebar-frame', function (hooks) {
   setupRenderingTest(hooks);
@@ -35,7 +36,7 @@ module('Integration | Component | sidebar-frame', function (hooks) {
     assert.dom('[data-test-sidebar-nav]').doesNotExist('Sidebar is hidden');
   });
 
-  test('it should render link status, console ui panel and yield block for app content', async function (assert) {
+  test('it should render link status, console ui panel container and yield block for app content', async function (assert) {
     const currentCluster = this.owner.lookup('service:currentCluster');
     currentCluster.setCluster({ hcpLinkStatus: 'connected' });
     const version = this.owner.lookup('service:version');
@@ -50,7 +51,7 @@ module('Integration | Component | sidebar-frame', function (hooks) {
     `);
 
     assert.dom('[data-test-link-status]').exists('Link status component renders');
-    assert.dom('[data-test-component="console/ui-panel"]').exists('Console UI panel renders');
+    assert.dom('[data-test-console-panel]').exists('Console UI panel container renders');
     assert.dom('.page-container').exists('Block yields for app content');
   });
 
@@ -88,6 +89,6 @@ module('Integration | Component | sidebar-frame', function (hooks) {
       <Sidebar::Frame @showSidebar={{true}} />
     `);
 
-    assert.dom('.namespace-picker').exists('Namespace picker renders in sidebar footer');
+    assert.dom(GENERAL.button('namespace-picker')).exists('Namespace picker renders in sidebar footer');
   });
 });

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cache
@@ -9,13 +9,14 @@ import (
 	gohttp "net/http"
 	"sync"
 
-	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/http"
 )
 
+//go:generate enumer -type=EnforceConsistency -trimprefix=EnforceConsistency
 type EnforceConsistency int
 
 const (
@@ -23,6 +24,7 @@ const (
 	EnforceConsistencyAlways
 )
 
+//go:generate enumer -type=WhenInconsistentAction -trimprefix=WhenInconsistent
 type WhenInconsistentAction int
 
 const (

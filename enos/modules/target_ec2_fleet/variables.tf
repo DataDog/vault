@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 variable "ami_id" {
@@ -24,6 +24,12 @@ variable "common_tags" {
   default = {
     Project = "vault-ci"
   }
+}
+
+variable "disable_selinux" {
+  description = "Optionally disable SELinux for certain distros/versions"
+  type        = bool
+  default     = true
 }
 
 variable "instance_mem_min" {

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,8 +8,8 @@ import { setupRenderingTest } from 'vault/tests/helpers';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import { click, render } from '@ember/test-helpers';
 import { hbs } from 'ember-cli-htmlbars';
-import { overrideCapabilities } from 'vault/tests/helpers/oidc-config';
-import { allowAllCapabilitiesStub } from 'vault/tests/helpers/stubs';
+import { allowAllCapabilitiesStub, capabilitiesStub } from 'vault/tests/helpers/stubs';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 module('Integration | Component | oidc/provider-list', function (hooks) {
   setupRenderingTest(hooks);
@@ -41,14 +41,14 @@ module('Integration | Component | oidc/provider-list', function (hooks) {
     this.server.post('/sys/capabilities-self', (schema, req) => {
       const { paths } = JSON.parse(req.requestBody);
       if (paths[0] === 'identity/oidc/provider/first-provider') {
-        return overrideCapabilities('identity/oidc/provider/first-provider', ['read']);
+        return capabilitiesStub('identity/oidc/provider/first-provider', ['read']);
       } else {
-        return overrideCapabilities('identity/oidc/provider/second-provider', ['deny']);
+        return capabilitiesStub('identity/oidc/provider/second-provider', ['deny']);
       }
     });
     await render(hbs`<Oidc::ProviderList @model={{this.model}} />`);
     assert.dom('[data-test-popup-menu-trigger]').exists({ count: 1 }, 'Only one popup menu is rendered');
-    await click('[data-test-popup-menu-trigger]');
+    await click(GENERAL.menuTrigger);
     assert.dom('[data-test-oidc-provider-menu-link="details"]').exists('Details link is rendered');
     assert.dom('[data-test-oidc-provider-menu-link="edit"]').doesNotExist('Edit link is not rendered');
   });

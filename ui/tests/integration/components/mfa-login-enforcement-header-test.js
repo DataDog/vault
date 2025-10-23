@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -32,7 +32,7 @@ module('Integration | Component | mfa-login-enforcement-header', function (hooks
     await render(hbs`<Mfa::MfaLoginEnforcementHeader @heading="New enforcement" />`);
 
     assert.dom('[data-test-mleh-title]').includesText('New enforcement');
-    assert.dom('[data-test-mleh-title] svg').hasClass('flight-icon-lock', 'Lock icon renders');
+    assert.dom('[data-test-mleh-title] svg').hasClass('hds-icon-lock', 'Lock icon renders');
     assert
       .dom('[data-test-mleh-description]')
       .includesText('An enforcement will define which auth types', 'Description renders');

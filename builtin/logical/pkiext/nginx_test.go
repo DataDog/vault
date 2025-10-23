@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pkiext
@@ -39,7 +39,7 @@ const (
 
 func buildNginxContainer(t *testing.T, root string, crl string, chain string, private string) (func(), string, int, string, string, int) {
 	containerfile := `
-FROM nginx:latest
+FROM nginx:1.27.1
 
 RUN mkdir /www /etc/nginx/ssl && rm /etc/nginx/conf.d/*.conf
 

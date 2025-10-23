@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,13 +17,16 @@ export default class KvEngine extends Engine {
   Resolver = Resolver;
   dependencies = {
     services: [
-      'download',
-      'namespace',
-      'router',
-      'store',
-      'secret-mount-path',
-      'flash-messages',
+      'api',
+      'capabilities',
       'control-group',
+      'download',
+      'flash-messages',
+      'namespace',
+      'app-router',
+      'secret-mount-path',
+      'pagination',
+      'version',
     ],
     externalRoutes: ['secrets', 'syncDestination'],
   };

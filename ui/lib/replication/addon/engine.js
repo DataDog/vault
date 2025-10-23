@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,10 +16,11 @@ const Eng = Engine.extend({
   dependencies: {
     services: [
       'auth',
+      'capabilities',
       'flash-messages',
       'namespace',
       'replication-mode',
-      'router',
+      'app-router',
       'store',
       'version',
       '-portal',

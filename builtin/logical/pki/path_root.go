@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/vault/builtin/logical/pki/issuing"
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
 	"github.com/hashicorp/vault/builtin/logical/pki/parsing"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/certutil"
@@ -28,6 +29,8 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"golang.org/x/crypto/ed25519"
 )
+
+const intCaTruncatationWarning = "the signed intermediary CA certificate's notAfter was truncated to the issuer's notAfter"
 
 func pathGenerateRoot(b *backend) *framework.Path {
 	pattern := "root/generate/" + framework.GenericNameRegex("exported")
@@ -195,6 +198,13 @@ func (b *backend) pathCAGenerateRoot(ctx context.Context, req *logical.Request, 
 		},
 	}
 
+	if keyUsages, ok := data.GetOk("key_usage"); ok {
+		err = validateCaKeyUsages(keyUsages.([]string))
+		if err != nil {
+			resp.AddWarning(fmt.Sprintf("Invalid key usage will be ignored: %v", err.Error()))
+		}
+	}
+
 	if len(parsedBundle.Certificate.RawSubject) <= 2 {
 		// Strictly a subject is a SEQUENCE of SETs of SEQUENCES.
 		//
@@ -208,11 +218,18 @@ func (b *backend) pathCAGenerateRoot(ctx context.Context, req *logical.Request, 
 		resp.AddWarning("This issuer certificate was generated without a Subject; this makes it likely that issuing leaf certs with this certificate will cause TLS validation libraries to reject this certificate.")
 	}
 
-	if len(parsedBundle.Certificate.OCSPServer) == 0 && len(parsedBundle.Certificate.IssuingCertificateURL) == 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 {
+	deltaCrlDistributionPoints, err := certutil.ParseDeltaCRLExtension(parsedBundle.Certificate)
+	if err != nil {
+		return logical.ErrorResponse(fmt.Sprintf("error: invalid delta crl extension: %v", err.Error())), nil
+	}
+	if len(parsedBundle.Certificate.OCSPServer) == 0 && len(parsedBundle.Certificate.IssuingCertificateURL) == 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 && len(deltaCrlDistributionPoints) == 0 {
 		// If the operator hasn't configured any of the URLs prior to
 		// generating this issuer, we should add a warning to the response,
 		// informing them they might want to do so prior to issuing leaves.
 		resp.AddWarning("This mount hasn't configured any authority information access (AIA) fields; this may make it harder for systems to find missing certificates in the chain or to validate revocation status of certificates. Consider updating /config/urls or the newly generated issuer with this information.")
+	}
+	if len(deltaCrlDistributionPoints) > 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 {
+		resp.AddWarning("This mount has configured Delta CRL distribution points are set but no CRL Distribution Points.")
 	}
 
 	switch format {
@@ -289,9 +306,10 @@ func (b *backend) pathCAGenerateRoot(ctx context.Context, req *logical.Request, 
 	if err != nil {
 		return nil, err
 	}
+	b.pkiCertificateCounter.AddIssuedCertificate(true)
 
 	// Build a fresh CRL
-	warnings, err = b.CrlBuilder().rebuild(sc, true)
+	warnings, err = b.CrlBuilder().Rebuild(sc, true)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +332,23 @@ func (b *backend) pathCAGenerateRoot(ctx context.Context, req *logical.Request, 
 	}
 
 	resp = addWarnings(resp, warnings)
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIGenerateRoot,
+		observe.NewAdditionalPKIMetadata("issuer_name", myIssuer.Name),
+		observe.NewAdditionalPKIMetadata("issuer_id", myIssuer.ID),
+		observe.NewAdditionalPKIMetadata("key_id", myKey.ID),
+		observe.NewAdditionalPKIMetadata("key_name", myKey.Name),
+		observe.NewAdditionalPKIMetadata("key_type", myKey.PrivateKeyType),
+		observe.NewAdditionalPKIMetadata("role_name", role.Name),
+		observe.NewAdditionalPKIMetadata("serial_number", cb.SerialNumber),
+		observe.NewAdditionalPKIMetadata("type", format),
+		observe.NewAdditionalPKIMetadata("common_name", parsedBundle.Certificate.Subject.CommonName),
+		observe.NewAdditionalPKIMetadata("subject_key_id", parsedBundle.Certificate.SubjectKeyId),
+		observe.NewAdditionalPKIMetadata("authority_key_id", parsedBundle.Certificate.AuthorityKeyId),
+		observe.NewAdditionalPKIMetadata("public_key_algorithm", parsedBundle.Certificate.PublicKeyAlgorithm.String()),
+		observe.NewAdditionalPKIMetadata("public_key_size", certutil.GetPublicKeySize(parsedBundle.Certificate.PublicKey)),
+		observe.NewAdditionalPKIMetadata("not_after", parsedBundle.Certificate.NotAfter.String()),
+		observe.NewAdditionalPKIMetadata("not_before", parsedBundle.Certificate.NotBefore.String()))
 
 	return resp, nil
 }
@@ -354,6 +389,7 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 		NotAfter:                  data.Get("not_after").(string),
 		NotBeforeDuration:         time.Duration(data.Get("not_before_duration").(int)) * time.Second,
 		CNValidations:             []string{"disabled"},
+		KeyUsage:                  data.Get("key_usage").([]string),
 	}
 	*role.AllowWildcardCertificates = true
 
@@ -363,7 +399,7 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 
 	var caErr error
 	sc := b.makeStorageContext(ctx, req.Storage)
-	signingBundle, caErr := sc.fetchCAInfo(issuerName, issuing.IssuanceUsage)
+	signingBundle, issuerId, caErr := sc.fetchCAInfoWithIssuer(issuerName, issuing.IssuanceUsage)
 	if caErr != nil {
 		switch caErr.(type) {
 		case errutil.UserError:
@@ -375,10 +411,16 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 		}
 	}
 
-	// Since we are signing an intermediate, we explicitly want to override
-	// the leaf NotAfterBehavior to permit issuing intermediates longer than
-	// the life of this issuer.
-	signingBundle.LeafNotAfterBehavior = certutil.PermitNotAfterBehavior
+	warnAboutTruncate := false
+	if enforceLeafNotAfter := data.Get("enforce_leaf_not_after_behavior").(bool); !enforceLeafNotAfter {
+		// Since we are signing an intermediate, we will by default truncate the
+		// signed intermediary in order to generate a valid intermediary chain. This
+		// was changed in 1.17.x as the default prior was PermitNotAfterBehavior
+		if signingBundle.LeafNotAfterBehavior != certutil.AlwaysEnforceErr {
+			warnAboutTruncate = true
+			signingBundle.LeafNotAfterBehavior = certutil.TruncateNotAfterBehavior
+		}
+	}
 
 	useCSRValues := data.Get("use_csr_values").(bool)
 
@@ -393,7 +435,7 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 		apiData: data,
 		role:    role,
 	}
-	parsedBundle, warnings, err := signCert(b, input, signingBundle, true, useCSRValues)
+	parsedBundle, warnings, err := signCert(b.System(), input, signingBundle, true, useCSRValues)
 	if err != nil {
 		switch err.(type) {
 		case errutil.UserError:
@@ -404,7 +446,7 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 		}
 	}
 
-	if err := parsedBundle.Verify(); err != nil {
+	if err := issuing.VerifyCertificate(sc.GetContext(), sc.GetStorage(), issuerId, parsedBundle); err != nil {
 		return nil, fmt.Errorf("verification of parsed bundle failed: %w", err)
 	}
 
@@ -417,6 +459,30 @@ func (b *backend) pathIssuerSignIntermediate(ctx context.Context, req *logical.R
 	if err != nil {
 		return nil, err
 	}
+	b.pkiCertificateCounter.AddIssuedCertificate(true)
+
+	if warnAboutTruncate &&
+		signingBundle.Certificate.NotAfter.Equal(parsedBundle.Certificate.NotAfter) {
+		resp.AddWarning(intCaTruncatationWarning)
+	}
+
+	if keyUsages, ok := data.GetOk("key_usage"); ok {
+		err = validateCaKeyUsages(keyUsages.([]string))
+		if err != nil {
+			resp.AddWarning(fmt.Sprintf("Invalid key usage: %v", err.Error()))
+		}
+	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIIssuerSignIntermediate,
+		observe.NewAdditionalPKIMetadata("issuer_name", issuerName),
+		observe.NewAdditionalPKIMetadata("issuer_id", issuerId),
+		observe.NewAdditionalPKIMetadata("not_after", parsedBundle.Certificate.NotAfter.String()),
+		observe.NewAdditionalPKIMetadata("not_before", parsedBundle.Certificate.NotBefore.String()),
+		observe.NewAdditionalPKIMetadata("common_name", parsedBundle.Certificate.Subject.CommonName),
+		observe.NewAdditionalPKIMetadata("subject_key_id", parsedBundle.Certificate.SubjectKeyId),
+		observe.NewAdditionalPKIMetadata("authority_key_id", parsedBundle.Certificate.AuthorityKeyId),
+		observe.NewAdditionalPKIMetadata("role_name", role.Name),
+		observe.NewAdditionalPKIMetadata("type", format))
 
 	return resp, nil
 }
@@ -456,11 +522,18 @@ func signIntermediateResponse(signingBundle *certutil.CAInfoBundle, parsedBundle
 		resp.AddWarning("This issuer certificate was generated without a Subject; this makes it likely that issuing leaf certs with this certificate will cause TLS validation libraries to reject this certificate.")
 	}
 
-	if len(parsedBundle.Certificate.OCSPServer) == 0 && len(parsedBundle.Certificate.IssuingCertificateURL) == 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 {
+	deltaCrlDistributionPoints, err := certutil.ParseDeltaCRLExtension(parsedBundle.Certificate)
+	if err != nil {
+		return logical.ErrorResponse(fmt.Sprintf("invalid delta crl extension on generated certificate: %v", err.Error())), nil
+	}
+	if len(parsedBundle.Certificate.OCSPServer) == 0 && len(parsedBundle.Certificate.IssuingCertificateURL) == 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 && len(deltaCrlDistributionPoints) == 0 {
 		// If the operator hasn't configured any of the URLs prior to
 		// generating this issuer, we should add a warning to the response,
 		// informing them they might want to do so prior to issuing leaves.
 		resp.AddWarning("This mount hasn't configured any authority information access (AIA) fields; this may make it harder for systems to find missing certificates in the chain or to validate revocation status of certificates. Consider updating /config/urls or the newly generated issuer with this information.")
+	}
+	if len(deltaCrlDistributionPoints) > 0 && len(parsedBundle.Certificate.CRLDistributionPoints) == 0 {
+		resp.AddWarning("This mount has configured delta CRL distribution points, but not CRL distribution points.")
 	}
 
 	caChain := append([]string{cb.Certificate}, cb.CAChain...)
@@ -523,7 +596,7 @@ func (b *backend) pathIssuerSignSelfIssued(ctx context.Context, req *logical.Req
 	}
 
 	sc := b.makeStorageContext(ctx, req.Storage)
-	signingBundle, caErr := sc.fetchCAInfo(issuerName, issuing.IssuanceUsage)
+	signingBundle, issuerId, caErr := sc.fetchCAInfoWithIssuer(issuerName, issuing.IssuanceUsage)
 	if caErr != nil {
 		switch caErr.(type) {
 		case errutil.UserError:
@@ -546,6 +619,15 @@ func (b *backend) pathIssuerSignSelfIssued(ctx context.Context, req *logical.Req
 	cert.IssuingCertificateURL = urls.IssuingCertificates
 	cert.CRLDistributionPoints = urls.CRLDistributionPoints
 	cert.OCSPServer = urls.OCSPServers
+	bundleData := &certutil.CreationBundle{
+		Params:        &certutil.CreationParameters{URLs: urls},
+		SigningBundle: nil,
+		CSR:           nil,
+	}
+	err = certutil.AddDeltaCRLExtension(bundleData, cert)
+	if err != nil {
+		return nil, err
+	}
 
 	// If the requested signature algorithm isn't the same as the signing certificate, and
 	// the user has requested a cross-algorithm signature, reset the template's signing algorithm
@@ -581,6 +663,20 @@ func (b *backend) pathIssuerSignSelfIssued(ctx context.Context, req *logical.Req
 		Bytes: newCert,
 	})
 
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIIssuerSignSelfIssued,
+		observe.NewAdditionalPKIMetadata("issuer_name", issuerName),
+		observe.NewAdditionalPKIMetadata("issuer_id", issuerId.String()),
+		observe.NewAdditionalPKIMetadata("issuing_ca", signingCB.IssuingCA),
+		observe.NewAdditionalPKIMetadata("serial_number", cert.SerialNumber),
+		observe.NewAdditionalPKIMetadata("not_after", cert.NotAfter.String()),
+		observe.NewAdditionalPKIMetadata("not_before", cert.NotBefore.String()),
+		observe.NewAdditionalPKIMetadata("common_name", cert.Subject.CommonName),
+		observe.NewAdditionalPKIMetadata("public_key_algorithm", cert.PublicKeyAlgorithm.String()),
+		observe.NewAdditionalPKIMetadata("public_key_size", certutil.GetPublicKeySize(cert.PublicKey)),
+		observe.NewAdditionalPKIMetadata("signing_algorithm", signingAlgorithm.String()),
+		observe.NewAdditionalPKIMetadata("subject_key_id", cert.SubjectKeyId),
+		observe.NewAdditionalPKIMetadata("authority_key_id", cert.AuthorityKeyId))
+
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"certificate": strings.TrimSpace(string(pemCert)),
@@ -615,6 +711,24 @@ func publicKeyType(pub crypto.PublicKey) (pubType x509.PublicKeyAlgorithm, sigAl
 		err = errors.New("x509: only RSA, ECDSA and Ed25519 keys supported")
 	}
 	return
+}
+
+func validateCaKeyUsages(keyUsages []string) error {
+	invalidKeyUsages := []string{}
+	for _, usage := range keyUsages {
+		cleanUsage := strings.ToLower(strings.TrimSpace(usage))
+		switch cleanUsage {
+		case "crlsign", "certsign", "digitalsignature":
+		case "contentcommitment", "keyencipherment", "dataencipherment", "keyagreement", "encipheronly", "decipheronly":
+			invalidKeyUsages = append(invalidKeyUsages, fmt.Sprintf("key usage %s is only valid for non-Ca certs", usage))
+		default:
+			invalidKeyUsages = append(invalidKeyUsages, fmt.Sprintf("unrecognized key usage %s", usage))
+		}
+	}
+	if invalidKeyUsages != nil {
+		return errors.New(strings.Join(invalidKeyUsages, "; "))
+	}
+	return nil
 }
 
 const pathGenerateRootHelpSyn = `

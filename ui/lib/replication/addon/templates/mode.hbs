@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <section class="section">
   <div class="container is-widescreen">
@@ -17,11 +17,9 @@
             </Hds::Breadcrumb>
           </p.top>
           <p.levelLeft>
-            <h1 class="has-top-margin-m title is-3" data-test-replication-title={{true}}>
+            <h1 class="has-top-margin-m title is-3" data-test-replication-title={{this.model.replicationModeForDisplay}}>
               {{this.model.replicationModeForDisplay}}
-              <span class="tag is-light has-text-grey-dark" data-test-replication-mode-display={{true}}>
-                {{this.model.replicationAttrs.modeForHeader}}
-              </span>
+              <Hds::Badge @text={{this.model.replicationAttrs.modeForHeader}} data-test-replication-mode-display />
             </h1>
           </p.levelLeft>
         </PageHeader>

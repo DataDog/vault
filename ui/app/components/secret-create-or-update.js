@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -27,21 +27,21 @@
  */
 
 import Component from '@glimmer/component';
-import ControlGroupError from 'vault/lib/control-group-error';
 import Ember from 'ember';
-import keys from 'core/utils/key-codes';
+import keys from 'core/utils/keys';
 import { action, set } from '@ember/object';
 import { service } from '@ember/service';
 import { tracked } from '@glimmer/tracking';
 import { isBlank, isNone } from '@ember/utils';
 import { task, waitForEvent } from 'ember-concurrency';
+import { WHITESPACE_WARNING } from 'vault/utils/forms/validators';
 
 const LIST_ROUTE = 'vault.cluster.secrets.backend.list';
 const LIST_ROOT_ROUTE = 'vault.cluster.secrets.backend.list-root';
 const SHOW_ROUTE = 'vault.cluster.secrets.backend.show';
 
 export default class SecretCreateOrUpdate extends Component {
-  @tracked codemirrorString = null;
+  @tracked editorString = null;
   @tracked error = null;
   @tracked secretPaths = null;
   @tracked pathWhiteSpaceWarning = false;
@@ -53,9 +53,11 @@ export default class SecretCreateOrUpdate extends Component {
   @service router;
   @service store;
 
+  whitespaceWarning = WHITESPACE_WARNING('path');
+
   @action
   setup(elem, [secretData, mode]) {
-    this.codemirrorString = secretData.toJSONString();
+    this.editorString = secretData.toJSONString();
     this.validationMessages = {
       path: '',
     };
@@ -86,7 +88,8 @@ export default class SecretCreateOrUpdate extends Component {
     this.validationErrorCount = values.filter(Boolean).length;
   }
   onEscape(e) {
-    if (e.keyCode !== keys.ESC || this.args.mode !== 'show') {
+    const isEscKeyPressed = keys.ESC.includes(e.key);
+    if (isEscKeyPressed || this.args.mode !== 'show') {
       return;
     }
     const parentKey = this.args.model.parentKey;
@@ -105,7 +108,7 @@ export default class SecretCreateOrUpdate extends Component {
     const secret = this.args.model;
     const secretData = this.args.modelForData;
 
-    let key = secretData.get('path') || secret.id;
+    let key = secretData?.path || secret.id;
 
     if (key.startsWith('/')) {
       key = key.replace(/^\/+/g, '');
@@ -120,10 +123,10 @@ export default class SecretCreateOrUpdate extends Component {
         }
       })
       .catch((error) => {
-        if (error instanceof ControlGroupError) {
+        if (error.isControlGroupError) {
+          this.controlGroup.saveTokenFromError(error);
           const errorMessage = this.controlGroup.logFromError(error);
           this.error = errorMessage.content;
-          this.controlGroup.saveTokenFromError(error);
         }
         throw error;
       });
@@ -156,21 +159,19 @@ export default class SecretCreateOrUpdate extends Component {
     }
     this.checkRows();
   }
+
   @action
-  codemirrorUpdated(val, codemirror) {
-    this.error = null;
-    codemirror.performLint();
-    const noErrors = codemirror.state.lint.marked.length === 0;
-    if (noErrors) {
-      try {
-        this.args.secretData.fromJSONString(val);
-        set(this.args.modelForData, 'secretData', this.args.secretData.toJSON());
-      } catch (e) {
-        this.error = e.message;
-      }
+  editorUpdated(val) {
+    try {
+      this.args.secretData.fromJSONString(val);
+      set(this.args.modelForData, 'secretData', this.args.secretData.toJSON());
+    } catch (e) {
+      this.error = e.message;
     }
-    this.codemirrorString = val;
+
+    this.editorString = val;
   }
+
   @action
   createOrUpdateKey(type, event) {
     event.preventDefault();
@@ -195,25 +196,30 @@ export default class SecretCreateOrUpdate extends Component {
     if (isBlank(item.name)) {
       return;
     }
+    // secretData is a KVObject/ArrayProxy so removeObject is fine here
     data.removeObject(item);
     this.checkRows();
     this.handleChange();
   }
+
   @action
   formatJSON() {
-    this.codemirrorString = this.args.secretData.toJSONString(true);
+    this.editorString = this.args.secretData.toJSONString(true);
   }
+
   @action
   handleMaskedInputChange(secret, index, value) {
     const row = { ...secret, value };
     set(this.args.secretData, index, row);
     this.handleChange();
   }
+
   @action
   handleChange() {
-    this.codemirrorString = this.args.secretData.toJSONString(true);
+    this.editorString = this.args.secretData.toJSONString(true);
     set(this.args.modelForData, 'secretData', this.args.secretData.toJSON());
   }
+
   @action
   updateValidationErrorCount(errorCount) {
     this.validationErrorCount = errorCount;

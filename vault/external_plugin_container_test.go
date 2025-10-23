@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -84,6 +84,7 @@ func TestExternalPluginInContainer_MountAndUnmount(t *testing.T) {
 	})
 
 	t.Run("rootless runsc", func(t *testing.T) {
+		t.Skip("Temporarily skipping due to environment breakage")
 		if _, err := exec.LookPath("runsc"); err != nil {
 			t.Skip("Skipping test as runsc not found on path")
 		}

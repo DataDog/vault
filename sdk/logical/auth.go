@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package logical
@@ -114,6 +114,10 @@ type Auth struct {
 
 	// EntityCreated is set to true if an entity is created as part of a login request
 	EntityCreated bool `json:"entity_created"`
+
+	// HTTPRequestPriority contains potential information about the request
+	// priority based on required path capabilities
+	HTTPRequestPriority *uint8 `json:"http_request_priority"`
 }
 
 func (a *Auth) GoString() string {

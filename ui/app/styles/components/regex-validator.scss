@@ -1,5 +1,7 @@
+@use '../utils/size_variables';
+
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -14,13 +16,13 @@
   flex: 0 1 auto;
 }
 .regex-group {
-  font-family: $family-monospace;
-  font-size: $size-8;
-  color: $ui-gray-600;
+  font-family: var(--token-typography-font-stack-code);
+  font-size: var(--token-typography-body-200-font-size);
+  color: var(--token-color-foreground-faint);
 }
 .regex-group-position {
-  background-color: $ui-gray-200;
-  border-radius: 3px;
+  background-color: var(--token-color-palette-neutral-200);
+  border-radius: var(--token-border-radius-x-small);
   padding-top: 5px;
   padding-bottom: 4px;
   margin-right: 4px;
@@ -29,5 +31,5 @@
   }
 }
 .regex-group-value {
-  margin-right: $spacing-16;
+  margin-right: size_variables.$spacing-16;
 }

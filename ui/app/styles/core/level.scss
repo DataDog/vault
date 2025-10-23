@@ -1,5 +1,8 @@
+@use '../utils/mixins';
+@use '../utils/size_variables';
+
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,11 +12,11 @@
 }
 
 .level code {
-  border-radius: $radius;
+  border-radius: var(--token-border-radius-x-small);
 }
 
 .level:not(:last-child) {
-  @include vault-block;
+  @include mixins.vault-block;
 }
 
 .level-left,
@@ -45,7 +48,7 @@
 
 .level.is-mobile .level-item:not(:last-child) {
   margin-bottom: 0;
-  margin-right: $spacing-10;
+  margin-right: size_variables.$spacing-10;
 }
 
 .level.is-mobile .level-item:not(.is-narrow) {
@@ -92,6 +95,6 @@
 
 @media screen and (max-width: 768px) {
   .level-item:not(:last-child) {
-    margin-bottom: $spacing-10;
+    margin-bottom: size_variables.$spacing-10;
   }
 }

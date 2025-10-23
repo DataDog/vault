@@ -1,14 +1,18 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package ssh
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/vault/sdk/helper/testhelpers/snapshots"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSSH_ConfigCAStorageUpgrade(t *testing.T) {
@@ -37,7 +41,7 @@ func TestSSH_ConfigCAStorageUpgrade(t *testing.T) {
 	}
 
 	// Reading it should return the key as well as upgrade the storage path
-	privateKeyEntry, err := caKey(context.Background(), config.StorageView, caPrivateKey)
+	privateKeyEntry, err := readStoredKey(context.Background(), config.StorageView, caPrivateKey, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +75,7 @@ func TestSSH_ConfigCAStorageUpgrade(t *testing.T) {
 	}
 
 	// Reading it should return the key as well as upgrade the storage path
-	publicKeyEntry, err := caKey(context.Background(), config.StorageView, caPublicKey)
+	publicKeyEntry, err := readStoredKey(context.Background(), config.StorageView, caPublicKey, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +182,28 @@ func TestSSH_ConfigCAUpdateDelete(t *testing.T) {
 	if err != nil || (resp != nil && resp.IsError()) {
 		t.Fatalf("bad: err: %v, resp:%v", err, resp)
 	}
+
+	// verify deletion of keys on deprecated path
+	err = config.StorageView.Put(context.Background(), &logical.StorageEntry{
+		Key:   caPublicKeyStoragePathDeprecated,
+		Value: []byte(testCAPublicKey),
+	})
+	require.NoError(t, err)
+	err = config.StorageView.Put(context.Background(), &logical.StorageEntry{
+		Key:   caPrivateKeyStoragePathDeprecated,
+		Value: []byte(testCAPrivateKey),
+	})
+	require.NoError(t, err)
+	caReq.Operation = logical.DeleteOperation
+	resp, err = b.HandleRequest(context.Background(), caReq)
+	if err != nil || (resp != nil && resp.IsError()) {
+		t.Fatalf("bad: err: %v, resp:%v", err, resp)
+	}
+	// ensure it was deleted
+	caReq.Operation = logical.ReadOperation
+	resp, err = b.HandleRequest(context.Background(), caReq)
+	require.NoError(t, err)
+	require.Error(t, resp.Error())
 }
 
 func createDeleteHelper(t *testing.T, b logical.Backend, config *logical.BackendConfig, index int, keyType string, keyBits int) {
@@ -259,6 +285,7 @@ func TestSSH_ConfigCAKeyTypes(t *testing.T) {
 		"key_type":                "ca",
 		"ttl":                     "30s",
 		"not_before_duration":     "2h",
+		"allow_empty_principals":  true,
 	}
 	roleReq := &logical.Request{
 		Operation: logical.UpdateOperation,
@@ -274,4 +301,415 @@ func TestSSH_ConfigCAKeyTypes(t *testing.T) {
 	for index, scenario := range cases {
 		createDeleteHelper(t, b, config, index, scenario.keyType, scenario.keyBits)
 	}
+}
+
+func TestReadManagedKey(t *testing.T) {
+	t.Parallel()
+
+	storage := &logical.InmemStorage{}
+	entry, err := readManagedKey(context.Background(), storage)
+	if err != nil {
+		t.Fatalf("error reading managed key: %s", err)
+	}
+
+	if entry != nil {
+		t.Fatal("expected nil, but got a non-nil return")
+	}
+
+	err = writeKey(context.Background(), storage, caManagedKeyStoragePath, "test-managed-key")
+	if err != nil {
+		t.Fatalf("error writing test key: %s", err)
+	}
+
+	entry, err = readManagedKey(context.Background(), storage)
+	if err != nil {
+		t.Fatalf("error reading managed key: %s", err)
+	}
+
+	if entry == nil {
+		t.Fatal("unexpected nil entry")
+	}
+
+	if entry.PublicKey != "test-managed-key" {
+		t.Fatalf("key value mismatch: expected %s, got %s", "test-managed-key", entry.PublicKey)
+	}
+}
+
+func TestReadStoredKey(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		privateKeyStoragePath string
+		publicKeyStoragePath  string
+		publicKey             string
+		privateKey            string
+	}{
+		"stored-keys-configured": {
+			privateKeyStoragePath: caPrivateKeyStoragePath,
+			publicKeyStoragePath:  caPublicKeyStoragePath,
+			publicKey:             testCAPublicKey,
+			privateKey:            testCAPrivateKey,
+		},
+	}
+
+	for name, tt := range testCases {
+		t.Run(name, func(t *testing.T) {
+			storage := &logical.InmemStorage{}
+
+			if err := writeKey(ctx, storage, tt.privateKeyStoragePath, tt.privateKey); err != nil {
+				t.Fatalf("error writing private key: %s", err)
+			}
+
+			if err := writeKey(ctx, storage, tt.publicKeyStoragePath, tt.publicKey); err != nil {
+				t.Fatalf("error writing public key: %s", err)
+			}
+
+			publicKeyEntry, err := readStoredKey(context.Background(), storage, caPublicKey, true)
+			if err != nil {
+				t.Fatalf("error reading public key: %s", err)
+			}
+
+			if publicKeyEntry.Key != tt.publicKey {
+				t.Fatalf("returned key does not match: expected %s, got %s", tt.publicKey, publicKeyEntry.Key)
+			}
+
+			privateKeyEntry, err := readStoredKey(context.Background(), storage, caPrivateKey, true)
+			if err != nil {
+				t.Fatalf("error reading private key: %s", err)
+			}
+
+			if privateKeyEntry.Key != tt.privateKey {
+				t.Fatalf("returned key does not match: expected %s, got %s", tt.privateKey, privateKeyEntry.Key)
+			}
+		})
+	}
+}
+
+func TestGetCAPublicKey(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		publicKeyStoragePath string
+		publicKey            string
+	}{
+		"stored-keys-configured": {
+			publicKeyStoragePath: caPublicKeyStoragePath,
+			publicKey:            testCAPublicKey,
+		},
+		"managed-key-configured": {
+			publicKeyStoragePath: caManagedKeyStoragePath,
+			publicKey:            testCAPublicKey,
+		},
+		"no-keys-configured": {},
+	}
+
+	for name, tt := range testCases {
+		t.Run(name, func(t *testing.T) {
+			storage := &logical.InmemStorage{}
+			err := writeKey(ctx, storage, tt.publicKeyStoragePath, tt.publicKey)
+			if err != nil {
+				t.Fatalf("error writing key: %s", err)
+			}
+
+			key, err := getCAPublicKey(ctx, storage, true)
+			if err != nil {
+				t.Fatalf("error retrieving public key: %s", err)
+			}
+
+			if key != tt.publicKey {
+				t.Fatalf("key values do not match: expected %s, got %s", tt.publicKey, key)
+			}
+		})
+	}
+}
+
+func TestCreateStoredKey(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		publicKey  string
+		privateKey string
+		expectErr  bool
+	}{
+		"both-keys-provided": {
+			publicKey:  testCAPublicKey,
+			privateKey: testCAPrivateKey,
+		},
+		"only-public-key": {
+			publicKey: testCAPublicKey,
+			expectErr: true,
+		},
+		"only-private-key": {
+			privateKey: testCAPrivateKey,
+			expectErr:  true,
+		},
+		"empty keys": {
+			expectErr: true,
+		},
+	}
+
+	for name, tt := range testCases {
+		t.Run(name, func(t *testing.T) {
+			storage := &logical.InmemStorage{}
+			err := createStoredKey(context.Background(), storage, tt.publicKey, tt.privateKey)
+			if err != nil && !tt.expectErr {
+				t.Fatalf("unexpected error: %s", err)
+			} else if err == nil && tt.expectErr {
+				t.Fatal("expected error, got nil")
+			}
+
+			if !tt.expectErr {
+				err = readKey(context.Background(), storage, caPublicKeyStoragePath)
+				if err != nil {
+					t.Fatalf("error reading public key: %s", err)
+				}
+
+				err = readKey(context.Background(), storage, caPrivateKeyStoragePath)
+				if err != nil {
+					t.Fatalf("error reading private key: %s", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCAKeysConfigured(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		privateKeyStoragePath string
+		publicKeyStoragePath  string
+		publicKey             string
+		privateKey            string
+		expectedValue         bool
+	}{
+		"stored-keys-configured": {
+			privateKeyStoragePath: caPrivateKeyStoragePath,
+			publicKeyStoragePath:  caPublicKeyStoragePath,
+			publicKey:             testCAPublicKey,
+			privateKey:            testCAPrivateKey,
+			expectedValue:         true,
+		},
+		"deprecated-path-keys-configured": {
+			privateKeyStoragePath: caPrivateKeyStoragePathDeprecated,
+			publicKeyStoragePath:  caPublicKeyStoragePathDeprecated,
+			publicKey:             testCAPublicKey,
+			privateKey:            testCAPrivateKey,
+			expectedValue:         true,
+		},
+		"managed-key-configured": {
+			publicKeyStoragePath: caManagedKeyStoragePath,
+			publicKey:            testCAPublicKey,
+			expectedValue:        true,
+		},
+		"stored-keys-empty": {
+			privateKeyStoragePath: caPrivateKeyStoragePath,
+			publicKeyStoragePath:  caPublicKeyStoragePath,
+			expectedValue:         false,
+		},
+		"no-storage-entry": {
+			expectedValue: false,
+		},
+	}
+
+	for name, tt := range testCases {
+		t.Run(name, func(t *testing.T) {
+			storage := &logical.InmemStorage{}
+
+			if err := writeKey(ctx, storage, tt.privateKeyStoragePath, tt.privateKey); err != nil {
+				t.Fatalf("error writing private key: %s", err)
+			}
+
+			if err := writeKey(ctx, storage, tt.publicKeyStoragePath, tt.publicKey); err != nil {
+				t.Fatalf("error writing public key: %s", err)
+			}
+
+			keysConfigured, err := caKeysConfigured(context.Background(), storage)
+			if err != nil {
+				t.Fatalf("error checking for configured keys: %s", err)
+			}
+
+			if tt.expectedValue != keysConfigured {
+				t.Fatalf("unexpected return value: expected %v, got %v", tt.expectedValue, keysConfigured)
+			}
+		})
+	}
+}
+
+func writeKey(ctx context.Context, s logical.Storage, path, key string) error {
+	if path == "" {
+		return nil
+	}
+
+	var entry *logical.StorageEntry
+	var err error
+	switch path {
+	case caPublicKeyStoragePath, caPrivateKeyStoragePath:
+		entry, err = logical.StorageEntryJSON(path, &keyStorageEntry{Key: key})
+		if err != nil {
+			return err
+		}
+	case caPublicKeyStoragePathDeprecated, caPrivateKeyStoragePathDeprecated:
+		entry, err = logical.StorageEntryJSON(path, []byte(key))
+		if err != nil {
+			return err
+		}
+	case caManagedKeyStoragePath:
+		entry, err = logical.StorageEntryJSON(path, &managedKeyStorageEntry{
+			KeyId:     "test-key-id",
+			KeyName:   "test-key-name",
+			PublicKey: key,
+		})
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unexpected storage path %s", path)
+	}
+
+	return s.Put(ctx, entry)
+}
+
+func readKey(ctx context.Context, s logical.Storage, path string) error {
+	switch path {
+	case caPublicKeyStoragePath, caPrivateKeyStoragePath:
+		var entry keyStorageEntry
+
+		storageEntry, err := s.Get(ctx, path)
+		if err != nil {
+			return fmt.Errorf("error reading public key from storage: %s", err)
+		}
+
+		err = storageEntry.DecodeJSON(&entry)
+		if err != nil {
+			return fmt.Errorf("error decoding storage entry: %s", err)
+		}
+
+		if entry.Key == "" {
+			return errors.New("stored key was empty")
+		}
+	case caManagedKeyStoragePath:
+		var entry managedKeyStorageEntry
+
+		storageEntry, err := s.Get(ctx, path)
+		if err != nil {
+			return fmt.Errorf("error reading managed key from storage: %s", err)
+		}
+
+		err = storageEntry.DecodeJSON(&entry)
+		if err != nil {
+			return fmt.Errorf("error decoding storage entry: %s", err)
+		}
+
+		if entry.KeyId == "" || entry.KeyName == "" || entry.PublicKey == "" {
+			return errors.New("managed key storage fields were empty")
+		}
+	default:
+		return fmt.Errorf("unexpected storage path %s", path)
+	}
+
+	return nil
+}
+
+// TestCARecover verifies secret recovery of the SSH CA
+func TestCARecover(t *testing.T) {
+	var err error
+	config := logical.TestBackendConfig()
+	config.StorageView = &logical.InmemStorage{}
+
+	b, err := Factory(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Cannot create backend: %s", err)
+	}
+	tc := snapshots.NewSnapshotTestCase(t, b)
+
+	// generate CA keys on the snapshot storage
+	_, err = b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/ca",
+		Storage:   tc.SnapshotStorage(),
+		Data: map[string]interface{}{
+			"public_key":  testCAPublicKey,
+			"private_key": testCAPrivateKey,
+		},
+	})
+	require.NoError(t, err)
+
+	// write different CA to the regular storage
+	_, err = b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "config/ca",
+		Storage:   tc.RegularStorage(),
+		Data: map[string]interface{}{
+			"generate_signing_key": true,
+		},
+	})
+	require.NoError(t, err)
+	t.Run("read no side effects", func(t *testing.T) {
+		tc.RunRead(t, "config/ca")
+	})
+
+	t.Run("recover succeeds", func(t *testing.T) {
+		tc.DoRecover(t, "config/ca")
+		data, err := b.HandleRequest(context.Background(), &logical.Request{
+			Operation: logical.ReadOperation,
+			Path:      "config/ca",
+			Storage:   tc.SnapshotStorage(),
+			Data: map[string]interface{}{
+				"public_key": "should be the actual public key but the SSH CA recovery doesn't really care as it reads directly from snapshot storage",
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Equal(t, testCAPublicKey, data.Data["public_key"])
+	})
+}
+
+// TestCARecoverMigration is the same as TestCARecover, but recovering from a snapshot with the data in the deprecated
+// storage paths, which ensures that the migration logic is skipped during recovery.
+func TestCARecoverMigration(t *testing.T) {
+	var err error
+	config := logical.TestBackendConfig()
+	config.StorageView = &logical.InmemStorage{}
+
+	b, err := Factory(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Cannot create backend: %s", err)
+	}
+	tc := snapshots.NewSnapshotTestCase(t, b)
+	err = tc.SnapshotStorage().Put(context.Background(), &logical.StorageEntry{
+		Key:   caPublicKeyStoragePathDeprecated,
+		Value: []byte(testCAPublicKey),
+	})
+	require.NoError(t, err)
+	err = tc.SnapshotStorage().Put(context.Background(), &logical.StorageEntry{
+		Key:   caPrivateKeyStoragePathDeprecated,
+		Value: []byte(testCAPrivateKey),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, err)
+	t.Run("read no side effects", func(t *testing.T) {
+		tc.RunRead(t, "config/ca")
+	})
+
+	t.Run("recover succeeds", func(t *testing.T) {
+		tc.DoRecover(t, "config/ca")
+		// ensure that even though the migration on read is disabled, by reading from the old path in the snapshot and
+		// creating a entry in the regular storage, that the entry ends up in the new path
+		entry, err := tc.RegularStorage().Get(context.Background(), caPublicKeyStoragePathDeprecated)
+		require.NoError(t, err)
+		require.Nil(t, entry)
+		data, err := b.HandleRequest(context.Background(), &logical.Request{
+			Operation: logical.ReadOperation,
+			Path:      "config/ca",
+			Storage:   tc.SnapshotStorage(),
+			Data: map[string]interface{}{
+				"public_key": "should be the actual public key but the SSH CA recovery doesn't really care as it reads directly from snapshot storage",
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Equal(t, testCAPublicKey, data.Data["public_key"])
+	})
 }

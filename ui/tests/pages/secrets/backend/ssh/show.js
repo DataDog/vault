@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -13,9 +13,4 @@ export default create({
   editIsPresent: isPresent('[data-test-edit-link]'),
   generate: clickable('[data-test-backend-credentials]'),
   generateIsPresent: isPresent('[data-test-backend-credentials]'),
-  deleteBtn: clickable('[data-test-confirm-action-trigger]'),
-  confirmBtn: clickable('[data-test-confirm-button]'),
-  deleteRole() {
-    return this.deleteBtn().confirmBtn();
-  },
 });

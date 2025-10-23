@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,6 +17,7 @@ interface BasicDropdown {
 interface Args {
   issuers: PkiIssuerModel[];
   mountPoint: string;
+  backend: string;
 }
 
 export default class PkiIssuerList extends Component<Args> {

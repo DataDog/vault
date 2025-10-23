@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"fmt"
 
+	"github.com/hashicorp/vault/builtin/logical/pki/issuing"
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
@@ -55,7 +57,7 @@ func (b *backend) secretCredsRevoke(ctx context.Context, req *logical.Request, _
 	sc := b.makeStorageContext(ctx, req.Storage)
 	serial := serialInt.(string)
 
-	certEntry, err := fetchCertBySerial(sc, "certs/", serial)
+	certEntry, err := fetchCertBySerial(sc, issuing.PathCerts, serial)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +79,16 @@ func (b *backend) secretCredsRevoke(ctx context.Context, req *logical.Request, _
 		return nil, nil
 	}
 
-	config, err := sc.Backend.CrlBuilder().getConfigWithUpdate(sc)
+	config, err := sc.CrlBuilder().GetConfigWithUpdate(sc)
 	if err != nil {
 		return nil, fmt.Errorf("error revoking serial: %s: failed reading config: %w", serial, err)
 	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRevoke,
+		observe.NewAdditionalPKIMetadata("issuer_name", cert.Issuer.String()),
+		observe.NewAdditionalPKIMetadata("is_ca", cert.IsCA),
+		observe.NewAdditionalPKIMetadata("serial_number", cert.SerialNumber.String()),
+	)
 
 	return revokeCert(sc, config, cert)
 }

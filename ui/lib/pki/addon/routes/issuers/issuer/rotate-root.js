@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -32,17 +32,22 @@ export default class PkiIssuerRotateRootRoute extends Route {
       oldRoot,
       newRootModel,
       parsingErrors,
+      backend: this.secretMountPath.currentPath,
     });
   }
 
   setupController(controller, resolvedModel) {
     super.setupController(controller, resolvedModel);
     controller.breadcrumbs = [
-      { label: 'secrets', route: 'secrets', linkExternal: true },
-      { label: this.secretMountPath.currentPath, route: 'overview' },
-      { label: 'issuers', route: 'issuers.index' },
-      { label: resolvedModel.oldRoot.id, route: 'issuers.issuer.details' },
-      { label: 'rotate root' },
+      { label: 'Secrets', route: 'secrets', linkExternal: true },
+      { label: this.secretMountPath.currentPath, route: 'overview', model: resolvedModel.oldRoot.backend },
+      { label: 'Issuers', route: 'issuers.index', model: resolvedModel.oldRoot.backend },
+      {
+        label: resolvedModel.oldRoot.id,
+        route: 'issuers.issuer.details',
+        models: [resolvedModel.oldRoot.backend, resolvedModel.oldRoot.id],
+      },
+      { label: 'Rotate Root' },
     ];
   }
 }

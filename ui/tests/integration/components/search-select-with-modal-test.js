@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,11 +9,13 @@ import { create } from 'ember-cli-page-object';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import { Response } from 'miragejs';
 import { clickTrigger, typeInSearch } from 'ember-power-select/test-support/helpers';
-import { render, fillIn, click, findAll } from '@ember/test-helpers';
+import { render, fillIn, click, findAll, waitFor, settled } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
 import ss from 'vault/tests/pages/components/search-select';
 import sinon from 'sinon';
 import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import codemirror, { setCodeEditorValue } from 'vault/tests/helpers/codemirror';
 
 const component = create(ss);
 
@@ -156,7 +158,7 @@ module('Integration | Component | search select with modal', function (hooks) {
     await component.selectOption();
 
     assert.dom('#search-select-modal').exists('modal is active');
-    assert.dom('[data-test-empty-state-title]').hasText('No policy type selected');
+    assert.dom(GENERAL.emptyStateTitle).hasText('No policy type selected');
     assert.ok(this.onChange.notCalled, 'onChange is not called');
   });
 
@@ -193,21 +195,21 @@ module('Integration | Component | search select with modal', function (hooks) {
       'dropdown gives option to create new option'
     );
     await component.selectOption();
-    assert.dom('[data-test-empty-state-title]').hasText('No policy type selected');
-    await fillIn('[data-test-select="policyType"]', 'acl');
+    assert.dom(GENERAL.emptyStateTitle).hasText('No policy type selected');
+    await fillIn(GENERAL.selectByAttr('policyType'), 'acl');
     assert.dom('[data-test-policy-form]').exists('policy form renders after type is selected');
     await click('[data-test-tab-example-policy] button');
     assert.dom('[data-test-tab-example-policy] button').hasAttribute('aria-selected', 'true');
     await click('[data-test-tab-your-policy] button');
     assert.dom('[data-test-tab-your-policy] button').hasAttribute('aria-selected', 'true');
-    await fillIn(
-      '[data-test-component="code-mirror-modifier"] textarea',
-      'path "secret/super-secret" { capabilities = ["deny"] }'
-    );
-    await click('[data-test-policy-save]');
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, 'path "secret/super-secret" { capabilities = ["deny"] }');
+    await settled();
+    await click(GENERAL.submitButton);
     assert.dom('[data-test-modal-div]').doesNotExist('modal closes after save');
     assert
-      .dom('[data-test-selected-option="0"]')
+      .dom(GENERAL.searchSelect.selectedOption(0))
       .hasText('acl-test-new', 'adds newly created policy to selected options');
     assert.ok(
       this.onChange.calledWithExactly(['acl-test-new']),
@@ -245,24 +247,35 @@ module('Integration | Component | search select with modal', function (hooks) {
     assert.ok(this.onChange.notCalled, 'onChange is not called');
   });
 
-  test('it renders fallback component if both models return 403', async function (assert) {
-    assert.expect(7);
-    this.server.get('sys/policies/acl', () => {
-      return new Response(
-        403,
-        { 'Content-Type': 'application/json' },
-        JSON.stringify({ errors: ['permission denied'] })
-      );
-    });
-    this.server.get('sys/policies/rgp', () => {
-      return new Response(
-        403,
-        { 'Content-Type': 'application/json' },
-        JSON.stringify({ errors: ['permission denied'] })
-      );
+  module('fallback component', function (hooks) {
+    hooks.beforeEach(function () {
+      this.server.get('sys/policies/acl', () => {
+        return new Response(
+          403,
+          { 'Content-Type': 'application/json' },
+          JSON.stringify({ errors: ['permission denied'] })
+        );
+      });
+      this.server.get('sys/policies/rgp', () => {
+        return new Response(
+          403,
+          { 'Content-Type': 'application/json' },
+          JSON.stringify({ errors: ['permission denied'] })
+        );
+      });
+      this.server.get('identity/oidc/key?list=true', () => {
+        return new Response(
+          403,
+          { 'Content-Type': 'application/json' },
+          JSON.stringify({ errors: ['permission denied'] })
+        );
+      });
     });
 
-    await render(hbs`
+    test('it renders fallback component if both models return 403', async function (assert) {
+      assert.expect(7);
+
+      await render(hbs`
     <SearchSelectWithModal
       @id="policies"
       @label="Policies"
@@ -274,23 +287,71 @@ module('Integration | Component | search select with modal', function (hooks) {
       @modalFormTemplate="modal-form/policy-template"
     />
       `);
-    assert.dom('[data-test-component="string-list"]').exists('renders fallback component');
-    assert.false(component.hasTrigger, 'does not render power select trigger');
-    await fillIn('[data-test-string-list-input="0"]', 'string-list-policy');
-    await click('[data-test-string-list-button="add"]');
-    assert
-      .dom('[data-test-string-list-input="0"]')
-      .hasValue('string-list-policy', 'first row renders inputted string');
-    assert
-      .dom('[data-test-string-list-row="0"] [data-test-string-list-button="delete"]')
-      .exists('first row renders delete icon');
-    assert.dom('[data-test-string-list-row="1"]').exists('renders second input row');
-    assert
-      .dom('[data-test-string-list-row="1"] [data-test-string-list-button="add"]')
-      .exists('second row renders add icon');
-    assert.ok(
-      this.onChange.calledWithExactly(['string-list-policy']),
-      'onChange is called only after item is created'
-    );
+      assert.dom('[data-test-component="string-list"]').exists('renders fallback component');
+      assert.false(component.hasTrigger, 'does not render power select trigger');
+      await fillIn('[data-test-string-list-input="0"]', 'string-list-policy');
+      await click('[data-test-string-list-button="add"]');
+      assert
+        .dom('[data-test-string-list-input="0"]')
+        .hasValue('string-list-policy', 'first row renders inputted string');
+      assert
+        .dom('[data-test-string-list-row="0"] [data-test-string-list-button="delete"]')
+        .exists('first row renders delete icon');
+      assert.dom('[data-test-string-list-row="1"]').exists('renders second input row');
+      assert
+        .dom('[data-test-string-list-row="1"] [data-test-string-list-button="add"]')
+        .exists('second row renders add icon');
+      assert.ok(
+        this.onChange.calledWithExactly(['string-list-policy']),
+        'onChange is called only after item is created'
+      );
+    });
+
+    test('it renders fallback placeholder text for fallback component', async function (assert) {
+      assert.expect(1);
+
+      await render(hbs`
+    <SearchSelectWithModal
+      @id="key"
+      @label="Keys"
+      @models={{array "oidc/key"}}
+      @inputValue={{this.policies}}
+      @onChange={{this.onChange}}
+      @fallbackComponent="input-search"
+      @modalFormTemplate="modal-form/oidc-key-template"
+      @selectLimit="1"
+      @placeholder="Search or type to create a key item"
+      @fallbackComponentPlaceholder="Input key name"
+    />
+      `);
+      assert
+        .dom(GENERAL.inputSearch('key'))
+        .hasAttribute('placeholder', 'Input key name', 'Fallback placeholder was passed to input search');
+    });
+
+    test('it renders placeholder text for fallback component', async function (assert) {
+      assert.expect(1);
+
+      await render(hbs`
+    <SearchSelectWithModal
+      @id="key"
+      @label="Keys"
+      @models={{array "oidc/key"}}
+      @inputValue={{this.policies}}
+      @onChange={{this.onChange}}
+      @fallbackComponent="input-search"
+      @modalFormTemplate="modal-form/oidc-key-template"
+      @selectLimit="1"
+      @placeholder="Search or type to create a key item"
+    />
+      `);
+      assert
+        .dom(GENERAL.inputSearch('key'))
+        .hasAttribute(
+          'placeholder',
+          'Search or type to create a key item',
+          'Placeholder was passed to input search'
+        );
+    });
   });
 });

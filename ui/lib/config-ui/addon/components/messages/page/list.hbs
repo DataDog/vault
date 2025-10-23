@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 <Messages::TabPageHeader
   @authenticated={{@authenticated}}
   @pageTitle="Custom messages"
@@ -9,40 +9,64 @@
   @breadcrumbs={{this.breadcrumbs}}
 >
   <:toolbarFilters>
-    <FilterInput
-      aria-label="Search by message title"
-      placeholder="Search by message title"
-      id="message-filter"
-      value={{@params.pageFilter}}
-      @autofocus={{true}}
-      @onInput={{this.onFilterInputChange}}
-    />
-    <div>
-      <SearchSelect
-        @id="filter-by-message-status"
-        class="has-left-margin-s"
-        @options={{this.statusFilterOptions}}
-        @selectLimit="1"
-        @searchEnabled={{false}}
-        @fallbackComponent="select"
-        @onChange={{fn this.onFilterChange "status"}}
-        @placeholder="Filter by message status"
-        @inputValue={{if @params.status (array @params.status)}}
-        data-test-filter-by-message-status
-      />
-    </div>
-    <SearchSelect
-      @id="filter-by-message-type"
-      class="has-left-margin-s"
-      @options={{this.typeFilterOptions}}
-      @selectLimit="1"
-      @searchEnabled={{false}}
-      @fallbackComponent="select"
-      @onChange={{fn this.onFilterChange "type"}}
-      @placeholder="Filter by message type"
-      @inputValue={{if @params.type (array @params.type)}}
-      data-test-filter-by-message-type
-    />
+    <form {{on "submit" (perform this.handleSearch)}} aria-label="Filter custom message list">
+      <Hds::SegmentedGroup as |S|>
+        <S.Button
+          @color="secondary"
+          @text="Clear filters"
+          @icon="trash"
+          @isIconOnly={{true}}
+          type="reset"
+          {{on "click" this.resetFilters}}
+          data-test-filter-reset
+        />
+        <S.TextInput
+          @value={{@params.pageFilter}}
+          @type="search"
+          name="pageFilter"
+          class="segment-filter"
+          placeholder="Search by message title"
+          aria-label="Search by message title"
+          size="32"
+          data-test-filter-by="pageFilter"
+        />
+        <S.Select
+          aria-label="Filter by message status"
+          name="status"
+          class="segment-filter {{unless @params.status 'has-text-grey'}}"
+          data-test-filter-by="status"
+          as |S|
+        >
+          <S.Options>
+            <option value="" class="default-option">Message status</option>
+            {{#each (array "active" "inactive") as |status|}}
+              <option value={{status}} selected={{eq @params.status status}}>{{status}}</option>
+            {{/each}}
+          </S.Options>
+        </S.Select>
+        <S.Select
+          aria-label="Filter by type"
+          name="type"
+          class="segment-filter {{unless @params.status 'has-text-grey'}}"
+          data-test-filter-by="type"
+          as |S|
+        >
+          <S.Options>
+            <option value="" class="has-text-grey">Message type</option>
+            {{#each (array "modal" "banner") as |type|}}
+              <option value={{type}} selected={{eq @params.type type}}>{{type}}</option>
+            {{/each}}
+          </S.Options>
+        </S.Select>
+        <S.Button
+          @color="secondary"
+          @text="Apply filters"
+          @icon={{if this.handleSearch.isRunning "loading" "filter"}}
+          type="submit"
+          data-test-submit
+        />
+      </Hds::SegmentedGroup>
+    </form>
   </:toolbarFilters>
   <:toolbarActions>
     <Hds::Button
@@ -51,8 +75,8 @@
       @color="secondary"
       class="toolbar-button"
       {{on "click" this.createMessage}}
-      data-test-button="create message"
       aria-label="create message"
+      data-test-button="Create message"
     />
   </:toolbarActions>
 </Messages::TabPageHeader>
@@ -68,19 +92,23 @@
       <div class="level is-mobile">
         <div class="level-left">
           <div>
-            <Hds::Text::Display @tag="h2" data-linked-block-title={{message.id}}>
+            <Hds::Text::Display @tag="h2">
               <Icon @name="message-circle" class="auto-width" aria-label="message" />
               {{message.title}}
             </Hds::Text::Display>
             <div class="has-top-margin-xs">
-              <Hds::Badge @text={{message.badgeDisplayText}} @color={{message.badgeColor}} data-test-badge={{message.id}} />
+              <Hds::Badge
+                @text={{message.badgeDisplayText}}
+                @color={{message.badgeColor}}
+                data-test-badge={{message.badgeDisplayText}}
+              />
               <Hds::Badge @text={{(capitalize message.type)}} data-test-badge={{message.type}} />
             </div>
           </div>
         </div>
         <div class="level-right is-flex is-paddingless is-marginless">
           <div class="level-item">
-            {{#if (or message.canEditCustomMessages message.canDeleteCustomMessages)}}
+            {{#if (has-capability @capabilities "update" "delete" pathKey="customMessages" params=message)}}
               <Hds::Dropdown @isInline={{true}} @listPosition="bottom-right" as |dd|>
                 <dd.ToggleIcon
                   @icon="more-horizontal"
@@ -88,11 +116,15 @@
                   @hasChevron={{false}}
                   data-test-popup-menu-trigger
                 />
-                {{#if message.canEditCustomMessages}}
-                  <dd.Interactive @text="Edit" @route="messages.message.edit" @model={{message.id}} />
+                {{#if (has-capability @capabilities "update" pathKey="customMessages" params=message)}}
+                  <dd.Interactive @route="messages.message.edit" @model={{message.id}}>Edit</dd.Interactive>
                 {{/if}}
-                {{#if message.canDeleteCustomMessages}}
-                  <dd.Interactive @text="Delete" @color="critical" {{on "click" (fn (mut this.messageToDelete) message)}} />
+                {{#if (has-capability @capabilities "delete" pathKey="customMessages" params=message)}}
+                  <dd.Interactive
+                    @color="critical"
+                    {{on "click" (fn (mut this.messageToDelete) message)}}
+                    data-test-popup-menu="delete"
+                  >Delete</dd.Interactive>
                 {{/if}}
               </Hds::Dropdown>
             {{/if}}
@@ -132,7 +164,7 @@
       Vault can only store up to 100 messages. To create a message, delete one of your messages to clear up space.
     </M.Body>
     <M.Footer as |F|>
-      <Hds::Button @text="Close" {{on "click" F.close}} data-test-modal-button="maximum-message-modal" />
+      <Hds::Button @text="Close" {{on "click" F.close}} data-test-button="close-maximum-message" />
     </M.Footer>
   </Hds::Modal>
 {{/if}}

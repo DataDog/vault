@@ -1,14 +1,15 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Route from '@ember/routing/route';
 import { service } from '@ember/service';
-import { hash } from 'rsvp';
+import { paginate } from 'core/utils/paginate-list';
 
 export default class MessagesRoute extends Route {
-  @service store;
+  @service api;
+  @service capabilities;
 
   queryParams = {
     page: {
@@ -28,36 +29,49 @@ export default class MessagesRoute extends Route {
     },
   };
 
-  model(params) {
+  async model(params) {
     const { authenticated, page, pageFilter, status, type } = params;
-    const filter = pageFilter
-      ? (dataset) => dataset.filter((item) => item?.title.toLowerCase().includes(pageFilter.toLowerCase()))
-      : null;
-    let active;
+    const active = {
+      active: true,
+      inactive: false,
+    }[status];
 
-    if (status === 'active') active = true;
-    if (status === 'inactive') active = false;
-
-    const messages = this.store
-      .lazyPaginatedQuery('config-ui/message', {
-        authenticated,
-        pageFilter: filter,
+    try {
+      const { key_info, keys } = await this.api.sys.uiConfigListCustomMessages(
+        true,
         active,
-        type,
-        responsePath: 'data.keys',
-        page: page || 1,
-        size: 10,
-      })
-      .catch((e) => {
-        if (e.httpStatus === 404) {
-          return [];
-        }
-        throw e;
+        authenticated,
+        type
+      );
+      // ids are in the keys array and can be mapped to the object in key_info
+      // map and set id property on key_info object
+      const data = keys.map((id) => {
+        const { start_time, end_time, ...message } = key_info[id];
+        // dates returned from list endpoint are strings -- convert to date
+        return {
+          id,
+          ...message,
+          start_time: start_time ? new Date(start_time) : start_time,
+          end_time: end_time ? new Date(end_time) : end_time,
+        };
       });
-    return hash({
-      params,
-      messages,
-    });
+      const messages = paginate(data, {
+        page,
+        pageSize: 2,
+        filter: pageFilter,
+        filterKey: 'title',
+      });
+      // fetch capabilities for each message path
+      const paths = messages.map((message) => this.capabilities.pathFor('customMessages', message));
+      const capabilities = await this.capabilities.fetch(paths);
+
+      return { params, messages, capabilities };
+    } catch (e) {
+      if (e.response?.status === 404) {
+        return { params, messages: [] };
+      }
+      throw e;
+    }
   }
 
   setupController(controller, resolvedModel) {

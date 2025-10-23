@@ -1,13 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import ApplicationSerializer from '../application';
 
 export default class LdapRoleSerializer extends ApplicationSerializer {
-  primaryKey = 'name';
-
   serialize(snapshot) {
     // remove all fields that are not relevant to specified role type
     const { fieldsForType } = snapshot.record;

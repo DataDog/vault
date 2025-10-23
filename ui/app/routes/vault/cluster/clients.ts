@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,19 +7,14 @@ import Route from '@ember/routing/route';
 import { hash } from 'rsvp';
 import { service } from '@ember/service';
 
-import type StoreService from 'vault/services/store';
-import type ClientsConfigModel from 'vault/models/clients/config';
-import type ClientsVersionHistoryModel from 'vault/models/clients/version-history';
-
-export interface ClientsRouteModel {
-  config: ClientsConfigModel;
-  versionHistory: ClientsVersionHistoryModel;
-}
+import type Store from '@ember-data/store';
 
 export default class ClientsRoute extends Route {
-  @service declare readonly store: StoreService;
+  @service declare readonly store: Store;
 
-  getVersionHistory() {
+  getVersionHistory(): Promise<
+    Array<{ version: string; previousVersion: string; timestampInstalled: string }>
+  > {
     return this.store
       .findAll('clients/version-history')
       .then((response) => {

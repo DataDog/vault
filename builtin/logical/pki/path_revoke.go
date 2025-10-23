@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/vault/builtin/logical/pki/issuing"
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
+	"github.com/hashicorp/vault/builtin/logical/pki/pki_backend"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/certutil"
 	"github.com/hashicorp/vault/sdk/helper/consts"
@@ -346,7 +348,7 @@ func (b *backend) pathRevokeWriteHandleCertificate(ctx context.Context, req *log
 	// Start with the latter since its cheaper. Fetch the cert (by serial)
 	// and if it exists, compare the contents.
 	sc := b.makeStorageContext(ctx, req.Storage)
-	certEntry, err := fetchCertBySerial(sc, "certs/", serial)
+	certEntry, err := fetchCertBySerial(sc, issuing.PathCerts, serial)
 	if err != nil {
 		return serial, false, nil, err
 	}
@@ -497,7 +499,7 @@ func validatePublicKeyMatchesCert(verifier crypto.PublicKey, certReference *x509
 	return nil
 }
 
-func (b *backend) maybeRevokeCrossCluster(sc *storageContext, config *crlConfig, serial string, havePrivateKey bool) (*logical.Response, error) {
+func (b *backend) maybeRevokeCrossCluster(sc *storageContext, config *pki_backend.CrlConfig, serial string, havePrivateKey bool) (*logical.Response, error) {
 	if !config.UseGlobalQueue {
 		return logical.ErrorResponse(fmt.Sprintf("certificate with serial %s not found.", serial)), nil
 	}
@@ -563,7 +565,7 @@ func (b *backend) pathRevokeWrite(ctx context.Context, req *logical.Request, dat
 	var cert *x509.Certificate
 	var serial string
 
-	config, err := sc.Backend.CrlBuilder().getConfigWithUpdate(sc)
+	config, err := sc.CrlBuilder().GetConfigWithUpdate(sc)
 	if err != nil {
 		return nil, fmt.Errorf("error revoking serial: %s: failed reading config: %w", serial, err)
 	}
@@ -580,7 +582,7 @@ func (b *backend) pathRevokeWrite(ctx context.Context, req *logical.Request, dat
 			return logical.ErrorResponse("The serial number must be provided"), nil
 		}
 
-		certEntry, err := fetchCertBySerial(sc, "certs/", serial)
+		certEntry, err := fetchCertBySerial(sc, issuing.PathCerts, serial)
 		if err != nil {
 			switch err.(type) {
 			case errutil.UserError:
@@ -632,7 +634,7 @@ func (b *backend) pathRevokeWrite(ctx context.Context, req *logical.Request, dat
 	// disk.
 	if writeCert {
 		err := req.Storage.Put(ctx, &logical.StorageEntry{
-			Key:   "certs/" + normalizeSerial(serial),
+			Key:   issuing.PathCerts + normalizeSerial(serial),
 			Value: cert.Raw,
 		})
 		if err != nil {
@@ -650,6 +652,24 @@ func (b *backend) pathRevokeWrite(ctx context.Context, req *logical.Request, dat
 	b.GetRevokeStorageLock().Lock()
 	defer b.GetRevokeStorageLock().Unlock()
 
+	var serialNumber string
+	var isCa bool
+	var akid []byte
+	var skid []byte
+	if cert != nil {
+		serialNumber = cert.SerialNumber.String()
+		isCa = cert.IsCA
+		akid = cert.AuthorityKeyId
+		skid = cert.SubjectKeyId
+	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRevoke,
+		observe.NewAdditionalPKIMetadata("is_ca", isCa),
+		observe.NewAdditionalPKIMetadata("subject_key_id", skid),
+		observe.NewAdditionalPKIMetadata("authority_key_id", akid),
+		observe.NewAdditionalPKIMetadata("serial_number", serialNumber),
+	)
+
 	return revokeCert(sc, config, cert)
 }
 
@@ -658,7 +678,7 @@ func (b *backend) pathRotateCRLRead(ctx context.Context, req *logical.Request, _
 	defer b.GetRevokeStorageLock().RUnlock()
 
 	sc := b.makeStorageContext(ctx, req.Storage)
-	warnings, crlErr := b.CrlBuilder().rebuild(sc, false)
+	warnings, crlErr := b.CrlBuilder().Rebuild(sc, false)
 	if crlErr != nil {
 		switch crlErr.(type) {
 		case errutil.UserError:
@@ -678,13 +698,15 @@ func (b *backend) pathRotateCRLRead(ctx context.Context, req *logical.Request, _
 		resp.AddWarning(fmt.Sprintf("Warning %d during CRL rebuild: %v", index+1, warning))
 	}
 
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRotateCRL)
+
 	return resp, nil
 }
 
 func (b *backend) pathRotateDeltaCRLRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
 	sc := b.makeStorageContext(ctx, req.Storage)
 
-	cfg, err := b.CrlBuilder().getConfigWithUpdate(sc)
+	cfg, err := b.CrlBuilder().GetConfigWithUpdate(sc)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching CRL configuration: %w", err)
 	}
@@ -713,6 +735,8 @@ func (b *backend) pathRotateDeltaCRLRead(ctx context.Context, req *logical.Reque
 	for index, warning := range warnings {
 		resp.AddWarning(fmt.Sprintf("Warning %d during CRL rebuild: %v", index+1, warning))
 	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRotateDeltaCRL)
 
 	return resp, nil
 }

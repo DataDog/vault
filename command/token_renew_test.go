@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -53,6 +53,18 @@ func TestTokenRenewCommand_Run(t *testing.T) {
 		{
 			"increment_no_suffix",
 			[]string{"-increment", "60"},
+			"",
+			0,
+		},
+		{
+			"fail_if_not_fulfilled_exceeds_max_ttl",
+			[]string{"-increment", "33d", "--fail-if-not-fulfilled"},
+			"Token renewal completed with capped duration, failing the command because of --fail-if-not-fulfilled",
+			1,
+		},
+		{
+			"fail_if_not_fulfilled_within_max_ttl",
+			[]string{"-increment", "30m", "--fail-if-not-fulfilled"},
 			"",
 			0,
 		},

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package issuing
@@ -53,6 +53,7 @@ type RoleEntry struct {
 	EmailProtectionFlag           bool          `json:"email_protection_flag"`
 	UseCSRCommonName              bool          `json:"use_csr_common_name"`
 	UseCSRSANs                    bool          `json:"use_csr_sans"`
+	SerialNumberSource            string        `json:"serial_number_source"`
 	KeyType                       string        `json:"key_type"`
 	KeyBits                       int           `json:"key_bits"`
 	UsePSS                        bool          `json:"use_pss"`
@@ -72,6 +73,7 @@ type RoleEntry struct {
 	PostalCode                    []string      `json:"postal_code"`
 	GenerateLease                 *bool         `json:"generate_lease,omitempty"`
 	NoStore                       bool          `json:"no_store"`
+	NoStoreMetadata               bool          `json:"no_store_metadata"`
 	RequireCN                     bool          `json:"require_cn"`
 	CNValidations                 []string      `json:"cn_validations"`
 	AllowedOtherSANs              []string      `json:"allowed_other_sans"`
@@ -113,6 +115,7 @@ func (r *RoleEntry) ToResponseData() map[string]interface{} {
 		"email_protection_flag":              r.EmailProtectionFlag,
 		"use_csr_common_name":                r.UseCSRCommonName,
 		"use_csr_sans":                       r.UseCSRSANs,
+		"serial_number_source":               r.SerialNumberSource,
 		"key_type":                           r.KeyType,
 		"key_bits":                           r.KeyBits,
 		"signature_bits":                     r.SignatureBits,
@@ -146,6 +149,7 @@ func (r *RoleEntry) ToResponseData() map[string]interface{} {
 	if r.GenerateLease != nil {
 		responseData["generate_lease"] = r.GenerateLease
 	}
+	AddNoStoreMetadata(responseData, r)
 	return responseData
 }
 
@@ -374,6 +378,7 @@ func SignVerbatimRoleWithOpts(opts ...RoleModifier) *RoleEntry {
 		KeyType:                   "any",
 		UseCSRCommonName:          true,
 		UseCSRSANs:                true,
+		SerialNumberSource:        "json-csr",
 		AllowedOtherSANs:          []string{"*"},
 		AllowedSerialNumbers:      []string{"*"},
 		AllowedURISANs:            []string{"*"},

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,6 +7,7 @@ import { helper as buildHelper } from '@ember/component/helper';
 
 //list from http://docs.aws.amazon.com/general/latest/gr/rande.html#sts_region
 const REGIONS = [
+  '', // initial region blank
   'us-east-1',
   'us-east-2',
   'us-west-1',

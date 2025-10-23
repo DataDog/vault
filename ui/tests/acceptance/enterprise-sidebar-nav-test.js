@@ -1,13 +1,13 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
-import { click, currentURL } from '@ember/test-helpers';
+import { click, currentURL, visit } from '@ember/test-helpers';
 import { setupMirage } from 'ember-cli-mirage/test-support';
-import authPage from 'vault/tests/pages/auth';
+import { login } from 'vault/tests/helpers/auth/auth-helpers';
 
 const link = (label) => `[data-test-sidebar-nav-link="${label}"]`;
 const panel = (label) => `[data-test-sidebar-nav-panel="${label}"]`;
@@ -17,7 +17,7 @@ module('Acceptance | Enterprise | sidebar navigation', function (hooks) {
   setupMirage(hooks);
 
   hooks.beforeEach(function () {
-    return authPage.login();
+    return login();
   });
 
   // common links are tested in the sidebar-nav test and will not be covered here
@@ -41,15 +41,21 @@ module('Acceptance | Enterprise | sidebar navigation', function (hooks) {
       'Replication performance route renders'
     );
 
-    await click(link('Disaster Recovery'));
-    assert.strictEqual(currentURL(), '/vault/replication/dr', 'Replication dr route renders');
+    // for some reason clicking this link would cause the testing browser locally
+    // to navigate to 'vault/replication/dr' and halt the test runner
+    assert
+      .dom(link('Disaster Recovery'))
+      .hasAttribute('href', '/ui/vault/replication/dr', 'Replication dr route renders');
+    await visit('/vault');
 
     await click(link('Client Count'));
+    assert.dom(panel('Client Count')).exists('Client Count nav panel renders');
+    assert.dom(link('Client Usage')).hasClass('active', 'Client Usage link is active');
     assert.strictEqual(currentURL(), '/vault/clients/counts/overview', 'Client counts route renders');
+    await click(link('Back to main navigation'));
 
     await click(link('License'));
     assert.strictEqual(currentURL(), '/vault/license', 'License route renders');
-
     await click(link('Access'));
     await click(link('Control Groups'));
     assert.strictEqual(currentURL(), '/vault/access/control-groups', 'Control groups route renders');

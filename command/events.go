@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -11,10 +11,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/cli"
 	"github.com/hashicorp/vault/api"
 	"github.com/posener/complete"
-	"nhooyr.io/websocket"
 )
 
 var (

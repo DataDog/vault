@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,12 +10,6 @@ import lazyCapabilities, { apiPath } from 'vault/macros/lazy-capabilities';
 @withFormFields()
 export default class PkiConfigUrlsModel extends Model {
   // This model uses the backend value as the model ID
-  get useOpenAPI() {
-    return true;
-  }
-  getHelpUrl(backendPath) {
-    return `/v1/${backendPath}/config/urls?help=1`;
-  }
 
   @attr({
     label: 'Issuing certificates',

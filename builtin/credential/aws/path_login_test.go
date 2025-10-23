@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package awsauth
@@ -315,6 +315,8 @@ func TestBackend_pathLogin_NoClientConfig(t *testing.T) {
 	storage := new(logical.InmemStorage)
 	config := logical.TestBackendConfig()
 	config.StorageView = storage
+	config.System = &testSystemView{}
+
 	b, err := Backend(config)
 	if err != nil {
 		t.Fatal(err)
@@ -363,6 +365,8 @@ func TestBackend_pathLogin_IAMHeaders(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	config := logical.TestBackendConfig()
 	config.StorageView = storage
+	config.System = &testSystemView{}
+
 	b, err := Backend(config)
 	if err != nil {
 		t.Fatal(err)
@@ -408,6 +412,7 @@ func TestBackend_pathLogin_IAMHeaders(t *testing.T) {
 				"inferred_aws_region",
 				"inferred_entity_id",
 				"inferred_entity_type",
+				"inferred_hostname",
 			},
 			"ec2_alias": "role_id",
 			"ec2_metadata": []string{
@@ -569,6 +574,8 @@ func TestBackend_pathLogin_IAMRoleResolution(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	config := logical.TestBackendConfig()
 	config.StorageView = storage
+	config.System = &testSystemView{}
+
 	b, err := Backend(config)
 	if err != nil {
 		t.Fatal(err)
@@ -614,6 +621,7 @@ func TestBackend_pathLogin_IAMRoleResolution(t *testing.T) {
 				"inferred_aws_region",
 				"inferred_entity_id",
 				"inferred_entity_type",
+				"inferred_hostname",
 			},
 			"ec2_alias": "role_id",
 			"ec2_metadata": []string{
@@ -668,6 +676,8 @@ func TestBackend_defaultAliasMetadata(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	config := logical.TestBackendConfig()
 	config.StorageView = storage
+	config.System = &testSystemView{}
+
 	b, err := Backend(config)
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package policy
@@ -48,7 +48,7 @@ func TestPolicy_NoDefaultPolicy(t *testing.T) {
 	}
 
 	// Configure LDAP auth backend
-	cleanup, cfg := ldaphelper.PrepareTestContainer(t, "latest")
+	cleanup, cfg := ldaphelper.PrepareTestContainer(t, ldaphelper.DefaultVersion)
 	defer cleanup()
 
 	_, err = client.Logical().Write("auth/ldap/config", map[string]interface{}{
@@ -106,7 +106,7 @@ func TestPolicy_NoConfiguredPolicy(t *testing.T) {
 	}
 
 	// Configure LDAP auth backend
-	cleanup, cfg := ldaphelper.PrepareTestContainer(t, "latest")
+	cleanup, cfg := ldaphelper.PrepareTestContainer(t, ldaphelper.DefaultVersion)
 	defer cleanup()
 
 	_, err = client.Logical().Write("auth/ldap/config", map[string]interface{}{

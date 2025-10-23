@@ -1,5 +1,5 @@
-#!/bin/bash
-# Copyright (c) HashiCorp, Inc.
+#!/usr/bin/env bash
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 set -e
@@ -17,7 +17,7 @@ if [ "$SKIP" == "true" ]; then
   exit 0
 fi
 
-cat <<EOF | sudo tee "$CONFIG_PATH"
+cat << EOF | sudo tee "$CONFIG_PATH"
 directories.tokendir = $TOKEN_DIR
 objectstore.backend = file
 log.level = DEBUG

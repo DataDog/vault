@@ -1,16 +1,16 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-import Model from '@ember-data/model';
+import type { Model } from 'vault/app-types';
 
-export default class PkiConfigUrlsModel extends Model {
-  get useOpenAPI(): boolean;
-  getHelpUrl(backendPath: string): string;
+type PkiConfigUrlsModel = Model & {
   issuingCertificates: array;
   crlDistributionPoints: array;
   ocspServers: array;
   urlsPath: string;
   get canSet(): boolean;
-}
+};
+
+export default PkiConfigUrlsModel;

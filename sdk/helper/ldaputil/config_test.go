@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package ldaputil
@@ -178,6 +178,7 @@ var jsonConfigDefault = []byte(`
   "max_page_size": 0,
   "CaseSensitiveNames": false,
   "ClientTLSCert": "",
-  "ClientTLSKey": ""
+  "ClientTLSKey": "",
+  "enable_samaccountname_login": false
 }
 `)

@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package schedule
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
@@ -34,6 +35,8 @@ func (d *DefaultSchedule) Parse(rotationSchedule string) (*cron.SpecSchedule, er
 	if !ok {
 		return nil, fmt.Errorf("invalid rotation schedule")
 	}
+	// Force the location to be UTC instead of the local timezone
+	sched.Location = time.UTC
 	return sched, nil
 }
 

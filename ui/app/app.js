@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -13,24 +13,35 @@ export default class App extends Application {
   podModulePrefix = config.podModulePrefix;
   Resolver = Resolver;
   engines = {
-    configUi: {
+    'config-ui': {
       dependencies: {
-        services: ['auth', 'flash-messages', 'namespace', 'router', 'store', 'version', 'customMessages'],
+        services: [
+          'auth',
+          'flash-messages',
+          'namespace',
+          { 'app-router': 'router' },
+          'pagination',
+          'version',
+          'custom-messages',
+          'api',
+          'capabilities',
+        ],
       },
     },
-    openApiExplorer: {
+    'open-api-explorer': {
       dependencies: {
-        services: ['auth', 'flash-messages', 'namespace', 'router', 'version'],
+        services: ['auth', 'flash-messages', 'namespace', { 'app-router': 'router' }, 'version'],
       },
     },
     replication: {
       dependencies: {
         services: [
           'auth',
+          'capabilities',
           'flash-messages',
           'namespace',
           'replication-mode',
-          'router',
+          { 'app-router': 'router' },
           'store',
           'version',
           '-portal',
@@ -49,8 +60,9 @@ export default class App extends Application {
           'flash-messages',
           'namespace',
           'path-help',
-          'router',
+          { 'app-router': 'router' },
           'store',
+          'pagination',
           'version',
           'secret-mount-path',
         ],
@@ -61,7 +73,7 @@ export default class App extends Application {
     },
     kubernetes: {
       dependencies: {
-        services: ['router', 'store', 'secret-mount-path', 'flash-messages'],
+        services: [{ 'app-router': 'router' }, 'store', 'secret-mount-path', 'flash-messages'],
         externalRoutes: {
           secrets: 'vault.cluster.secrets.backends',
         },
@@ -69,7 +81,14 @@ export default class App extends Application {
     },
     ldap: {
       dependencies: {
-        services: ['router', 'store', 'secret-mount-path', 'flash-messages', 'auth'],
+        services: [
+          { 'app-router': 'router' },
+          'store',
+          'pagination',
+          'secret-mount-path',
+          'flash-messages',
+          'auth',
+        ],
         externalRoutes: {
           secrets: 'vault.cluster.secrets.backends',
         },
@@ -78,13 +97,16 @@ export default class App extends Application {
     kv: {
       dependencies: {
         services: [
-          'download',
-          'namespace',
-          'router',
-          'store',
-          'secret-mount-path',
-          'flash-messages',
+          'api',
+          'capabilities',
           'control-group',
+          'download',
+          'flash-messages',
+          'namespace',
+          { 'app-router': 'router' },
+          'secret-mount-path',
+          'pagination',
+          'version',
         ],
         externalRoutes: {
           secrets: 'vault.cluster.secrets.backends',
@@ -100,9 +122,10 @@ export default class App extends Application {
           'flash-messages',
           'namespace',
           'path-help',
-          'router',
+          { 'app-router': 'router' },
           'secret-mount-path',
           'store',
+          'pagination',
           'version',
         ],
         externalRoutes: {
@@ -114,9 +137,18 @@ export default class App extends Application {
     },
     sync: {
       dependencies: {
-        services: ['flash-messages', 'router', 'store', 'version'],
+        services: [
+          'flash-messages',
+          'flags',
+          { 'app-router': 'router' },
+          'store',
+          'api',
+          'capabilities',
+          'pagination',
+          'version',
+        ],
         externalRoutes: {
-          kvSecretDetails: 'vault.cluster.secrets.backend.kv.secret.details',
+          kvSecretOverview: 'vault.cluster.secrets.backend.kv.secret.index',
           clientCountOverview: 'vault.cluster.clients',
         },
       },
@@ -125,3 +157,7 @@ export default class App extends Application {
 }
 
 loadInitializers(App, config.modulePrefix);
+
+/**
+ * @typedef {import('ember-source/types')} EmberTypes
+ */

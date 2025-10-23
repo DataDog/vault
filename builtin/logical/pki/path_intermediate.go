@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/errutil"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -157,11 +158,16 @@ func (b *backend) pathGenerateIntermediate(ctx context.Context, req *logical.Req
 	}
 
 	entries, err := getGlobalAIAURLs(ctx, req.Storage)
-	if err == nil && len(entries.OCSPServers) == 0 && len(entries.IssuingCertificates) == 0 && len(entries.CRLDistributionPoints) == 0 {
+	if err == nil && len(entries.OCSPServers) == 0 && len(entries.IssuingCertificates) == 0 &&
+		len(entries.CRLDistributionPoints) == 0 && len(entries.DeltaCRLDistributionPoints) == 0 {
 		// If the operator hasn't configured any of the URLs prior to
 		// generating this issuer, we should add a warning to the response,
 		// informing them they might want to do so and re-generate the issuer.
 		resp.AddWarning("This mount hasn't configured any authority information access (AIA) fields; this may make it harder for systems to find missing certificates in the chain or to validate revocation status of certificates. Consider updating /config/urls or the newly generated issuer with this information. Since this certificate is an intermediate, it might be useful to regenerate this certificate after fixing this problem for the root mount.")
+	}
+	if (entries.DeltaCRLDistributionPoints != nil && len(entries.DeltaCRLDistributionPoints) > 0) &&
+		(entries.CRLDistributionPoints == nil || len(entries.CRLDistributionPoints) == 0) {
+		resp.AddWarning("This mount has configured delta crl distribution points but no base crl distribution points were set.")
 	}
 
 	switch format {
@@ -204,6 +210,14 @@ func (b *backend) pathGenerateIntermediate(ctx context.Context, req *logical.Req
 	resp.Data["key_id"] = myKey.ID
 
 	resp = addWarnings(resp, warnings)
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIGenerateIntermediate,
+		observe.NewAdditionalPKIMetadata("key_id", myKey.ID),
+		observe.NewAdditionalPKIMetadata("key_name", myKey.Name),
+		observe.NewAdditionalPKIMetadata("key_type", myKey.PrivateKeyType),
+		observe.NewAdditionalPKIMetadata("role_name", role.Name),
+		observe.NewAdditionalPKIMetadata("exported", exported),
+		observe.NewAdditionalPKIMetadata("type", format))
 
 	return resp, nil
 }

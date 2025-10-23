@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package pluginruntimeutil
@@ -13,5 +13,5 @@ type PluginRuntimeConfig struct {
 	CgroupParent string                   `json:"cgroup_parent" structs:"cgroup_parent"`
 	CPU          int64                    `json:"cpu" structs:"cpu"`
 	Memory       int64                    `json:"memory" structs:"memory"`
-	Rootless     bool                     `json:"rootless" structs:"rootlesss"`
+	Rootless     bool                     `json:"rootless" structs:"rootless"`
 }

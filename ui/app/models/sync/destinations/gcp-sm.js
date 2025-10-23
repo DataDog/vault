@@ -1,12 +1,12 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import SyncDestinationModel from '../destination';
 import { attr } from '@ember-data/model';
 import { withFormFields } from 'vault/decorators/model-form-fields';
-
+// displayFields are used on the destination details view
 const displayFields = [
   // connection details
   'name',
@@ -17,9 +17,11 @@ const displayFields = [
   'secretNameTemplate',
   'customTags',
 ];
+// formFieldGroups are used on the create-edit destination view
 const formFieldGroups = [
-  { default: ['name', 'projectId', 'granularity', 'secretNameTemplate', 'customTags'] },
+  { default: ['name', 'projectId'] },
   { Credentials: ['credentials'] },
+  { 'Advanced configuration': ['granularity', 'secretNameTemplate', 'customTags'] },
 ];
 @withFormFields(displayFields, formFieldGroups)
 export default class SyncDestinationsGoogleCloudSecretManagerModel extends SyncDestinationModel {
@@ -37,7 +39,7 @@ export default class SyncDestinationsGoogleCloudSecretManagerModel extends SyncD
     editType: 'file',
     docLink: '/vault/docs/secrets/gcp#authentication',
   })
-  credentials; // obfuscated, never returned by API
+  credentials; // obfuscated, never returned by API. Masking handled by EnableInput component
 
   @attr('object', {
     subText:

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package logical
@@ -11,6 +11,7 @@ import (
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 )
 
+//go:generate enumer -type=KeyUsage -trimprefix=KeyUsage -transform=snake
 type KeyUsage int
 
 const (

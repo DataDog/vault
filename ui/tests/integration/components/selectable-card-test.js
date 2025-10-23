@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -25,5 +25,11 @@ module('Integration | Component selectable-card', function (hooks) {
   test('it renders block content', async function (assert) {
     await render(hbs`<SelectableCard  @onClick={{this.onClick}}>hello</SelectableCard>`);
     assert.dom('.selectable-card').hasText('hello');
+  });
+
+  test('it does not process click event on disabled card', async function (assert) {
+    await render(hbs`<SelectableCard @onClick={{this.onClick}} @disabled={{true}}>disabled</SelectableCard>`);
+    await click('.selectable-card');
+    assert.notOk(this.onClick.calledOnce, 'does not call the click event');
   });
 });

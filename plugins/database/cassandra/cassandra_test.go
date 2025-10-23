@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cassandra
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	backoff "github.com/cenkalti/backoff/v3"
+	backoff "github.com/cenkalti/backoff/v4"
 	"github.com/gocql/gocql"
 	"github.com/hashicorp/vault/helper/testhelpers/cassandra"
 	dbplugin "github.com/hashicorp/vault/sdk/database/dbplugin/v5"

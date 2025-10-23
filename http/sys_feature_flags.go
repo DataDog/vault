@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/vault"
 )
 
@@ -46,6 +47,7 @@ func handleSysInternalFeatureFlags(core *vault.Core) http.Handler {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		defer logical.IncrementResponseStatusCodeMetric(http.StatusOK)
 		w.WriteHeader(http.StatusOK)
 
 		// Generate the response

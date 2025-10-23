@@ -1,16 +1,17 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
+import Ember from 'ember';
 import Component from '@glimmer/component';
 import { service } from '@ember/service';
-import { task } from 'ember-concurrency';
+import { task, timeout } from 'ember-concurrency';
 import { dateFormat } from 'core/helpers/date-format';
 import { action } from '@ember/object';
 import { tracked } from '@glimmer/tracking';
-import errorMessage from 'vault/utils/error-message';
-import { next } from '@ember/runloop';
+import { isAfter } from 'date-fns';
+import timestamp from 'core/utils/timestamp';
 
 /**
  * @module Page::MessagesList
@@ -23,34 +24,19 @@ import { next } from '@ember/runloop';
  */
 
 export default class MessagesList extends Component {
-  @service store;
-  @service router;
+  @service customMessages;
   @service flashMessages;
   @service namespace;
-  @service customMessages;
+  @service pagination;
+  @service('app-router') router;
+  @service api;
 
   @tracked showMaxMessageModal = false;
   @tracked messageToDelete = null;
 
-  // This follows the pattern in sync/addon/components/secrets/page/destinations for FilterInput.
-  // Currently, FilterInput doesn't do a full page refresh causing it to lose focus.
-  // The work around is to verify that a transition from this route was completed and then focus the input.
-  constructor(owner, args) {
-    super(owner, args);
-    this.router.on('routeDidChange', this.focusNameFilter);
-  }
-
-  willDestroy() {
-    super.willDestroy();
-    this.router.off('routeDidChange', this.focusNameFilter);
-  }
-
-  focusNameFilter(transition) {
-    const route = 'vault.cluster.config-ui.messages.index';
-    if (transition?.from?.name === route && transition?.to?.name === route) {
-      next(() => document.getElementById('message-filter')?.focus());
-    }
-  }
+  isStartTimeAfterToday = (message) => {
+    return isAfter(message.start_time, timestamp.now());
+  };
 
   get formattedMessages() {
     return this.args.messages.map((message) => {
@@ -58,8 +44,8 @@ export default class MessagesList extends Component {
       let badgeColor = 'neutral';
 
       if (message.active) {
-        if (message.endTime) {
-          badgeDisplayText = `Active until ${dateFormat([message.endTime, 'MMM d, yyyy hh:mm aaa'], {
+        if (message.end_time) {
+          badgeDisplayText = `Active until ${dateFormat([message.end_time, 'MMM d, yyyy hh:mm aaa'], {
             withTimeZone: true,
           })}`;
         } else {
@@ -67,13 +53,13 @@ export default class MessagesList extends Component {
         }
         badgeColor = 'success';
       } else {
-        if (message.isStartTimeAfterToday) {
-          badgeDisplayText = `Scheduled: ${dateFormat([message.startTime, 'MMM d, yyyy hh:mm aaa'], {
+        if (this.isStartTimeAfterToday(message)) {
+          badgeDisplayText = `Scheduled: ${dateFormat([message.start_time, 'MMM d, yyyy hh:mm aaa'], {
             withTimeZone: true,
           })}`;
           badgeColor = 'highlight';
         } else {
-          badgeDisplayText = `Inactive:  ${dateFormat([message.startTime, 'MMM d, yyyy hh:mm aaa'], {
+          badgeDisplayText = `Inactive:  ${dateFormat([message.start_time, 'MMM d, yyyy hh:mm aaa'], {
             withTimeZone: true,
           })}`;
           badgeColor = 'neutral';
@@ -91,20 +77,6 @@ export default class MessagesList extends Component {
     return [{ label: 'Messages' }, { label }];
   }
 
-  get statusFilterOptions() {
-    return [
-      { id: 'active', name: 'active' },
-      { id: 'inactive', name: 'inactive' },
-    ];
-  }
-
-  get typeFilterOptions() {
-    return [
-      { id: 'modal', name: 'modal' },
-      { id: 'banner', name: 'banner' },
-    ];
-  }
-
   // callback from HDS pagination to set the queryParams page
   get paginationQueryParams() {
     return (page) => {
@@ -116,37 +88,44 @@ export default class MessagesList extends Component {
 
   transitionToMessagesWithParams(queryParams) {
     this.router.transitionTo('vault.cluster.config-ui.messages', {
-      queryParams,
+      // always reset back to page 1 when changing filters
+      queryParams: { ...queryParams, page: 1 },
     });
   }
 
   @task
   *deleteMessage(message) {
     try {
-      this.store.clearDataset('config-ui/message');
-      yield message.destroyRecord(message.id);
+      yield this.api.sys.uiConfigDeleteCustomMessage(message.id);
       this.router.transitionTo('vault.cluster.config-ui.messages');
-      this.customMessages.fetchMessages(this.namespace.path);
+      this.customMessages.fetchMessages();
       this.flashMessages.success(`Successfully deleted ${message.title}.`);
     } catch (e) {
-      const message = errorMessage(e);
+      const { message } = yield this.api.parseError(e);
       this.flashMessages.danger(message);
     } finally {
       this.messageToDelete = null;
     }
   }
 
-  @action
-  onFilterInputChange(pageFilter) {
-    this.transitionToMessagesWithParams({ pageFilter });
+  @task
+  *handleSearch(evt) {
+    evt.preventDefault();
+    const formData = new FormData(evt.target);
+    // shows loader to indicate that the search was executed
+    yield timeout(Ember.testing ? 0 : 250);
+    const params = {};
+    for (const key of formData.keys()) {
+      const valDefault = key === 'pageFilter' ? '' : null;
+      const val = formData.get(key) || valDefault;
+      params[key] = val;
+    }
+    this.transitionToMessagesWithParams(params);
   }
 
   @action
-  onFilterChange(filterType, [filterOption]) {
-    const param = {};
-    param[filterType] = filterOption;
-    param.page = 1;
-    this.transitionToMessagesWithParams(param);
+  resetFilters() {
+    this.transitionToMessagesWithParams({ pageFilter: '', status: null, type: null });
   }
 
   @action

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -355,6 +355,10 @@ func (t TableFormatter) OutputSealStatusStruct(ui cli.Ui, secret *api.Secret, da
 	if status.ClusterName != "" && status.ClusterID != "" {
 		out = append(out, fmt.Sprintf("Cluster Name | %s", status.ClusterName))
 		out = append(out, fmt.Sprintf("Cluster ID | %s", status.ClusterID))
+	}
+
+	if status.RemovedFromCluster != nil {
+		out = append(out, fmt.Sprintf("Removed From Cluster | %t", *status.RemovedFromCluster))
 	}
 
 	// Output if HCP link is configured

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package metricsutil
@@ -137,7 +137,8 @@ func (m *MetricsHelper) PrometheusResponse() *logical.Response {
 	buf := &bytes.Buffer{}
 	defer buf.Reset()
 
-	e := expfmt.NewEncoder(buf, expfmt.FmtText)
+	format := expfmt.NewFormat(expfmt.TypeTextPlain)
+	e := expfmt.NewEncoder(buf, format)
 	for _, mf := range metricsFamilies {
 		err := e.Encode(mf)
 		if err != nil {
@@ -145,7 +146,7 @@ func (m *MetricsHelper) PrometheusResponse() *logical.Response {
 			return resp
 		}
 	}
-	resp.Data[logical.HTTPContentType] = string(expfmt.FmtText)
+	resp.Data[logical.HTTPContentType] = string(format)
 	resp.Data[logical.HTTPRawBody] = buf.Bytes()
 	resp.Data[logical.HTTPStatusCode] = http.StatusOK
 	return resp

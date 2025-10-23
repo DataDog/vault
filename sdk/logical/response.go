@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package logical
@@ -139,6 +139,15 @@ func ErrorResponse(text string, vargs ...interface{}) *Response {
 			"error": text,
 		},
 	}
+}
+
+// ErrorResponseWithData is used to format an error response with additional data returned
+// within the "data" sub-field of the Data field. Useful to return additional information to the client
+// and or appear within audited responses.
+func ErrorResponseWithData(data interface{}, text string, vargs ...interface{}) *Response {
+	resp := ErrorResponse(text, vargs...)
+	resp.Data["data"] = data
+	return resp
 }
 
 // ListResponse is used to format a response to a list operation.

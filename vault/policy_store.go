@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -100,12 +100,6 @@ path "identity/entity/name/{{identity.entity.name}}" {
 # based on how the internal ACL features and capabilities change.
 path "sys/internal/ui/resultant-acl" {
     capabilities = ["read"]
-}
-
-# Allow a token to look up the Vault version. This path is not subject to
-# redaction like the unauthenticated endpoints that provide the Vault version.
-path "sys/internal/ui/version" {
-	capabilities = ["read"]
 }
 
 # Allow a token to renew a lease via lease_id in the request body; old path for
@@ -594,9 +588,12 @@ func (ps *PolicyStore) switchedGetPolicy(ctx context.Context, name string, polic
 	switch policyEntry.Type {
 	case PolicyTypeACL:
 		// Parse normally
-		p, err := ParseACLPolicy(ns, policyEntry.Raw)
+		p, duplicate, err := ParseACLPolicyCheckDuplicates(ns, policyEntry.Raw)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse policy: %w", err)
+		}
+		if duplicate {
+			ps.logger.Warn("HCL policy contains duplicate attributes, which will no longer be supported in a future version", "policy", policy.Name, "namespace", policy.namespace.Path)
 		}
 		policy.Paths = p.Paths
 
@@ -877,9 +874,12 @@ func (ps *PolicyStore) ACL(ctx context.Context, entity *identity.Entity, policyN
 					groups = append(directGroups, inheritedGroups...)
 				}
 			}
-			p, err := parseACLPolicyWithTemplating(policy.namespace, policy.Raw, true, entity, groups)
+			p, duplicate, err := parseACLPolicyWithTemplating(policy.namespace, policy.Raw, true, entity, groups)
 			if err != nil {
 				return nil, fmt.Errorf("error parsing templated policy %q: %w", policy.Name, err)
+			}
+			if duplicate {
+				ps.logger.Warn("HCL policy contains duplicate attributes, which will no longer be supported in a future version", "policy", policy.Name, "namespace", policy.namespace.Path)
 			}
 			p.Name = policy.Name
 			allPolicies[i] = p

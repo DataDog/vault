@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -12,11 +12,12 @@ const SUPPORTED_REPLICATION_MODES = ['dr', 'performance'];
 
 export default Route.extend({
   replicationMode: service(),
+  router: service('app-router'),
   store: service(),
   beforeModel() {
     const replicationMode = this.paramsFor(this.routeName).replication_mode;
     if (!SUPPORTED_REPLICATION_MODES.includes(replicationMode)) {
-      return this.transitionTo('index');
+      this.router.transitionTo('vault.cluster.replication.index');
     }
   },
   model() {

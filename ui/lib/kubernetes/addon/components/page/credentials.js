@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -23,7 +23,7 @@ import timestamp from 'vault/utils/timestamp';
  */
 export default class CredentialsPageComponent extends Component {
   @service store;
-  @service router;
+  @service('app-router') router;
 
   @tracked ttl = '';
   @tracked clusterRoleBinding = false;

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,10 +8,10 @@ import { service } from '@ember/service';
 import ListRoute from 'core/mixins/list-route';
 
 export default Route.extend(ListRoute, {
-  store: service(),
+  pagination: service(),
   secretMountPath: service(),
   model(params) {
-    return this.store
+    return this.pagination
       .lazyPaginatedQuery('kmip/scope', {
         backend: this.secretMountPath.currentPath,
         responsePath: 'data.keys',
@@ -31,12 +31,12 @@ export default Route.extend(ListRoute, {
     willTransition(transition) {
       window.scrollTo(0, 0);
       if (transition.targetName !== this.routeName) {
-        this.store.clearAllDatasets();
+        this.pagination.clearDataset();
       }
       return true;
     },
     reload() {
-      this.store.clearAllDatasets();
+      this.pagination.clearDataset();
       this.refresh();
     },
   },

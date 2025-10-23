@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package pluginutil
@@ -40,6 +40,7 @@ type PluginClientConfig struct {
 	AutoMTLS        bool
 	MLock           bool
 	Wrapper         RunnerUtil
+	Tier            consts.PluginTier
 }
 
 type runConfig struct {

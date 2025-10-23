@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -19,12 +19,12 @@ export default Controller.extend({
       });
     },
 
-    codemirrorUpdated(attr, val, codemirror) {
-      codemirror.performLint();
-      const hasErrors = codemirror.state.lint.marked.length > 0;
-
-      if (!hasErrors) {
+    editorUpdated(attr, val) {
+      // wont set invalid JSON to the model
+      try {
         set(this.model, attr, JSON.parse(val));
+      } catch {
+        // linting is handled by the component
       }
     },
 
@@ -36,7 +36,7 @@ export default Controller.extend({
 
     newModel() {
       const model = this.model;
-      const roleModel = model.get('role');
+      const roleModel = model.role;
       model.unloadRecord();
       const newModel = this.store.createRecord('ssh-sign', {
         role: roleModel,

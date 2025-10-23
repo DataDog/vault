@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -40,7 +40,8 @@ export default Controller.extend(DEFAULTS, {
   }),
 
   actions: {
-    initCluster(data) {
+    initCluster(payload) {
+      const data = { ...payload };
       const isCloudSeal = !!this.model.sealType && this.model.sealType !== 'shamir';
       if (data.secret_shares) {
         const shares = parseInt(data.secret_shares, 10);

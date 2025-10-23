@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -13,5 +13,6 @@ import (
 
 //go:generate go run github.com/hashicorp/vault/tools/stubmaker
 
-func (c *Core) reloadSealsEnt(secureRandomReader io.Reader, sealAccess Seal, logger hclog.Logger, shouldRewrap bool) {
+func (c *Core) reloadSealsEnt(secureRandomReader io.Reader, sealAccess Seal, logger hclog.Logger, shouldRewrap bool) error {
+	return nil
 }

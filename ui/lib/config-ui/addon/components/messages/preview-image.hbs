@@ -1,12 +1,12 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <Hds::Modal
   @onClose={{fn (mut @showMessagePreviewModal) false}}
   id="message-alert-preview"
-  class="is-calc-large-height is-two-thirds-width"
+  class="is-calc-large-height two-thirds-width"
   data-test-modal="preview image"
   as |M|
 >
@@ -27,7 +27,7 @@
       {{/each}}
       {{#unless (is-empty-value @message.link)}}
         {{#each-in @message.link as |title href|}}
-          <A.Link::Standalone
+          <A.LinkStandalone
             @color="secondary"
             @icon="external-link"
             @isHrefExternal={{true}}
@@ -46,6 +46,6 @@
     />
   </M.Body>
   <M.Footer as |F|>
-    <Hds::Button @text="Close preview" {{on "click" F.close}} data-test-modal-button="Close" />
+    <Hds::Button @text="Close preview" {{on "click" F.close}} data-test-button="Close preview" />
   </M.Footer>
 </Hds::Modal>

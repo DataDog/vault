@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -1180,6 +1180,10 @@ func (b *SystemBackend) rekeyPaths() []*framework.Path {
 					Type:        framework.TypeBool,
 					Description: "Specifies if previously-provided unseal keys are discarded and the unseal process is reset.",
 				},
+				"migrate": {
+					Type:        framework.TypeBool,
+					Description: "Used to migrate the seal from shamir to autoseal or autoseal to shamir. Must be provided on all unseal key calls.",
+				},
 			},
 
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -1828,6 +1832,7 @@ func (b *SystemBackend) sealPaths() []*framework.Path {
 							Description: "OK",
 						}},
 					},
+					ForwardPerformanceStandby: true,
 				},
 			},
 
@@ -1885,6 +1890,10 @@ func (b *SystemBackend) pluginsCatalogCRUDPath() *framework.Path {
 			"version": {
 				Type:        framework.TypeString,
 				Description: strings.TrimSpace(sysHelp["plugin-catalog_version"][0]),
+			},
+			"download": {
+				Type:        framework.TypeBool,
+				Description: strings.TrimSpace(sysHelp["plugin-catalog_download"][0]),
 			},
 		},
 
@@ -2896,31 +2905,6 @@ func (b *SystemBackend) internalPaths() []*framework.Path {
 			},
 		},
 		{
-			Pattern: "internal/ui/version",
-			DisplayAttrs: &framework.DisplayAttributes{
-				OperationPrefix: "internal-ui",
-				OperationVerb:   "read",
-				OperationSuffix: "version",
-			},
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathInternalUIVersion,
-					Summary:  "Backwards compatibility is not guaranteed for this API",
-					Responses: map[int][]framework.Response{
-						http.StatusOK: {{
-							Description: "OK",
-							Fields: map[string]*framework.FieldSchema{
-								"version": {
-									Type:     framework.TypeString,
-									Required: true,
-								},
-							},
-						}},
-					},
-				},
-			},
-		},
-		{
 			Pattern: "internal/counters/requests",
 			DisplayAttrs: &framework.DisplayAttributes{
 				OperationPrefix: "internal",
@@ -2936,33 +2920,6 @@ func (b *SystemBackend) internalPaths() []*framework.Path {
 			},
 			HelpSynopsis:    strings.TrimSpace(sysHelp["internal-counters-requests"][0]),
 			HelpDescription: strings.TrimSpace(sysHelp["internal-counters-requests"][1]),
-		},
-		{
-			Pattern: "internal/counters/tokens",
-			DisplayAttrs: &framework.DisplayAttributes{
-				OperationPrefix: "internal",
-				OperationVerb:   "count",
-				OperationSuffix: "tokens",
-			},
-			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathInternalCountersTokens,
-					Summary:  "Backwards compatibility is not guaranteed for this API",
-					Responses: map[int][]framework.Response{
-						http.StatusOK: {{
-							Description: "OK",
-							Fields: map[string]*framework.FieldSchema{
-								"counters": {
-									Type:     framework.TypeMap,
-									Required: true,
-								},
-							},
-						}},
-					},
-				},
-			},
-			HelpSynopsis:    strings.TrimSpace(sysHelp["internal-counters-tokens"][0]),
-			HelpDescription: strings.TrimSpace(sysHelp["internal-counters-tokens"][1]),
 		},
 		{
 			Pattern: "internal/counters/entities",
@@ -3126,6 +3083,10 @@ func (b *SystemBackend) capabilitiesPaths() []*framework.Path {
 				"paths": {
 					Type:        framework.TypeCommaStringSlice,
 					Description: "Paths on which capabilities are being queried.",
+				},
+				"namespace": {
+					Type:        framework.TypeString,
+					Description: "Namespace for which capabilities are being queried.",
 				},
 			},
 
@@ -3846,6 +3807,10 @@ func (b *SystemBackend) authPaths() []*framework.Path {
 					Description: strings.TrimSpace(sysHelp["identity_token_key"][0]),
 					Required:    false,
 				},
+				"trim_request_trailing_slashes": {
+					Type:     framework.TypeBool,
+					Required: false,
+				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
@@ -3934,6 +3899,10 @@ func (b *SystemBackend) authPaths() []*framework.Path {
 								},
 								"identity_token_key": {
 									Type:     framework.TypeString,
+									Required: false,
+								},
+								"trim_request_trailing_slashes": {
+									Type:     framework.TypeBool,
 									Required: false,
 								},
 							},
@@ -4706,6 +4675,10 @@ func (b *SystemBackend) mountPaths() []*framework.Path {
 					Type:        framework.TypeString,
 					Description: strings.TrimSpace(sysHelp["identity_token_key"][0]),
 				},
+				"trim_request_trailing_slashes": {
+					Type:        framework.TypeBool,
+					Description: strings.TrimSpace(sysHelp["trim_request_trailing_slashes"][0]),
+				},
 			},
 
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -4808,6 +4781,10 @@ func (b *SystemBackend) mountPaths() []*framework.Path {
 									Type:     framework.TypeString,
 									Required: false,
 								},
+								"trim_request_trailing_slashes": {
+									Type:     framework.TypeBool,
+									Required: false,
+								},
 							},
 						}},
 					},
@@ -4828,6 +4805,192 @@ func (b *SystemBackend) mountPaths() []*framework.Path {
 
 			HelpSynopsis:    strings.TrimSpace(sysHelp["mount_tune"][0]),
 			HelpDescription: strings.TrimSpace(sysHelp["mount_tune"][1]),
+		},
+
+		{
+			Pattern: "mounts/auth/(?P<path>.+?)/tune$",
+
+			DisplayAttrs: &framework.DisplayAttributes{
+				OperationPrefix: "mounts-auth",
+			},
+
+			Fields: map[string]*framework.FieldSchema{
+				"path": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["auth_tune"][0]),
+				},
+				"default_lease_ttl": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["tune_default_lease_ttl"][0]),
+				},
+				"max_lease_ttl": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["tune_max_lease_ttl"][0]),
+				},
+				"description": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["auth_desc"][0]),
+				},
+				"audit_non_hmac_request_keys": {
+					Type:        framework.TypeCommaStringSlice,
+					Description: strings.TrimSpace(sysHelp["tune_audit_non_hmac_request_keys"][0]),
+				},
+				"audit_non_hmac_response_keys": {
+					Type:        framework.TypeCommaStringSlice,
+					Description: strings.TrimSpace(sysHelp["tune_audit_non_hmac_response_keys"][0]),
+				},
+				"options": {
+					Type:        framework.TypeKVPairs,
+					Description: strings.TrimSpace(sysHelp["tune_mount_options"][0]),
+				},
+				"listing_visibility": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["listing_visibility"][0]),
+				},
+				"passthrough_request_headers": {
+					Type:        framework.TypeCommaStringSlice,
+					Description: strings.TrimSpace(sysHelp["passthrough_request_headers"][0]),
+				},
+				"allowed_response_headers": {
+					Type:        framework.TypeCommaStringSlice,
+					Description: strings.TrimSpace(sysHelp["allowed_response_headers"][0]),
+				},
+				"token_type": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["token_type"][0]),
+				},
+				"user_lockout_config": {
+					Type:        framework.TypeMap,
+					Description: strings.TrimSpace(sysHelp["tune_user_lockout_config"][0]),
+				},
+				"plugin_version": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["plugin-catalog_version"][0]),
+				},
+				"identity_token_key": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["identity_token_key"][0]),
+					Required:    false,
+				},
+				"trim_request_trailing_slashes": {
+					Type:     framework.TypeBool,
+					Required: false,
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.handleAuthTuneRead,
+					DisplayAttrs: &framework.DisplayAttributes{
+						OperationVerb:   "read",
+						OperationSuffix: "tuning-information",
+					},
+					Summary:     "Reads the given auth path's configuration.",
+					Description: "This endpoint does NOT require sudo capability. For the sudo-required alternative, use the endpoint at `sys/auth/[auth-path]/tune`.",
+					Responses: map[int][]framework.Response{
+						http.StatusOK: {{
+							Description: "OK",
+							Fields: map[string]*framework.FieldSchema{
+								"description": {
+									Type:     framework.TypeString,
+									Required: true,
+								},
+								"default_lease_ttl": {
+									Type:     framework.TypeInt,
+									Required: true,
+								},
+								"max_lease_ttl": {
+									Type:     framework.TypeInt,
+									Required: true,
+								},
+								"force_no_cache": {
+									Type:     framework.TypeBool,
+									Required: true,
+								},
+								"external_entropy_access": {
+									Type:     framework.TypeBool,
+									Required: false,
+								},
+								"token_type": {
+									Type:     framework.TypeString,
+									Required: false,
+								},
+								"audit_non_hmac_request_keys": {
+									Type:     framework.TypeCommaStringSlice,
+									Required: false,
+								},
+								"audit_non_hmac_response_keys": {
+									Type:     framework.TypeCommaStringSlice,
+									Required: false,
+								},
+								"listing_visibility": {
+									Type:     framework.TypeString,
+									Required: false,
+								},
+								"passthrough_request_headers": {
+									Type:     framework.TypeCommaStringSlice,
+									Required: false,
+								},
+								"allowed_response_headers": {
+									Type:     framework.TypeCommaStringSlice,
+									Required: false,
+								},
+								"allowed_managed_keys": {
+									Type:     framework.TypeCommaStringSlice,
+									Required: false,
+								},
+								"user_lockout_counter_reset_duration": {
+									Type:     framework.TypeInt64,
+									Required: false,
+								},
+								"user_lockout_threshold": {
+									Type:     framework.TypeInt64, // uint64
+									Required: false,
+								},
+								"user_lockout_duration": {
+									Type:     framework.TypeInt64,
+									Required: false,
+								},
+								"user_lockout_disable": {
+									Type:     framework.TypeBool,
+									Required: false,
+								},
+								"options": {
+									Type:     framework.TypeMap,
+									Required: false,
+								},
+								"plugin_version": {
+									Type:     framework.TypeString,
+									Required: false,
+								},
+								"identity_token_key": {
+									Type:     framework.TypeString,
+									Required: false,
+								},
+								"trim_request_trailing_slashes": {
+									Type:     framework.TypeBool,
+									Required: false,
+								},
+							},
+						}},
+					},
+				},
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.handleAuthTuneWrite,
+					DisplayAttrs: &framework.DisplayAttributes{
+						OperationVerb:   "tune",
+						OperationSuffix: "configuration-parameters",
+					},
+					Summary:     "Tune configuration parameters for a given auth path.",
+					Description: "This endpoint does NOT require sudo capability. The same functionality can be achieved with sudo via the `sys/auth/[auth-path]/tune` endpoint.",
+					Responses: map[int][]framework.Response{
+						http.StatusNoContent: {{
+							Description: "OK",
+						}},
+					},
+				},
+			},
+			HelpSynopsis:    strings.TrimSpace(sysHelp["auth_tune"][0]),
+			HelpDescription: strings.TrimSpace(sysHelp["auth_tune"][1]),
 		},
 
 		{
@@ -5096,42 +5259,44 @@ func (b *SystemBackend) lockedUserPaths() []*framework.Path {
 	}
 }
 
-func (b *SystemBackend) eventPaths() []*framework.Path {
+func (b *SystemBackend) wellKnownPaths() []*framework.Path {
 	return []*framework.Path{
 		{
-			Pattern: "events/subscriptions$",
-
-			DisplayAttrs: &framework.DisplayAttributes{
-				OperationPrefix: "subscriptions",
-				OperationVerb:   "create",
-			},
-
-			Fields: map[string]*framework.FieldSchema{
-				"config": {
-					Type:     framework.TypeMap,
-					Required: true,
-					// Description: strings.TrimSpace(sysHelp["mount_accessor"][0]),
-				},
-				"plugin": {
-					Type:     framework.TypeString,
-					Required: true,
-				},
-				//"alias_identifier": {
-				//	Type: framework.TypeString,
-				//	// Description: strings.TrimSpace(sysHelp["alias_identifier"][0]),
-				//},
-			},
+			Pattern: "well-known/?$",
 
 			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.handleEventsSubscribe,
-					Summary:  "",
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.handleWellKnownList(),
+					DisplayAttrs: &framework.DisplayAttributes{
+						OperationPrefix: "well-known",
+						OperationVerb:   "list",
+						OperationSuffix: "labels-2",
+					},
 					Responses: map[int][]framework.Response{
 						http.StatusOK: {{
 							Description: "OK",
 							Fields: map[string]*framework.FieldSchema{
-								"id": {
-									Type:     framework.TypeString,
+								"keys": {
+									Type:     framework.TypeStringSlice,
+									Required: true,
+								},
+							},
+						}},
+					},
+				},
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.handleWellKnownList(),
+					DisplayAttrs: &framework.DisplayAttributes{
+						OperationPrefix: "well-known",
+						OperationVerb:   "list",
+						OperationSuffix: "labels",
+					},
+					Responses: map[int][]framework.Response{
+						http.StatusOK: {{
+							Description: "OK",
+							Fields: map[string]*framework.FieldSchema{
+								"keys": {
+									Type:     framework.TypeStringSlice,
 									Required: true,
 								},
 							},
@@ -5139,64 +5304,57 @@ func (b *SystemBackend) eventPaths() []*framework.Path {
 					},
 				},
 			},
-			// HelpSynopsis:    strings.TrimSpace(sysHelp["unlock_user"][0]),
-			// HelpDescription: strings.TrimSpace(sysHelp["unlock_user"][1]),
+
+			HelpSynopsis:    strings.TrimSpace(sysHelp["well-known-list"][0]),
+			HelpDescription: strings.TrimSpace(sysHelp["well-known-list"][1]),
 		},
 		{
-			Pattern: "events/subscriptions/(?P<plugin>.+)/(?P<id>.+)",
+			Pattern: "well-known/(?P<label>.+)",
 
 			DisplayAttrs: &framework.DisplayAttributes{
-				OperationPrefix: "subscriptions",
-				OperationVerb:   "create",
+				OperationPrefix: "well-known",
+				OperationSuffix: "label",
 			},
 
 			Fields: map[string]*framework.FieldSchema{
-				"plugin": {
-					Type: framework.TypeString,
+				"label": {
+					Type:        framework.TypeString,
+					Description: strings.TrimSpace(sysHelp["well-known-label"][0]),
 				},
-				"id": {
-					Type: framework.TypeString,
-					// Description: strings.TrimSpace(sysHelp["mount_accessor"][0]),
-				},
-				"list": {
-					Type: framework.TypeBool,
-				},
-				//"alias_identifier": {
-				//	Type: framework.TypeString,
-				//	// Description: strings.TrimSpace(sysHelp["alias_identifier"][0]),
-				//},
 			},
+
 			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.ListOperation: &framework.PathOperation{
-					Callback: b.handleEventsListSubscriptions,
-					Summary:  "",
-					Responses: map[int][]framework.Response{
-						http.StatusNoContent: {{
-							Description: "OK",
-						}},
-					},
-				},
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.handleEventsListSubscriptions,
-					Summary:  "",
+					Callback: b.handleWellKnownRead(),
 					Responses: map[int][]framework.Response{
-						http.StatusNoContent: {{
+						http.StatusOK: {{
 							Description: "OK",
+							Fields: map[string]*framework.FieldSchema{
+								"label": {
+									Type:     framework.TypeString,
+									Required: true,
+								},
+								"mount_uuid": {
+									Type:     framework.TypeString,
+									Required: true,
+								},
+								"mount_path": {
+									Type:     framework.TypeString,
+									Required: true,
+								},
+								"prefix": {
+									Type:     framework.TypeString,
+									Required: true,
+								},
+							},
 						}},
 					},
-				},
-				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.handleEventsUnsubscribe,
-					Summary:  "",
-					Responses: map[int][]framework.Response{
-						http.StatusNoContent: {{
-							Description: "OK",
-						}},
-					},
+					Summary: "Retrieve the associated mount information for a registered well-known label.",
 				},
 			},
-			// HelpSynopsis:    strings.TrimSpace(sysHelp["unlock_user"][0]),
-			// HelpDescription: strings.TrimSpace(sysHelp["unlock_user"][1]),
+
+			HelpSynopsis:    strings.TrimSpace(sysHelp["well-known"][0]),
+			HelpDescription: strings.TrimSpace(sysHelp["well-known"][1]),
 		},
 	}
 }

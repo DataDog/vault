@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 syntax = "proto3";
@@ -53,6 +53,7 @@ message UpdateUserRequest {
   ChangeExpiration expiration = 3;
   ChangePublicKey public_key = 4;
   int32 credential_type = 5;
+  string self_managed_password = 6;
 }
 
 message ChangePassword {

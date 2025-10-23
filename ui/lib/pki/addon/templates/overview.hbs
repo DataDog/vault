@@ -1,14 +1,14 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <PkiPageHeader @backend={{this.model.engine}} />
 
 <Toolbar>
   <ToolbarActions>
     {{#unless this.model.hasConfig}}
-      <ToolbarLink @route="configuration.create">
+      <ToolbarLink @route="configuration.create" @model={{this.model.engine.id}}>
         Configure PKI
       </ToolbarLink>
     {{/unless}}
@@ -24,6 +24,7 @@
       @iconPosition="trailing"
       @text="Configure PKI"
       @route="configuration.create"
+      @model={{this.model.engine.id}}
     />
   </EmptyState>
 {{/if}}

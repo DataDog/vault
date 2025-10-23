@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <PageHeader as |p|>
   <p.top>
@@ -28,10 +28,12 @@
 <Toolbar aria-label="items for managing kubernetes items">
   {{#if @filterRoles}}
     <ToolbarFilters>
-      <NavigateInput
-        @filter={{@rolesFilterValue}}
+      <FilterInputExplicit
+        @query={{@query}}
         @placeholder="Filter roles"
-        @urls={{hash list="vault.cluster.secrets.backend.kubernetes.roles"}}
+        @handleSearch={{@handleSearch}}
+        @handleInput={{@handleInput}}
+        @handleKeyDown={{@handleKeyDown}}
       />
     </ToolbarFilters>
   {{/if}}

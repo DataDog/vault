@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 ---
@@ -70,7 +70,7 @@ runs:
           echo "ref=${checkout_ref}"
           echo "depth=${fetch_depth}"
         } | tee -a "$GITHUB_OUTPUT"
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       with:
         path: ${{ inputs.path }}
         fetch-depth: ${{ steps.ref.outputs.depth }}

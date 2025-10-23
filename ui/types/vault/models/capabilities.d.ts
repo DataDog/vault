@@ -1,25 +1,26 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import ComputedProperty from '@ember/object/computed';
-import Model from '@ember-data/model';
+import { Model } from 'vault/app-types';
 
-interface CapabilitiesModel extends Model {
+type CapabilitiesModel = Model & {
   path: string;
   capabilities: Array<string>;
-  canSudo: ComputedProperty<boolean | undefined>;
-  canRead: ComputedProperty<boolean | undefined>;
   canCreate: ComputedProperty<boolean | undefined>;
-  canUpdate: ComputedProperty<boolean | undefined>;
   canDelete: ComputedProperty<boolean | undefined>;
   canList: ComputedProperty<boolean | undefined>;
+  canPatch: ComputedProperty<boolean | undefined>;
+  canRead: ComputedProperty<boolean | undefined>;
+  canSudo: ComputedProperty<boolean | undefined>;
+  canUpdate: ComputedProperty<boolean | undefined>;
   // these don't seem to be used anywhere
   // inferring type from key name
   allowedParameters: Array<string>;
   deniedParameters: Array<string>;
-}
+};
 
 export default CapabilitiesModel;
 export const SUDO_PATHS: string[];

@@ -1,26 +1,16 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
-import { render, find } from '@ember/test-helpers';
+import { render } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
-import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { assertCodeBlockValue } from 'vault/tests/helpers/codemirror';
 
 module('Integration | Component | console/log json', function (hooks) {
   setupRenderingTest(hooks);
-
-  hooks.beforeEach(function () {
-    this.codeMirror = this.owner.lookup('service:code-mirror');
-    // TODO: Fix JSONEditor/CodeMirror
-    setRunOptions({
-      rules: {
-        label: { enabled: false },
-      },
-    });
-  });
 
   test('it renders', async function (assert) {
     // Set any properties with this.set('myProperty', 'value');
@@ -30,8 +20,7 @@ module('Integration | Component | console/log json', function (hooks) {
 
     this.set('content', objectContent);
 
-    await render(hbs`{{console/log-json content=this.content}}`);
-    const instance = find('[data-test-component=code-mirror-modifier]').innerText;
-    assert.strictEqual(instance, expectedText);
+    await render(hbs`<Console::LogJson @content={{this.content}} />`);
+    assertCodeBlockValue(assert, '.hds-code-block__code', expectedText);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -22,9 +22,10 @@ export default class PkiEngine extends Engine {
       'flash-messages',
       'namespace',
       'path-help',
-      'router',
+      'app-router',
       'secret-mount-path',
       'store',
+      'pagination',
       'version',
     ],
     externalRoutes: ['secrets', 'secretsListRootConfiguration', 'externalMountIssuer'],

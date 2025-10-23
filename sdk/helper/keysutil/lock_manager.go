@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package keysutil
@@ -68,6 +68,17 @@ type PolicyRequest struct {
 
 	// The UUID of the managed key, if using one
 	ManagedKeyUUID string
+
+	// ParameterSet indicates the parameter set to use with ML-DSA and SLH-DSA keys
+	ParameterSet string
+
+	// HybridConfig contains the key types and parameters for hybrid keys
+	HybridConfig HybridKeyConfig
+}
+
+type HybridKeyConfig struct {
+	PQCKeyType KeyType
+	ECKeyType  KeyType
 }
 
 type LockManager struct {
@@ -266,12 +277,12 @@ func (lm *LockManager) BackupPolicy(ctx context.Context, storage logical.Storage
 			return "", err
 		}
 		if p == nil {
-			return "", fmt.Errorf(fmt.Sprintf("key %q not found", name))
+			return "", fmt.Errorf("key %q not found", name)
 		}
 	}
 
 	if atomic.LoadUint32(&p.deleted) == 1 {
-		return "", fmt.Errorf(fmt.Sprintf("key %q not found", name))
+		return "", fmt.Errorf("key %q not found", name)
 	}
 
 	backup, err := p.Backup(ctx, storage)
@@ -362,7 +373,7 @@ func (lm *LockManager) GetPolicy(ctx context.Context, req PolicyRequest, rand io
 		// because we don't know if the parameters match.
 
 		switch req.KeyType {
-		case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305:
+		case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_AES128_CBC, KeyType_AES256_CBC:
 			if req.Convergent && !req.Derived {
 				cleanup()
 				return nil, false, fmt.Errorf("convergent encryption requires derivation to be enabled")
@@ -397,6 +408,30 @@ func (lm *LockManager) GetPolicy(ctx context.Context, req PolicyRequest, rand io
 				return nil, false, fmt.Errorf("key derivation and convergent encryption not supported for keys of type %v", req.KeyType)
 			}
 
+		case KeyType_AES128_CMAC, KeyType_AES256_CMAC, KeyType_AES192_CMAC:
+			if req.Derived || req.Convergent {
+				cleanup()
+				return nil, false, fmt.Errorf("key derivation and convergent encryption not supported for keys of type %v", req.KeyType)
+			}
+
+		case KeyType_ML_DSA:
+			if req.Derived || req.Convergent {
+				cleanup()
+				return nil, false, fmt.Errorf("key derivation and convergent encryption not supported for keys of type %v", req.KeyType)
+			}
+
+		case KeyType_HYBRID:
+			if req.Derived || req.Convergent {
+				cleanup()
+				return nil, false, fmt.Errorf("key derivation and convergent encryption not supported for keys of type %v", req.KeyType)
+			}
+
+		case KeyType_SLH_DSA:
+			if req.Derived || req.Convergent {
+				cleanup()
+				return nil, false, fmt.Errorf("key derivation and convergent encryption not supported for keys of type %v", req.KeyType)
+			}
+
 		default:
 			cleanup()
 			return nil, false, fmt.Errorf("unsupported key type %v", req.KeyType)
@@ -411,6 +446,8 @@ func (lm *LockManager) GetPolicy(ctx context.Context, req PolicyRequest, rand io
 			AllowPlaintextBackup: req.AllowPlaintextBackup,
 			AutoRotatePeriod:     req.AutoRotatePeriod,
 			KeySize:              req.KeySize,
+			ParameterSet:         req.ParameterSet,
+			HybridConfig:         req.HybridConfig,
 		}
 
 		if req.Derived {
@@ -453,6 +490,13 @@ func (lm *LockManager) GetPolicy(ctx context.Context, req PolicyRequest, rand io
 
 	if p.NeedsUpgrade() {
 		if err := p.Upgrade(ctx, req.Storage, rand); err != nil {
+			cleanup()
+			return nil, false, err
+		}
+	}
+
+	if p.Imported && p.Derived && p.KDF == Kdf_hmac_sha256_counter {
+		if err := p.setKDF(ctx, req.Storage, Kdf_hkdf_sha256); err != nil {
 			cleanup()
 			return nil, false, err
 		}
@@ -511,6 +555,19 @@ func (lm *LockManager) ImportPolicy(ctx context.Context, req PolicyRequest, key 
 			AutoRotatePeriod:         req.AutoRotatePeriod,
 			AllowImportedKeyRotation: req.AllowImportedKeyRotation,
 			Imported:                 true,
+		}
+	}
+
+	if req.Derived {
+		p.KDF = Kdf_hkdf_sha256
+		if req.Convergent {
+			p.ConvergentEncryption = true
+			// As of version 3 we store the version within each key, so we
+			// set to -1 to indicate that the value in the policy has no
+			// meaning. We still, for backwards compatibility, fall back to
+			// this value if the key doesn't have one, which means it will
+			// only be -1 in the case where every key version is >= 3
+			p.ConvergentVersion = -1
 		}
 	}
 

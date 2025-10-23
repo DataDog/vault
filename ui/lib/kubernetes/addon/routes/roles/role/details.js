@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -21,7 +21,7 @@ export default class KubernetesRoleDetailsRoute extends Route {
 
     controller.breadcrumbs = [
       { label: resolvedModel.backend, route: 'overview' },
-      { label: 'roles', route: 'roles' },
+      { label: 'Roles', route: 'roles', model: resolvedModel.backend },
       { label: resolvedModel.name },
     ];
   }

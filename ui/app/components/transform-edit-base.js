@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -27,6 +27,9 @@ export const removeFromList = (list, itemToRemove) => {
   return newList.uniq();
 };
 
+/**
+ * @type Class
+ */
 export default Component.extend(FocusOnInsertMixin, {
   store: service(),
   flashMessages: service(),

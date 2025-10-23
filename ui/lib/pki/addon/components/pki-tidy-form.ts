@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -23,23 +23,17 @@ interface Args {
 }
 
 interface PkiTidyTtls {
-  intervalDuration: string;
   acmeAccountSafetyBuffer: string;
 }
 interface PkiTidyBooleans {
-  enabled: boolean;
   tidyAcme: boolean;
 }
 
 export default class PkiTidyForm extends Component<Args> {
-  @service declare readonly router: RouterService;
+  @service('app-router') declare readonly router: RouterService;
 
   @tracked errorBanner = '';
   @tracked invalidFormAlert = '';
-
-  get intervalDurationAttr() {
-    return this.args.tidy?.allByKey.intervalDuration;
-  }
 
   @task
   @waitFor

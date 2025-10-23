@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -27,9 +27,12 @@ export default Helper.extend({
        * as the run loop queue is never clear so tests will stay locked waiting
        * for queue to clear.
        */
-      this.intervalTimer = setTimeout(() => {
-        run(() => this.recompute());
-      }, parseInt(interval, 10));
+      this.intervalTimer = setTimeout(
+        () => {
+          run(() => this.recompute());
+        },
+        parseInt(interval, 10)
+      );
     }
   },
 

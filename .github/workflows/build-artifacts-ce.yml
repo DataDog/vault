@@ -9,20 +9,19 @@ on:
     inputs:
       build-all:
         type: boolean
+        description: Build all extended artifacts
         default: false
       build-date:
         type: string
+        description: The date associated with the revision SHA
         required: true
       checkout-ref:
         type: string
+        description: The repo Git SHA to checkout
         default: ""
       compute-build:
         type: string # JSON encoded to support passing arrays
         description: A JSON encoded "runs-on" for build worfkflows
-        required: true
-      compute-build-compat:
-        type: string # JSON encoded to support passing arrays
-        description: A JSON encoded "runs-on" for build workflows that need older glibc
         required: true
       compute-small:
         type: string # JSON encoded to support passing arrays
@@ -30,15 +29,19 @@ on:
         required: true
       vault-revision:
         type: string
+        description: The revision SHA of vault
         required: true
       vault-version:
         type: string
+        description: The version of vault
         required: true
       vault-version-package:
         type: string
+        description: Whether or not to package the binary as Debian and RPM packages
         required: true
       web-ui-cache-key:
         type: string
+        description: The UI asset cache key
         required: true
   workflow_call:
     inputs:
@@ -54,10 +57,6 @@ on:
       compute-build:
         type: string # JSON encoded to support passing arrays
         description: A JSON encoded "runs-on" for build worfkflows
-        required: true
-      compute-build-compat:
-        type: string # JSON encoded to support passing arrays
-        description: A JSON encoded "runs-on" for build workflows that need older glibc
         required: true
       compute-small:
         type: string # JSON encoded to support passing arrays
@@ -93,12 +92,12 @@ jobs:
             redhat: true
           - goos: linux
             goarch: arm64
-            redhat: false
+            redhat: true
       fail-fast: true
     runs-on: ${{ fromJSON(inputs.compute-build) }}
     name: (${{ matrix.goos }}, ${{ matrix.goarch }})
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.checkout-ref }}
       - uses: ./.github/actions/build-vault
@@ -111,6 +110,7 @@ jobs:
           goarch: ${{ matrix.goarch }}
           goos: ${{ matrix.goos }}
           go-tags: ui
+          package-name: vault
           vault-binary-name: vault
           vault-edition: ce
           vault-version: ${{ inputs.vault-version }}
@@ -119,7 +119,26 @@ jobs:
       # Outputs are strings so we need to encode our collection outputs as JSON.
       testable-containers: |
         [
-          { "artifact": "${{ github.event.repository.name }}_default_linux_amd64_${{ inputs.vault-version }}_${{ inputs.vault-revision }}.docker.tar" }
+          {
+            "sample": "ce_default_linux_amd64_ent_docker",
+            "artifact": "vault_default_linux_amd64_${{ inputs.vault-version }}_${{ inputs.vault-revision }}.docker.tar",
+            "edition": "ce"
+          },
+          {
+            "sample": "ce_default_linux_arm64_ce_docker",
+            "artifact": "vault_default_linux_arm64_${{ inputs.vault-version }}_${{ inputs.vault-revision }}.docker.tar",
+            "edition": "ce"
+          },
+          {
+            "sample": "ce_ubi_linux_amd64_ce_redhat",
+            "artifact": "vault_ubi_linux_amd64_${{ inputs.vault-version}}_${{ inputs.vault-revision }}.docker.redhat.tar",
+            "edition": "ce"
+          },
+          {
+            "sample": "ce_ubi_linux_arm64_ce_redhat",
+            "artifact": "vault_ubi_linux_arm64_${{ inputs.vault-version}}_${{ inputs.vault-revision }}.docker.redhat.tar",
+            "edition": "ce"
+          }
         ]
       testable-packages: |
         [
@@ -200,7 +219,7 @@ jobs:
     name: (${{ matrix.goos }}, ${{ matrix.goarch }}${{ matrix.goarm && ' ' || '' }}${{ matrix.goarm }})
     runs-on: ${{ fromJSON(inputs.compute-build) }}
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.checkout-ref }}
       - uses: ./.github/actions/build-vault
@@ -228,7 +247,7 @@ jobs:
       - core
       - extended
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.checkout-ref }}
       - name: Determine status

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,7 +16,17 @@ export default class ConfigUiEngine extends Engine {
   modulePrefix = modulePrefix;
   Resolver = Resolver;
   dependencies = {
-    services: ['auth', 'store', 'flash-messages', 'namespace', 'router', 'version', 'customMessages'],
+    services: [
+      'auth',
+      'pagination',
+      'flash-messages',
+      'namespace',
+      'app-router',
+      'version',
+      'custom-messages',
+      'api',
+      'capabilities',
+    ],
   };
 }
 

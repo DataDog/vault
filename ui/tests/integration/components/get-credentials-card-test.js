@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,10 +7,12 @@ import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
 import Service from '@ember/service';
 import { click, render } from '@ember/test-helpers';
-import { selectChoose, clickTrigger } from 'ember-power-select/test-support/helpers';
+import { clickTrigger } from 'ember-power-select/test-support/helpers';
+import { selectChoose } from 'ember-power-select/test-support';
 import hbs from 'htmlbars-inline-precompile';
 import sinon from 'sinon';
 import { setRunOptions } from 'ember-a11y-testing/test-support';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 const storeService = Service.extend({
   query(modelType) {
@@ -55,8 +57,8 @@ module('Integration | Component | get-credentials-card', function (hooks) {
   test('it shows a disabled button when no item is selected', async function (assert) {
     assert.expect(2);
     await render(hbs`<GetCredentialsCard @title={{this.title}} @searchLabel={{this.searchLabel}}/>`);
-    assert.dom('[data-test-get-credentials]').isDisabled();
-    assert.dom('[data-test-get-credentials]').hasText('Get credentials', 'Button has default text');
+    assert.dom(GENERAL.button('Get credentials')).isDisabled();
+    assert.dom(GENERAL.button('Get credentials')).hasText('Get credentials', 'Button has default text');
   });
 
   test('it shows button that can be clicked to credentials route when an item is selected', async function (assert) {
@@ -74,8 +76,8 @@ module('Integration | Component | get-credentials-card', function (hooks) {
       .hasText('Search for a role...', 'renders placeholder text passed to search select');
     await clickTrigger();
     await selectChoose('', 'my-role');
-    assert.dom('[data-test-get-credentials]').isEnabled();
-    await click('[data-test-get-credentials]');
+    assert.dom(GENERAL.button('Get credentials')).isEnabled();
+    await click(GENERAL.button('Get credentials'));
     assert.propEqual(
       this.router.transitionTo.lastCall.args,
       ['vault.cluster.secrets.backend.credentials', 'my-role'],

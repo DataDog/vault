@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -281,6 +281,11 @@ func (c *Core) reloadBackendCommon(ctx context.Context, entry *MountEntry, isAut
 				return err
 			}
 			re.binaryPaths.Store(binaryPathsEntry)
+			allowSnapshotReadPathsEntry, err := parseUnauthenticatedPaths(paths.AllowSnapshotRead)
+			if err != nil {
+				return err
+			}
+			re.allowSnapshotReadPaths.Store(allowSnapshotReadPathsEntry)
 		}
 	}
 

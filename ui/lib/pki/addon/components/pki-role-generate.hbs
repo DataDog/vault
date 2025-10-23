@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 {{#if @model.serialNumber}}
   <Page::PkiCertificateDetails @model={{@model}} @onBack={{this.cancel}} />
@@ -31,14 +31,14 @@
         @icon={{if this.save.isRunning "loading"}}
         type="submit"
         disabled={{this.save.isRunning}}
-        data-test-pki-generate-button
+        data-test-submit
       />
       <Hds::Button
         @text="Cancel"
         @color="secondary"
         disabled={{this.save.isRunning}}
         {{on "click" this.cancel}}
-        data-test-pki-generate-cancel
+        data-test-cancel
       />
     </Hds::ButtonSet>
 

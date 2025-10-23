@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cert
@@ -8,7 +8,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/helper/locksutil"
 	"github.com/hashicorp/vault/sdk/helper/ocsp"
 	"github.com/hashicorp/vault/sdk/logical"
 )
@@ -26,8 +29,9 @@ const (
 	operationPrefixCert = "cert"
 	trustedCertPath     = "cert/"
 
-	defaultRoleCacheSize = 200
-	maxRoleCacheSize     = 10000
+	defaultRoleCacheSize  = 200
+	defaultOcspMaxRetries = 4
+	maxRoleCacheSize      = 100000
 )
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
@@ -42,7 +46,8 @@ func Backend() *backend {
 	// ignoring the error as it only can occur with <= 0 size
 	cache, _ := lru.New[string, *trusted](defaultRoleCacheSize)
 	b := backend{
-		trustedCache: cache,
+		trustedCache:      cache,
+		trustedCacheLocks: locksutil.CreateLocks(),
 	}
 	b.Backend = &framework.Backend{
 		Help: backendHelp,
@@ -70,11 +75,40 @@ func Backend() *backend {
 	return &b
 }
 
+type trustedRetry struct {
+	attempt  int
+	deadline time.Time
+}
+
 type trusted struct {
 	pool          *x509.CertPool
 	trusted       []*ParsedCert
 	trustedNonCAs []*ParsedCert
 	ocspConf      *ocsp.VerifyConfig
+	loaded        map[string]struct{}
+	retry         *trustedRetry
+}
+
+func (t *trusted) clone() *trusted {
+	return &trusted{
+		pool:          t.pool.Clone(),
+		trusted:       slices.Clone(t.trusted),
+		trustedNonCAs: slices.Clone(t.trustedNonCAs),
+		ocspConf: &ocsp.VerifyConfig{
+			OcspEnabled:          t.ocspConf.OcspEnabled,
+			ExtraCas:             slices.Clone(t.ocspConf.ExtraCas),
+			OcspServersOverride:  slices.Clone(t.ocspConf.OcspServersOverride),
+			OcspFailureMode:      t.ocspConf.OcspFailureMode,
+			QueryAllServers:      t.ocspConf.QueryAllServers,
+			OcspThisUpdateMaxAge: t.ocspConf.OcspThisUpdateMaxAge,
+			OcspMaxRetries:       t.ocspConf.OcspMaxRetries,
+		},
+		loaded: maps.Clone(t.loaded),
+		retry: &trustedRetry{
+			attempt:  t.retry.attempt,
+			deadline: t.retry.deadline,
+		},
+	}
 }
 
 type backend struct {
@@ -89,6 +123,8 @@ type backend struct {
 
 	trustedCache         *lru.Cache[string, *trusted]
 	trustedCacheDisabled atomic.Bool
+	trustedCacheLocks    []*locksutil.LockEntry
+	trustedCacheFull     atomic.Pointer[trusted]
 }
 
 func (b *backend) initialize(ctx context.Context, req *logical.InitializationRequest) error {
@@ -136,7 +172,7 @@ func (b *backend) updatedConfig(config *config) {
 	case config.RoleCacheSize < 0:
 		// Just to clean up memory
 		b.trustedCacheDisabled.Store(true)
-		b.trustedCache.Purge()
+		b.flushTrustedCache()
 	case config.RoleCacheSize == 0:
 		config.RoleCacheSize = defaultRoleCacheSize
 		fallthrough
@@ -199,6 +235,7 @@ func (b *backend) flushTrustedCache() {
 	if b.trustedCache != nil { // defensive
 		b.trustedCache.Purge()
 	}
+	b.trustedCacheFull.Store(nil)
 }
 
 const backendHelp = `

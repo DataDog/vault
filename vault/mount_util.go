@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -75,4 +75,8 @@ func (c *Core) mountEntrySysView(entry *MountEntry) extendedSystemView {
 
 func (c *Core) entBuiltinPluginMetrics(ctx context.Context, entry *MountEntry, val float32) error {
 	return nil
+}
+
+func newSnapshotStorageRouter(c *Core, storage logical.Storage) logical.Storage {
+	return storage
 }

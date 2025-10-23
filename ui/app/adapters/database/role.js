@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -144,7 +144,7 @@ export default ApplicationAdapter.extend({
   async _updateAllowedRoles(store, { role, backend, db, type = 'add' }) {
     const connection = await store.queryRecord('database/connection', { backend, id: db });
     const roles = [...(connection.allowed_roles || [])];
-    const allowedRoles = type === 'add' ? addToArray([roles, role]) : removeFromArray([roles, role]);
+    const allowedRoles = type === 'add' ? addToArray(roles, role) : removeFromArray(roles, role);
     connection.allowed_roles = allowedRoles;
     return connection.save();
   },
@@ -195,10 +195,19 @@ export default ApplicationAdapter.extend({
 
   async updateRecord(store, type, snapshot) {
     const serializer = store.serializerFor(type.modelName);
-    const data = serializer.serialize(snapshot);
+    const serializedData = serializer.serialize(snapshot);
     const roleType = snapshot.attr('type');
     const backend = snapshot.attr('backend');
     const id = snapshot.attr('name');
+    let data = {};
+    if (roleType === 'static') {
+      data = {
+        ...serializedData,
+        username: snapshot.attr('username'), // username is required for updating a static role
+      };
+    } else {
+      data = serializedData;
+    }
 
     return this.ajax(this.urlFor(backend, id, roleType), 'POST', { data }).then(() => data);
   },

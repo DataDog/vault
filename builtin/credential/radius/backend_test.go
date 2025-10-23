@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package radius
@@ -185,7 +185,8 @@ func TestBackend_users(t *testing.T) {
 			testStepUpdateUser(t, "web", "foo"),
 			testStepUpdateUser(t, "web2", "foo"),
 			testStepUpdateUser(t, "web3", "foo"),
-			testStepUserList(t, []string{"web", "web2", "web3"}),
+			testStepUpdateUser(t, "Web4", "foo"),
+			testStepUserList(t, []string{"Web4", "web", "web2", "web3"}),
 		},
 	})
 }

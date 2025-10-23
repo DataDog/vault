@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package plugin_test
@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/api/auth/approle"
 	"github.com/hashicorp/vault/audit"
-	auditFile "github.com/hashicorp/vault/builtin/audit/file"
 	"github.com/hashicorp/vault/builtin/logical/database"
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/helper/testhelpers/consul"
@@ -28,6 +28,7 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/vault"
 	_ "github.com/jackc/pgx/v4/stdlib"
+	"github.com/stretchr/testify/require"
 )
 
 func getCluster(t *testing.T, numCores int, types ...consts.PluginType) *vault.TestCluster {
@@ -38,7 +39,7 @@ func getCluster(t *testing.T, numCores int, types ...consts.PluginType) *vault.T
 			"database": database.Factory,
 		},
 		AuditBackends: map[string]audit.Factory{
-			"file": auditFile.Factory,
+			"file": audit.NewFileBackend,
 		},
 	}
 
@@ -105,14 +106,18 @@ func TestExternalPlugin_RollbackAndReload(t *testing.T) {
 
 func testRegisterVersion(t *testing.T, client *api.Client, plugin pluginhelpers.TestPlugin, version string) {
 	t.Helper()
-	if err := client.Sys().RegisterPlugin(&api.RegisterPluginInput{
+	resp, err := client.Sys().RegisterPluginDetailed(&api.RegisterPluginInput{
 		Name:    plugin.Name,
 		Type:    api.PluginType(plugin.Typ),
 		Command: plugin.Name,
 		SHA256:  plugin.Sha256,
 		Version: version,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(resp.Warnings) > 0 {
+		t.Errorf("expected no warnings, got: %v", resp.Warnings)
 	}
 }
 
@@ -178,7 +183,7 @@ func TestExternalPlugin_ContinueOnError(t *testing.T) {
 
 func testExternalPlugin_ContinueOnError(t *testing.T, mismatch bool, pluginType consts.PluginType) {
 	cluster := getCluster(t, 1, pluginType)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	core := cluster.Cores[0]
 	plugin := cluster.Plugins[0]
@@ -283,10 +288,12 @@ func testExternalPlugin_ContinueOnError(t *testing.T, mismatch bool, pluginType 
 }
 
 // TestExternalPlugin_AuthMethod tests that we can build, register and use an
-// external auth method
+// external auth method (approle)
 func TestExternalPlugin_AuthMethod(t *testing.T) {
+	// getCluster calls pluginhelper.CompilePlugin which builds the approle
+	// auth method as a stand-in for the PluginTypeCredential
 	cluster := getCluster(t, 5, consts.PluginTypeCredential)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -295,18 +302,27 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 	// Register
 	testRegisterVersion(t, client, plugin, plugin.Version)
 
-	// define a group of parallel tests so we wait for their execution before
-	// continuing on to cleanup
-	// see: https://go.dev/blog/subtests
-	t.Run("parallel execution group", func(t *testing.T) {
-		// loop to mount 5 auth methods that will each share a single
-		// plugin process
-		for i := 0; i < 5; i++ {
-			i := i
-			pluginPath := fmt.Sprintf("%s-%d", plugin.Name, i)
-			client := cluster.Cores[i].Client
+	var pluginTest sync.WaitGroup
+	// loop to mount 5 auth methods that will each share a single plugin process
+	for i := 0; i < 5; i++ {
+		i := i
+		pluginTest.Add(1)
+		// We will be making concurrent requests so we grab a unique client per
+		// mount. Otherwise our login requests will overwrite the vault token
+		// for all goroutines.
+		client := cluster.Cores[i].Client
+		pluginPath := fmt.Sprintf("%s-%d", plugin.Name, i)
+		t.Cleanup(func() {
+			if err := client.Sys().DisableAuth(pluginPath); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		// spin off 5 goroutines to make concurrent requests to the plugin
+		// to simulate a real-world environment
+		go func() {
+			defer pluginTest.Done()
 			t.Run(pluginPath, func(t *testing.T) {
-				t.Parallel()
 				client.SetToken(cluster.RootToken)
 				// Enable
 				if err := client.Sys().EnableAuthWithOptions(pluginPath, &api.EnableAuthOptions{
@@ -376,14 +392,13 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
 				}
-
-				// Reset root token
-				client.SetToken(cluster.RootToken)
 			})
-		}
-	})
+		}()
+	}
 
-	// Deregister
+	// wait for goroutine execution before continuing on to cleanup
+	pluginTest.Wait()
+
 	if err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
 		Name:    plugin.Name,
 		Type:    api.PluginType(plugin.Typ),
@@ -397,7 +412,7 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 // method after reload
 func TestExternalPlugin_AuthMethodReload(t *testing.T) {
 	cluster := getCluster(t, 1, consts.PluginTypeCredential)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -458,6 +473,10 @@ func TestExternalPlugin_AuthMethodReload(t *testing.T) {
 	// Reset root token
 	client.SetToken(cluster.RootToken)
 
+	if err := client.Sys().DisableAuth(plugin.Name); err != nil {
+		t.Fatal(err)
+	}
+
 	// Deregister
 	if err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
 		Name:    plugin.Name,
@@ -469,10 +488,13 @@ func TestExternalPlugin_AuthMethodReload(t *testing.T) {
 }
 
 // TestExternalPlugin_SecretsEngine tests that we can build, register and use an
-// external secrets engine
+// external secrets engine (consul)
 func TestExternalPlugin_SecretsEngine(t *testing.T) {
+	t.Parallel()
+	// getCluster calls pluginhelper.CompilePlugin which builds the consul
+	// secrets engine as a stand-in for the PluginTypeSecrets
 	cluster := getCluster(t, 1, consts.PluginTypeSecrets)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -481,16 +503,24 @@ func TestExternalPlugin_SecretsEngine(t *testing.T) {
 	// Register
 	testRegisterVersion(t, client, plugin, plugin.Version)
 
-	// define a group of parallel tests so we wait for their execution before
-	// continuing on to cleanup
-	// see: https://go.dev/blog/subtests
-	t.Run("parallel execution group", func(t *testing.T) {
-		// loop to mount 5 secrets engines that will each share a single
-		// plugin process
-		for i := 0; i < 5; i++ {
-			pluginPath := fmt.Sprintf("%s-%d", plugin.Name, i)
+	var pluginTest sync.WaitGroup
+	// loop to mount 5 secrets engines that will each share a single plugin process
+	for i := 0; i < 5; i++ {
+		i := i
+		pluginTest.Add(1)
+		pluginPath := fmt.Sprintf("%s-%d", plugin.Name, i)
+		t.Cleanup(func() {
+			if err := client.Sys().Unmount(pluginPath); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		// spin off 5 goroutines to make concurrent requests to the plugin
+		// to simulate a real-world environment
+		go func() {
+			defer pluginTest.Done()
 			t.Run(pluginPath, func(t *testing.T) {
-				t.Parallel()
+				client.SetToken(cluster.RootToken)
 				// Enable
 				if err := client.Sys().Mount(pluginPath, &api.MountInput{
 					Type: plugin.Name,
@@ -500,7 +530,7 @@ func TestExternalPlugin_SecretsEngine(t *testing.T) {
 
 				// Configure
 				cleanupConsul, consulConfig := consul.PrepareTestContainer(t, "", false, true)
-				defer cleanupConsul()
+				t.Cleanup(cleanupConsul)
 
 				_, err := client.Logical().Write(pluginPath+"/config/access", map[string]interface{}{
 					"address": consulConfig.Address(),
@@ -526,11 +556,34 @@ func TestExternalPlugin_SecretsEngine(t *testing.T) {
 				if resp == nil {
 					t.Fatal("read creds response is nil")
 				}
-			})
-		}
-	})
 
-	// Deregister
+				revokeLease := resp.LeaseID
+				// Lookup - expect SUCCESS
+				resp, err = client.Sys().Lookup(revokeLease)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp == nil {
+					t.Fatalf("lease lookup response is nil")
+				}
+
+				// Revoke
+				if err = client.Sys().Revoke(revokeLease); err != nil {
+					t.Fatal(err)
+				}
+
+				// Lookup - expect FAILURE
+				_, err = client.Sys().Lookup(revokeLease)
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+			})
+		}()
+	}
+
+	// wait for goroutine execution before continuing on to cleanup
+	pluginTest.Wait()
+
 	if err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
 		Name:    plugin.Name,
 		Type:    api.PluginType(plugin.Typ),
@@ -543,8 +596,9 @@ func TestExternalPlugin_SecretsEngine(t *testing.T) {
 // TestExternalPlugin_SecretsEngineReload tests that we can use an external
 // secrets engine after reload
 func TestExternalPlugin_SecretsEngineReload(t *testing.T) {
+	t.Parallel()
 	cluster := getCluster(t, 1, consts.PluginTypeSecrets)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -554,7 +608,7 @@ func TestExternalPlugin_SecretsEngineReload(t *testing.T) {
 
 	// Configure
 	cleanupConsul, consulConfig := consul.PrepareTestContainer(t, "", false, true)
-	defer cleanupConsul()
+	t.Cleanup(cleanupConsul)
 
 	_, err := client.Logical().Write(plugin.Name+"/config/access", map[string]interface{}{
 		"address": consulConfig.Address(),
@@ -596,6 +650,10 @@ func TestExternalPlugin_SecretsEngineReload(t *testing.T) {
 		t.Fatal("read creds response is nil")
 	}
 
+	if err := client.Sys().Unmount(plugin.Name); err != nil {
+		t.Fatal(err)
+	}
+
 	// Deregister
 	if err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
 		Name:    plugin.Name,
@@ -607,10 +665,13 @@ func TestExternalPlugin_SecretsEngineReload(t *testing.T) {
 }
 
 // TestExternalPlugin_Database tests that we can build, register and use an
-// external database secrets engine
+// external database secrets engine (postgres)
 func TestExternalPlugin_Database(t *testing.T) {
+	t.Parallel()
+	// getCluster calls pluginhelper.CompilePlugin which builds the postgres
+	// database engine as a stand-in for the PluginTypeSecrets
 	cluster := getCluster(t, 1, consts.PluginTypeDatabase)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -619,27 +680,29 @@ func TestExternalPlugin_Database(t *testing.T) {
 	// Register
 	testRegisterVersion(t, client, plugin, plugin.Version)
 
-	// Enable
+	// Enable the database engine
 	if err := client.Sys().Mount(consts.PluginTypeDatabase.String(), &api.MountInput{
 		Type: consts.PluginTypeDatabase.String(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// define a group of parallel tests so we wait for their execution before
-	// continuing on to cleanup
-	// see: https://go.dev/blog/subtests
-	t.Run("parallel execution group", func(t *testing.T) {
-		// loop to mount 5 database connections that will each share a single
-		// plugin process
-		for i := 0; i < 5; i++ {
-			dbName := fmt.Sprintf("%s-%d", plugin.Name, i)
+	var pluginTest sync.WaitGroup
+	// loop to mount 5 secrets engines that will each share a single plugin process
+	for i := 0; i < 5; i++ {
+		i := i
+		pluginTest.Add(1)
+		dbName := fmt.Sprintf("%s-%d", plugin.Name, i)
+
+		// spin off 5 goroutines to make concurrent requests to the plugin
+		// to simulate a real-world environment
+		go func() {
+			defer pluginTest.Done()
 			t.Run(dbName, func(t *testing.T) {
-				t.Parallel()
 				roleName := "test-role-" + dbName
 
-				cleanupContainer, connURL := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background(), "13.4-buster")
-				defer cleanupContainer()
+				cleanupContainer, connURL := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background())
+				t.Cleanup(cleanupContainer)
 
 				_, err := client.Logical().Write("database/config/"+dbName, map[string]interface{}{
 					"connection_url": connURL,
@@ -689,14 +752,6 @@ func TestExternalPlugin_Database(t *testing.T) {
 					t.Fatal("read creds response is nil")
 				}
 
-				resp, err = client.Logical().Read("database/creds/" + roleName)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if resp == nil {
-					t.Fatal("read creds response is nil")
-				}
-
 				revokeLease := resp.LeaseID
 				// Lookup - expect SUCCESS
 				resp, err = client.Sys().Lookup(revokeLease)
@@ -720,11 +775,22 @@ func TestExternalPlugin_Database(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
 				}
-			})
-		}
-	})
 
-	// Deregister
+				// Revoke all leases so we don't get errors when we unmount the database engine
+				if err = client.Sys().RevokePrefix("database/creds/" + roleName); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}()
+	}
+
+	// wait for goroutine execution before continuing on to cleanup
+	pluginTest.Wait()
+
+	if err := client.Sys().Unmount(consts.PluginTypeDatabase.String()); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
 		Name:    plugin.Name,
 		Type:    api.PluginType(plugin.Typ),
@@ -737,8 +803,9 @@ func TestExternalPlugin_Database(t *testing.T) {
 // TestExternalPlugin_DatabaseReload tests that we can use an external database
 // secrets engine after reload
 func TestExternalPlugin_DatabaseReload(t *testing.T) {
+	t.Parallel()
 	cluster := getCluster(t, 1, consts.PluginTypeDatabase)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -754,54 +821,83 @@ func TestExternalPlugin_DatabaseReload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dbName := fmt.Sprintf("%s-%d", plugin.Name, 0)
-	roleName := "test-role-" + dbName
+	roleName := "test-role"
 
-	cleanupContainer, connURL := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background(), "13.4-buster")
-	defer cleanupContainer()
+	// create 4 databases to create connections for
+	cleanupContainer0, connURL0 := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background())
+	t.Cleanup(cleanupContainer0)
+	cleanupContainer1, connURL1 := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background())
+	t.Cleanup(cleanupContainer1)
+	cleanupContainer2, connURL2 := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background())
+	t.Cleanup(cleanupContainer2)
 
-	_, err := client.Logical().Write("database/config/"+dbName, map[string]interface{}{
-		"connection_url": connURL,
-		"plugin_name":    plugin.Name,
-		"allowed_roles":  []string{roleName},
-		"username":       "vaultadmin",
-		"password":       "vaultpass",
+	var roles []string
+	// write the config and roles for the first 3 DBs
+	for i, url := range []string{connURL0, connURL1, connURL2} {
+		dbName := fmt.Sprintf("%s-%d", plugin.Name, i)
+		_, err := client.Logical().Write("database/config/"+dbName, map[string]interface{}{
+			"connection_url": url,
+			"plugin_name":    plugin.Name,
+			"allowed_roles":  []string{"*"},
+			"username":       "vaultadmin",
+			"password":       "vaultpass",
+		})
+		require.NoError(t, err)
+
+		r := fmt.Sprintf("%s-%d", roleName, i)
+		roles = append(roles, r)
+		_, err = client.Logical().Write("database/roles/"+r, map[string]interface{}{
+			"db_name":             dbName,
+			"creation_statements": testRole,
+			"max_ttl":             "10m",
+		})
+		require.NoError(t, err)
+	}
+
+	// the 4th db connection has a bad connURL on purpose, it should not fail
+	// the plugin reload
+	_, err := client.Logical().Write("database/config/"+plugin.Name+"-3", map[string]interface{}{
+		"connection_url":    "foobar",
+		"verify_connection": false, // this db connection should not fail the plugin reload
+		"plugin_name":       plugin.Name,
+		"allowed_roles":     []string{"*"},
+		"username":          "vaultadmin",
+		"password":          "vaultpass",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	_, err = client.Logical().Write("database/roles/"+roleName, map[string]interface{}{
-		"db_name":             dbName,
-		"creation_statements": testRole,
-		"max_ttl":             "10m",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp, err := client.Logical().Read("database/creds/" + roleName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp == nil {
-		t.Fatal("read creds response is nil")
+	for _, role := range roles {
+		resp, err := client.Logical().Read("database/creds/" + role)
+		require.NoError(t, err)
+		if resp == nil {
+			t.Fatal("read creds response is nil")
+		}
 	}
 
 	// Reload plugin
-	if _, err := client.Sys().ReloadPlugin(&api.ReloadPluginInput{
+	_, err = client.Sys().ReloadPlugin(&api.ReloadPluginInput{
 		Plugin: plugin.Name,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
+	require.NoError(t, err)
 
 	// Generate credentials after reload
-	resp, err = client.Logical().Read("database/creds/" + roleName)
-	if err != nil {
-		t.Fatal(err)
+	for _, role := range roles {
+		resp, err := client.Logical().Read("database/creds/" + role)
+		require.NoError(t, err)
+		if resp == nil {
+			t.Fatal("read creds response is nil")
+		}
 	}
-	if resp == nil {
-		t.Fatal("read creds response is nil")
+
+	// remove one postgres database so that the plugin reload will fail
+	cleanupContainer1()
+	_, err = client.Sys().ReloadPlugin(&api.ReloadPluginInput{
+		Plugin: plugin.Name,
+	})
+	require.NoError(t, err)
+
+	if err := client.Sys().Unmount(plugin.Name); err != nil {
+		t.Fatal(err)
 	}
 
 	// Deregister
@@ -844,7 +940,7 @@ func testExternalPluginMetadataAuditLog(t *testing.T, log map[string]interface{}
 // in audit log when it is enabled
 func TestExternalPlugin_AuditEnabled_ShouldLogPluginMetadata_Auth(t *testing.T) {
 	cluster := getCluster(t, 1, consts.PluginTypeCredential)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -880,25 +976,32 @@ func TestExternalPlugin_AuditEnabled_ShouldLogPluginMetadata_Auth(t *testing.T) 
 
 	// Check the audit trail on request and response
 	decoder := json.NewDecoder(auditLogFile)
-	var auditRecord map[string]interface{}
-	for decoder.Decode(&auditRecord) == nil {
-		auditRequest := map[string]interface{}{}
-		if req, ok := auditRecord["request"]; ok {
-			auditRequest = req.(map[string]interface{})
-			if auditRequest["path"] != "auth/"+plugin.Name+"/role/role1" {
-				continue
-			}
-		}
-		testExternalPluginMetadataAuditLog(t, auditRequest, consts.PluginTypeCredential.String())
+	for decoder.More() {
+		var auditRecord map[string]interface{}
+		err := decoder.Decode(&auditRecord)
+		require.NoError(t, err)
 
-		auditResponse := map[string]interface{}{}
-		if req, ok := auditRecord["response"]; ok {
-			auditRequest = req.(map[string]interface{})
-			if auditResponse["path"] != "auth/"+plugin.Name+"/role/role1" {
+		if req, ok := auditRecord["request"]; ok {
+			auditRequest, ok := req.(map[string]interface{})
+			require.True(t, ok)
+
+			path, ok := auditRequest["path"]
+			require.True(t, ok)
+
+			if path != "auth/"+plugin.Name+"/role/role1" {
 				continue
 			}
+
+			testExternalPluginMetadataAuditLog(t, auditRequest, consts.PluginTypeCredential.String())
 		}
-		testExternalPluginMetadataAuditLog(t, auditResponse, consts.PluginTypeCredential.String())
+
+		if resp, ok := auditRecord["response"]; ok {
+			auditResponse, ok := resp.(map[string]interface{})
+			require.True(t, ok)
+
+			testExternalPluginMetadataAuditLog(t, auditResponse, consts.PluginTypeCredential.String())
+		}
+
 	}
 
 	// Deregister
@@ -915,7 +1018,7 @@ func TestExternalPlugin_AuditEnabled_ShouldLogPluginMetadata_Auth(t *testing.T) 
 // in audit log when it is enabled
 func TestExternalPlugin_AuditEnabled_ShouldLogPluginMetadata_Secret(t *testing.T) {
 	cluster := getCluster(t, 1, consts.PluginTypeSecrets)
-	defer cluster.Cleanup()
+	t.Cleanup(cluster.Cleanup)
 
 	plugin := cluster.Plugins[0]
 	client := cluster.Cores[0].Client
@@ -943,36 +1046,44 @@ func TestExternalPlugin_AuditEnabled_ShouldLogPluginMetadata_Secret(t *testing.T
 
 	// Configure
 	cleanupConsul, consulConfig := consul.PrepareTestContainer(t, "", false, true)
-	defer cleanupConsul()
+	t.Cleanup(cleanupConsul)
 	_, err = client.Logical().Write(plugin.Name+"/config/access", map[string]interface{}{
 		"address": consulConfig.Address(),
 		"token":   consulConfig.Token,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
+	// Disable audit now we're done performing operations
+	err = client.Sys().DisableAudit("file")
+	require.NoError(t, err)
 
 	// Check the audit trail on request and response
 	decoder := json.NewDecoder(auditLogFile)
-	var auditRecord map[string]interface{}
-	for decoder.Decode(&auditRecord) == nil {
-		auditRequest := map[string]interface{}{}
-		if req, ok := auditRecord["request"]; ok {
-			auditRequest = req.(map[string]interface{})
-			if auditRequest["path"] != plugin.Name+"/config/access" {
-				continue
-			}
-		}
-		testExternalPluginMetadataAuditLog(t, auditRequest, consts.PluginTypeSecrets.String())
+	for decoder.More() {
+		var auditRecord map[string]interface{}
+		err := decoder.Decode(&auditRecord)
+		require.NoError(t, err)
 
-		auditResponse := map[string]interface{}{}
-		if req, ok := auditRecord["response"]; ok {
-			auditRequest = req.(map[string]interface{})
-			if auditResponse["path"] != plugin.Name+"/config/access" {
+		if req, ok := auditRecord["request"]; ok {
+			auditRequest, ok := req.(map[string]interface{})
+			require.True(t, ok)
+
+			path, ok := auditRequest["path"].(string)
+			require.True(t, ok)
+
+			if path != plugin.Name+"/config/access" {
 				continue
 			}
+
+			testExternalPluginMetadataAuditLog(t, auditRequest, consts.PluginTypeSecrets.String())
 		}
-		testExternalPluginMetadataAuditLog(t, auditResponse, consts.PluginTypeSecrets.String())
+
+		if resp, ok := auditRecord["response"]; ok {
+			auditResponse, ok := resp.(map[string]interface{})
+			require.True(t, ok)
+
+			testExternalPluginMetadataAuditLog(t, auditResponse, consts.PluginTypeSecrets.String())
+		}
 	}
 
 	// Deregister
@@ -1138,7 +1249,7 @@ func TestCore_UpgradePluginUsingPinnedVersion_Database(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cleanupPG, connURL := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background(), "13.4-buster")
+	cleanupPG, connURL := postgreshelper.PrepareTestContainerWithVaultUser(t, context.Background())
 	t.Cleanup(cleanupPG)
 
 	// Mount 1.0.0 then pin to 1.0.1

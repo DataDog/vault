@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <div data-test-component="empty-state" class="empty-state" ...attributes>
   <div class="empty-state-content">
@@ -13,7 +13,7 @@
         </p>
       </div>
       {{#if @subTitle}}
-        <p class="empty-state-subTitle" data-test-empty-state-subText>
+        <p class="empty-state-subTitle" data-test-empty-state-subtitle>
           {{@subTitle}}
         </p>
       {{/if}}
@@ -22,7 +22,7 @@
         {{@title}}
       </p>
       {{#if @subTitle}}
-        <p class="empty-state-subTitle" data-test-empty-state-subText>
+        <p class="empty-state-subTitle" data-test-empty-state-subtitle>
           {{@subTitle}}
         </p>
       {{/if}}

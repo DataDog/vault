@@ -1,19 +1,21 @@
+@use '../utils/mixins';
+@use '../utils/size_variables';
+
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 select {
   width: 100%;
-  appearance: none;
 }
 
 .select select {
-  background-color: $ui-gray-050;
-  box-shadow: 0 3px 1px rgba($black, 0.12);
-  border: 1px solid $grey-light;
-  border-radius: $radius;
-  color: $grey-dark;
+  background-color: var(--token-color-surface-faint);
+  box-shadow: 0 3px 1px rgba(hsl(0, 0%, 4%), 0.12);
+  border: 1px solid var(--token-color-palette-neutral-300);
+  border-radius: var(--token-border-radius-x-small);
+  color: var(--token-color-foreground-faint);
   cursor: pointer;
   display: block;
   font-size: 1em;
@@ -21,13 +23,13 @@ select {
   max-width: 100%;
   outline: none;
   padding-bottom: calc(0.375em - 1px);
-  padding-left: $spacing-10;
-  padding-right: $spacing-10;
+  padding-left: size_variables.$spacing-10;
+  padding-right: size_variables.$spacing-10;
   padding-top: calc(0.375em - 1px);
   text-rendering: auto !important;
 
-  @include until($desktop) {
-    font-size: 1rem;
+  @include mixins.until(size_variables.$desktop) {
+    font-size: var(--token-typography-body-300-font-size);
   }
 
   &::placeholder {
@@ -38,23 +40,23 @@ select {
   &:focus,
   &:focus-visible,
   &.is-active {
-    border-color: $blue-500;
+    border-color: var(--token-color-palette-blue-200);
     box-shadow: 0 0 0 0.125em rgba(21, 99, 255, 0.25);
   }
 }
 
 .select select:not([multiple]) {
-  padding-right: $spacing-36;
+  padding-right: size_variables.$spacing-36;
 }
 
 .select select[disabled] {
-  border-color: $grey-light;
-  background-color: $ui-gray-100;
-  color: $ui-gray-500;
+  border-color: var(--token-color-palette-neutral-300);
+  background-color: var(--token-color-palette-neutral-100);
+  color: var(--token-color-foreground-disabled);
   cursor: not-allowed;
   user-select: none;
   &:hover {
-    border-color: $grey-light;
+    border-color: var(--token-color-palette-neutral-300);
   }
 }
 
@@ -76,7 +78,7 @@ select {
   margin: 0;
   pointer-events: none;
   position: absolute;
-  right: $spacing-8;
+  right: size_variables.$spacing-8;
   top: 50%;
   transform: translateY(-50%);
   width: 24px;

@@ -1,11 +1,12 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .doc-link {
-  color: $blue;
-  font-weight: $font-weight-semibold;
+  color: var(--token-color-foreground-action);
+  font-weight: var(--tokens-typography-font-weight-semibold);
+
   &:hover {
     text-decoration: underline !important;
   }

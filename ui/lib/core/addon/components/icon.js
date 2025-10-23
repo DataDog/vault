@@ -1,12 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Component from '@glimmer/component';
 import { assert } from '@ember/debug';
-import flightIconMap from '@hashicorp/flight-icons/catalog.json';
-const flightIconNames = flightIconMap.assets.map((asset) => asset.iconName).uniq();
 
 /**
  * @module Icon
@@ -16,31 +14,21 @@ const flightIconNames = flightIconMap.assets.map((asset) => asset.iconName).uniq
  * Flight icon library at https://helios.hashicorp.design/icons/library
  *
  * @example
- * ```js
- * <Icon @name="x-square" @size="24" />
- * ```
+ * <Icon @name="heart" @size="24" />
+ *
  * @param {string} name - The name of the SVG to render inline. Required.
  * @param {string} [size=16] - size for flight icon, can be 16 or 24
  *
  */
 
-export default class Icon extends Component {
+// TODO - deprecate and remove this after migrating all `<Icon />` instances to `<Hds::Icon />`
+export default class IconComponent extends Component {
   constructor(owner, args) {
     super(owner, args);
-    assert('Icon component size argument must be either "16" or "24"', ['16', '24'].includes(this.size));
-    assert('Icon name argument must be provided', this.args.name);
-  }
 
-  get size() {
-    return this.args.size || '16';
-  }
+    const { name, size = '16' } = args;
 
-  // favor flight icon set and fall back to structure icons if not found
-  get isFlightIcon() {
-    return this.args.name ? flightIconNames.includes(this.args.name) : false;
-  }
-
-  get hsIconClass() {
-    return this.size === '24' ? 'hs-icon-xlm' : 'hs-icon-l';
+    assert('Icon component size argument must be either "16" or "24"', ['16', '24'].includes(size));
+    assert('Icon name argument must be provided', name);
   }
 }

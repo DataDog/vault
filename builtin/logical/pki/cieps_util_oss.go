@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -20,6 +20,6 @@ func issueAcmeCertUsingCieps(_ *backend, _ *acmeContext, _ *logical.Request, _ *
 	return nil, "", fmt.Errorf("cieps is an enterprise only feature")
 }
 
-func getCiepsAcmeSettings(sc *storageContext, opts acmeWrapperOpts, config *acmeConfigEntry, data *framework.FieldData) (bool, string, error) {
+func getCiepsAcmeSettings(b *backend, sc *storageContext, opts acmeWrapperOpts, config *acmeConfigEntry, data *framework.FieldData) (bool, string, error) {
 	return false, "", nil
 }

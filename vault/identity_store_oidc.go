@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -8,7 +8,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,6 +29,7 @@ import (
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/consts"
+	"github.com/hashicorp/vault/sdk/helper/cryptoutil"
 	"github.com/hashicorp/vault/sdk/helper/identitytpl"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/patrickmn/go-cache"
@@ -62,10 +62,6 @@ func (c *oidcConfig) fullIssuer(child string) (string, error) {
 	}
 
 	return issuer, nil
-}
-
-func validChildIssuer(child string) bool {
-	return child == baseIdentityTokenIssuer || child == pluginIdentityTokenIssuer
 }
 
 type expireableKey struct {
@@ -130,9 +126,6 @@ type oidcCache struct {
 var (
 	errNilNamespace = errors.New("nil namespace in oidc cache request")
 
-	// pseudo-namespace for cache items that don't belong to any real namespace.
-	noNamespace = &namespace.Namespace{ID: "__NO_NAMESPACE"}
-
 	reservedClaims = []string{
 		"iat", "aud", "exp", "iss",
 		"sub", "namespace", "nonce",
@@ -150,22 +143,15 @@ var (
 )
 
 const (
-	issuerPath           = "identity/oidc"
-	oidcTokensPrefix     = "oidc_tokens/"
-	namedKeyCachePrefix  = "namedKeys/"
-	oidcConfigStorageKey = oidcTokensPrefix + "config/"
-	namedKeyConfigPath   = oidcTokensPrefix + "named_keys/"
-	publicKeysConfigPath = oidcTokensPrefix + "public_keys/"
-	roleConfigPath       = oidcTokensPrefix + "roles/"
-
-	// Identity tokens have a base issuer and plugin issuer
-	baseIdentityTokenIssuer   = ""
-	pluginIdentityTokenIssuer = "plugins"
-
-	pluginTokenSubjectPrefix   = "plugin-identity"
-	pluginTokenPrivateClaimKey = "vaultproject.io"
-	secretTableValue           = "secret"
-	deleteKeyErrorFmt          = "unable to delete key %q because it is currently referenced by these %s: %s"
+	issuerPath              = "identity/oidc"
+	oidcTokensPrefix        = "oidc_tokens/"
+	namedKeyCachePrefix     = "namedKeys/"
+	oidcConfigStorageKey    = oidcTokensPrefix + "config/"
+	namedKeyConfigPath      = oidcTokensPrefix + "named_keys/"
+	publicKeysConfigPath    = oidcTokensPrefix + "public_keys/"
+	roleConfigPath          = oidcTokensPrefix + "roles/"
+	baseIdentityTokenIssuer = ""
+	deleteKeyErrorFmt       = "unable to delete key %q because it is currently referenced by these %s: %s"
 )
 
 // optionalChildIssuerRegex is a regex for optionally accepting a field in an
@@ -1096,99 +1082,6 @@ func (i *IdentityStore) pathOIDCGenerateToken(ctx context.Context, req *logical.
 	return retResp, nil
 }
 
-func (i *IdentityStore) generatePluginIdentityToken(ctx context.Context, storage logical.Storage, me *MountEntry, audience string, ttl time.Duration) (string, time.Duration, error) {
-	ns, err := namespace.FromContext(ctx)
-	if err != nil {
-		return "", 0, err
-	}
-
-	if me == nil {
-		i.Logger().Error("unexpected nil mount entry when generating plugin identity token")
-		return "", 0, errors.New("mount entry must not be nil")
-	}
-
-	key := defaultKeyName
-	if me.Config.IdentityTokenKey != "" {
-		key = me.Config.IdentityTokenKey
-	}
-	if ttl == 0 {
-		ttl = time.Hour
-	}
-	namedKey, err := i.getNamedKey(ctx, storage, key)
-	if err != nil {
-		return "", 0, err
-	}
-	if namedKey == nil {
-		return "", 0, fmt.Errorf("key %q not found", key)
-	}
-
-	// Validate that the role is allowed to sign with its key (the key could have been updated)
-	if !strutil.StrListContains(namedKey.AllowedClientIDs, "*") && !strutil.StrListContains(namedKey.AllowedClientIDs, audience) {
-		return "", 0, fmt.Errorf("the key %q does not list %q as an allowed audience", key, audience)
-	}
-
-	config, err := i.getOIDCConfig(ctx, storage)
-	if err != nil {
-		return "", 0, err
-	}
-
-	// Cap the TTL to the key's verification TTL. This is the maximum amount of
-	// time the key will remain in the JWKS after it's been rotated.
-	if ttl > namedKey.VerificationTTL {
-		ttl = namedKey.VerificationTTL
-	}
-
-	// Tokens for plugins have a distinct issuer from Vault's identity token issuer
-	issuer, err := config.fullIssuer(pluginIdentityTokenIssuer)
-	if err != nil {
-		return "", 0, err
-	}
-
-	// The subject uniquely identifies the plugin
-	subject := fmt.Sprintf("%s:%s:%s:%s", pluginTokenSubjectPrefix, ns.ID,
-		translateTableClaim(me.Table), me.Accessor)
-
-	now := time.Now()
-	claims := map[string]any{
-		"iss": issuer,
-		"sub": subject,
-		"aud": []string{audience},
-		"nbf": now.Unix(),
-		"iat": now.Unix(),
-		"exp": now.Add(ttl).Unix(),
-		pluginTokenPrivateClaimKey: map[string]any{
-			"namespace_id":   ns.ID,
-			"namespace_path": ns.Path,
-			"class":          translateTableClaim(me.Table),
-			"plugin":         me.Type,
-			"version":        me.RunningVersion,
-			"path":           me.Path,
-			"accessor":       me.Accessor,
-			"local":          me.Local,
-		},
-	}
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return "", 0, err
-	}
-
-	signedToken, err := namedKey.signPayload(payload)
-	if err != nil {
-		return "", 0, fmt.Errorf("error signing plugin identity token: %w", err)
-	}
-
-	return signedToken, ttl, nil
-}
-
-func translateTableClaim(table string) string {
-	switch table {
-	case mountTableType:
-		return secretTableValue
-	default:
-		return table
-	}
-}
-
 func (i *IdentityStore) getNamedKey(ctx context.Context, s logical.Storage, name string) (*namedKey, error) {
 	ns, err := namespace.FromContext(ctx)
 	if err != nil {
@@ -1607,10 +1500,10 @@ func (i *IdentityStore) pathOIDCDiscovery(ctx context.Context, req *logical.Requ
 
 // getKeysCacheControlHeader returns the cache control header for all public
 // keys at the .well-known/keys endpoint
-func (i *IdentityStore) getKeysCacheControlHeader() (string, error) {
+func (i *IdentityStore) getKeysCacheControlHeader(ns *namespace.Namespace) (string, error) {
 	// if jwksCacheControlMaxAge is set use that, otherwise fall back on the
 	// more conservative nextRun values
-	jwksCacheControlMaxAge, ok, err := i.oidcCache.Get(noNamespace, "jwksCacheControlMaxAge")
+	jwksCacheControlMaxAge, ok, err := i.oidcCache.Get(ns, "jwksCacheControlMaxAge")
 	if err != nil {
 		return "", err
 	}
@@ -1622,7 +1515,7 @@ func (i *IdentityStore) getKeysCacheControlHeader() (string, error) {
 		return fmt.Sprintf("max-age=%.0f", durationInSeconds), nil
 	}
 
-	nextRun, ok, err := i.oidcCache.Get(noNamespace, "nextRun")
+	nextRun, ok, err := i.oidcCache.Get(ns, "nextRun")
 	if err != nil {
 		return "", err
 	}
@@ -1694,7 +1587,7 @@ func (i *IdentityStore) pathOIDCReadPublicKeys(ctx context.Context, req *logical
 		return nil, err
 	}
 	if len(keys) > 0 {
-		header, err := i.getKeysCacheControlHeader()
+		header, err := i.getKeysCacheControlHeader(ns)
 		if err != nil {
 			return nil, err
 		}
@@ -1866,7 +1759,7 @@ func generateKeys(algorithm string) (*jose.JSONWebKey, error) {
 	switch algorithm {
 	case "RS256", "RS384", "RS512":
 		// 2048 bits is recommended by RSA Laboratories as a minimum post 2015
-		if key, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+		if key, err = cryptoutil.GenerateRSAKey(rand.Reader, 2048); err != nil {
 			return nil, err
 		}
 	case "ES256", "ES384", "ES512":
@@ -1953,6 +1846,20 @@ func (i *IdentityStore) generatePublicJWKS(ctx context.Context, s logical.Storag
 	}
 
 	jwksRaw, ok, err := i.oidcCache.Get(ns, "jwks")
+	if err != nil {
+		return nil, err
+	}
+
+	if ok {
+		return jwksRaw.(*jose.JSONWebKeySet), nil
+	}
+
+	i.generateJWKSLock.Lock()
+	defer i.generateJWKSLock.Unlock()
+
+	// Check the cache again incase another requset acquired the lock
+	// before this request.
+	jwksRaw, ok, err = i.oidcCache.Get(ns, "jwks")
 	if err != nil {
 		return nil, err
 	}
@@ -2208,17 +2115,23 @@ func (i *IdentityStore) oidcKeyRotation(ctx context.Context, s logical.Storage) 
 
 // oidcPeriodFunc is invoked by the backend's periodFunc and runs regular key
 // rotations and expiration actions.
-func (i *IdentityStore) oidcPeriodicFunc(ctx context.Context) {
+func (i *IdentityStore) oidcPeriodicFunc(ctx context.Context, s logical.Storage) {
 	// Key rotations write to storage, so only run this on the primary cluster.
 	// The periodic func does not run on perf standbys or DR secondaries.
 	if i.System().ReplicationState().HasState(consts.ReplicationPerformanceSecondary) {
 		return
 	}
 
-	var nextRun time.Time
 	now := time.Now()
 
-	v, ok, err := i.oidcCache.Get(noNamespace, "nextRun")
+	ns, err := namespace.FromContext(ctx)
+	if err != nil {
+		i.Logger().Error("error getting namespace from context", "err", err)
+		return
+	}
+
+	var nextRun time.Time
+	v, ok, err := i.oidcCache.Get(ns, "nextRun")
 	if err != nil {
 		i.Logger().Error("error reading oidc cache", "err", err)
 		return
@@ -2232,68 +2145,52 @@ func (i *IdentityStore) oidcPeriodicFunc(ctx context.Context) {
 	// be run at any time safely, but there is no need to invoke them (which
 	// might be somewhat expensive if there are many roles/keys) if we're not
 	// past any rotation/expiration TTLs.
-	if now.After(nextRun) {
-		// Initialize to a fairly distant next run time. This will be brought in
-		// based on key rotation times.
-		nextRun = now.Add(24 * time.Hour)
-		minJwksClientCacheDuration := time.Duration(math.MaxInt64)
+	if now.Before(nextRun) {
+		return
+	}
 
-		for _, ns := range i.namespacer.ListNamespaces(true) {
-			nsPath := ns.Path
+	nextRotation, jwksClientCacheDuration, err := i.oidcKeyRotation(ctx, s)
+	if err != nil {
+		i.Logger().Warn("error rotating OIDC keys", "err", err)
+	}
 
-			s := i.router.MatchingStorageByAPIPath(ctx, nsPath+"identity/oidc")
+	nextExpiration, err := i.expireOIDCPublicKeys(ctx, s)
+	if err != nil {
+		i.Logger().Warn("error expiring OIDC public keys", "err", err)
+	}
 
-			if s == nil {
-				continue
-			}
+	if err := i.oidcCache.Flush(ns); err != nil {
+		i.Logger().Error("error flushing oidc cache", "err", err)
+	}
 
-			nextRotation, jwksClientCacheDuration, err := i.oidcKeyRotation(ctx, s)
-			if err != nil {
-				i.Logger().Warn("error rotating OIDC keys", "err", err)
-			}
+	// use the soonest time between nextRotation and nextExpiration for the next run.
+	// Allow at most 24 hours though, keeping the legacy behavior from the original
+	// introduction of namespaces (unclear if necessary but safer to keep for now).
+	nextRun = now.Add(24 * time.Hour)
+	if nextRotation.Before(nextRun) {
+		nextRun = nextRotation
+	}
+	if nextExpiration.Before(nextRun) {
+		nextRun = nextExpiration
+	}
 
-			nextExpiration, err := i.expireOIDCPublicKeys(ctx, s)
-			if err != nil {
-				i.Logger().Warn("error expiring OIDC public keys", "err", err)
-			}
+	if err := i.oidcCache.SetDefault(ns, "nextRun", nextRun); err != nil {
+		i.Logger().Error("error setting oidc cache", "err", err)
+	}
 
-			if err := i.oidcCache.Flush(ns); err != nil {
-				i.Logger().Error("error flushing oidc cache", "err", err)
-			}
-
-			// re-run at the soonest expiration or rotation time
-			if nextRotation.Before(nextRun) {
-				nextRun = nextRotation
-			}
-
-			if nextExpiration.Before(nextRun) {
-				nextRun = nextExpiration
-			}
-
-			if jwksClientCacheDuration < minJwksClientCacheDuration {
-				minJwksClientCacheDuration = jwksClientCacheDuration
-			}
+	if jwksClientCacheDuration < math.MaxInt64 {
+		// the OIDC JWKS endpoint returns a Cache-Control HTTP header time between
+		// 0 and the minimum verificationTTL or minimum rotationPeriod out of all
+		// keys, whichever value is lower.
+		//
+		// This smooths calls from services validating JWTs to Vault, while
+		// ensuring that operators can assert that servers honoring the
+		// Cache-Control header will always have a superset of all valid keys, and
+		// not trust any keys longer than a jwksCacheControlMaxAge duration after a
+		// key is rotated out of signing use
+		if err := i.oidcCache.SetDefault(ns, "jwksCacheControlMaxAge", jwksClientCacheDuration); err != nil {
+			i.Logger().Error("error setting jwksCacheControlMaxAge in oidc cache", "err", err)
 		}
-
-		if err := i.oidcCache.SetDefault(noNamespace, "nextRun", nextRun); err != nil {
-			i.Logger().Error("error setting oidc cache", "err", err)
-		}
-
-		if minJwksClientCacheDuration < math.MaxInt64 {
-			// the OIDC JWKS endpoint returns a Cache-Control HTTP header time between
-			// 0 and the minimum verificationTTL or minimum rotationPeriod out of all
-			// keys, whichever value is lower.
-			//
-			// This smooths calls from services validating JWTs to Vault, while
-			// ensuring that operators can assert that servers honoring the
-			// Cache-Control header will always have a superset of all valid keys, and
-			// not trust any keys longer than a jwksCacheControlMaxAge duration after a
-			// key is rotated out of signing use
-			if err := i.oidcCache.SetDefault(noNamespace, "jwksCacheControlMaxAge", minJwksClientCacheDuration); err != nil {
-				i.Logger().Error("error setting jwksCacheControlMaxAge in oidc cache", "err", err)
-			}
-		}
-
 	}
 }
 
@@ -2338,9 +2235,9 @@ func (c *oidcCache) Flush(ns *namespace.Namespace) error {
 		return errNilNamespace
 	}
 
-	// Remove all items from the provided namespace as well as the shared, "no namespace" section.
+	// Remove all items from the provided namespace
 	for itemKey := range c.c.Items() {
-		if isTargetNamespacedKey(itemKey, []string{noNamespace.ID, ns.ID}) {
+		if isTargetNamespacedKey(itemKey, []string{ns.ID}) {
 			c.c.Delete(itemKey)
 		}
 	}

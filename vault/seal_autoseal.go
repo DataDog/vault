@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -118,6 +118,18 @@ func (d *autoSeal) SetStoredKeys(ctx context.Context, keys [][]byte) error {
 	return writeStoredKeys(ctx, d.core.physical, d.Access, keys)
 }
 
+func (d *autoSeal) SetInitializationFlag(ctx context.Context) error {
+	return writeInitializationFlag(ctx, d.core.physical, true)
+}
+
+func (d *autoSeal) ClearInitializationFlag(ctx context.Context) error {
+	return writeInitializationFlag(ctx, d.core.physical, false)
+}
+
+func (d *autoSeal) IsInitializationFlagSet(ctx context.Context) (bool, error) {
+	return isInitializationFlagSet(ctx, d.core.physical)
+}
+
 // GetStoredKeys retrieves the key shares by unwrapping the encrypted key using the
 // autoseal.
 func (d *autoSeal) GetStoredKeys(ctx context.Context) ([][]byte, error) {
@@ -194,13 +206,17 @@ func (d *autoSeal) BarrierConfig(ctx context.Context) (*SealConfig, error) {
 
 	barrierTypeUpgradeCheck(d.BarrierSealConfigType(), conf)
 
-	if conf.Type != d.BarrierSealConfigType().String() && conf.Type != SealConfigTypeMultiseal.String() && d.BarrierSealConfigType() != SealConfigTypeMultiseal {
+	if !CompatibleSealTypes(conf.Type, d.BarrierSealConfigType().String()) {
 		d.logger.Error("barrier seal type does not match loaded type", "seal_type", conf.Type, "loaded_type", d.BarrierSealConfigType())
 		return nil, fmt.Errorf("barrier seal type of %q does not match loaded type of %q", conf.Type, d.BarrierSealConfigType())
 	}
 
 	d.SetCachedBarrierConfig(conf)
 	return conf.Clone(), nil
+}
+
+func CompatibleSealTypes(a, b string) bool {
+	return a == b || a == SealConfigTypeMultiseal.String() || b == SealConfigTypeMultiseal.String()
 }
 
 func (d *autoSeal) ClearBarrierConfig(ctx context.Context) error {
@@ -453,7 +469,7 @@ func (d *autoSeal) migrateRecoveryConfig(ctx context.Context) error {
 
 // StartHealthCheck starts a goroutine that tests the health of the auto-unseal backend once every 10 minutes.
 // If unhealthy, logs a warning on the condition and begins testing every one minute until healthy again.
-func (d *autoSeal) StartHealthCheck() {
+func (d *autoSeal) StartHealthCheck(ctx context.Context) {
 	d.StopHealthCheck()
 	d.hcLock.Lock()
 	defer d.hcLock.Unlock()
@@ -461,14 +477,18 @@ func (d *autoSeal) StartHealthCheck() {
 	healthCheck := time.NewTicker(seal.HealthTestIntervalNominal)
 	d.healthCheckStop = make(chan struct{})
 	healthCheckStop := d.healthCheckStop
-	ctx := d.core.activeContext
 
 	go func() {
 		lastTestOk := true
 		lastSeenOk := time.Now()
 
 		check := func(now time.Time) {
-			ctx, cancel := context.WithTimeout(ctx, seal.HealthTestTimeout)
+			if d.core.activeContext == nil {
+				// This probably only happens during the execution of some unit tests.
+				d.logger.Warn("no active context, skipping this health check")
+				return
+			}
+			ctx, cancel := context.WithTimeout(d.core.activeContext, seal.HealthTestTimeout)
 			defer cancel()
 
 			d.logger.Trace("performing a seal health check")
@@ -513,7 +533,7 @@ error and restart Vault.`)
 				d.core.MetricSink().SetGauge(autoSealUnavailableDuration, 0)
 			} else {
 				if lastTestOk && allUnhealthy {
-					d.logger.Info("seal backend is completely unhealthy (all seal wrappers all unhealthy)", "downtime", now.Sub(lastSeenOk).String())
+					d.logger.Error("seal backend is completely unhealthy (all seal wrappers all unhealthy)", "downtime", now.Sub(lastSeenOk).String())
 				}
 				lastTestOk = false
 				healthCheck.Reset(seal.HealthTestIntervalUnhealthy)
@@ -525,8 +545,15 @@ error and restart Vault.`)
 			d.allSealsHealthy = allHealthy
 		}
 
+		check(time.Now())
 		for {
 			select {
+			case <-ctx.Done():
+				if healthCheck != nil {
+					healthCheck.Stop()
+				}
+				healthCheckStop = nil
+				return
 			case <-healthCheckStop:
 				if healthCheck != nil {
 					healthCheck.Stop()

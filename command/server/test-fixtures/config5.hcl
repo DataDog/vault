@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 disable_cache = true
@@ -52,3 +52,4 @@ disable_cache = true
  raw_storage_endpoint = true
  disable_sealwrap = true
  disable_printable_check = true
+ remove_irrevocable_lease_after = "10d"

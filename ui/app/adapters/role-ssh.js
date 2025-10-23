@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -34,7 +34,7 @@ export default ApplicationAdapter.extend({
 
   deleteRecord(store, type, snapshot) {
     const { id } = snapshot;
-    return this.ajax(this.urlForRole(snapshot.record.get('backend'), id), 'DELETE');
+    return this.ajax(this.urlForRole(snapshot.record.backend, id), 'DELETE');
   },
 
   pathForType() {

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -46,6 +46,7 @@ export default class TokenExpireWarning extends Component {
     if ('vault.cluster.oidc-provider' === currentRoute) {
       return false;
     }
+
     return !!this.args.expirationDate;
   }
 }

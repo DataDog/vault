@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,7 +11,7 @@ export default Route.extend({
   secretMountPath: service(),
   pathHelp: service(),
   beforeModel() {
-    return this.pathHelp.getNewModel('kmip/role', this.secretMountPath.currentPath);
+    return this.pathHelp.hydrateModel('kmip/role', this.secretMountPath.currentPath);
   },
   model() {
     const params = this.paramsFor(this.routeName);

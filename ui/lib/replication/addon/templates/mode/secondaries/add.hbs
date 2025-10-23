@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <form {{action "onSubmit" "secondary-token" "primary" (hash ttl=this.ttl id=this.id) on="submit"}}>
   <div class="box is-fullwidth is-shadowless is-marginless">
@@ -25,7 +25,7 @@
         name="activation-token-id"
         id="activation-token-id"
         @value={{this.id}}
-        data-test-replication-secondary-id
+        data-test-input="Secondary ID"
       />
     </div>
     <p class="help has-text-grey">
@@ -47,7 +47,7 @@
   {{/if}}
   <hr class="has-background-gray-100" />
   <Hds::ButtonSet>
-    <Hds::Button @text="Generate token" type="submit" data-test-secondary-add />
+    <Hds::Button @text="Generate token" type="submit" data-test-submit />
     <Hds::Button @text="Cancel" @color="secondary" @route="mode.secondaries" @model={{this.model.replicationMode}} />
   </Hds::ButtonSet>
 </form>
@@ -84,18 +84,18 @@
     <M.Footer>
       <Hds::ButtonSet>
         <Hds::Copy::Button
-          data-test-modal-copy
+          data-test-button="Copy token"
           @text="Copy token"
           @textToCopy={{this.token}}
           class="primary"
           @container=".hds-modal"
           @onError={{(fn
-            (set-flash-message "Clipboard copy failed. Please make sure the browser Clipboard API is allowed." "danger")
+            (set-flash-message "Clipboard copy failed. The Clipboard API requires a secure context." "danger")
           )}}
           {{on "click" (action "onCopy")}}
         />
         <Hds::Button
-          data-test-modal-close
+          data-test-cancel
           disabled={{not this.isTokenCopied}}
           @text="Close"
           @color="secondary"

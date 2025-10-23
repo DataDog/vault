@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -351,7 +351,6 @@ func TestPredict_Plugins(t *testing.T) {
 				"aws",
 				"azure",
 				"cassandra-database-plugin",
-				"centrify",
 				"cert",
 				"cf",
 				"consul",
@@ -391,7 +390,9 @@ func TestPredict_Plugins(t *testing.T) {
 				"redis-elasticache-database-plugin",
 				"redshift-database-plugin",
 				"saml",
+				"scep",
 				"snowflake-database-plugin",
+				"spiffe",
 				"ssh",
 				"terraform",
 				"totp",
@@ -440,6 +441,22 @@ func TestPredict_Plugins(t *testing.T) {
 				if !strutil.StrListContains(act, "saml") {
 					for i, v := range tc.exp {
 						if v == "saml" {
+							tc.exp = append(tc.exp[:i], tc.exp[i+1:]...)
+							break
+						}
+					}
+				}
+				if !strutil.StrListContains(act, "scep") {
+					for i, v := range tc.exp {
+						if v == "scep" {
+							tc.exp = append(tc.exp[:i], tc.exp[i+1:]...)
+							break
+						}
+					}
+				}
+				if !strutil.StrListContains(act, "spiffe") {
+					for i, v := range tc.exp {
+						if v == "spiffe" {
 							tc.exp = append(tc.exp[:i], tc.exp[i+1:]...)
 							break
 						}

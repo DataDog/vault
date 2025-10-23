@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package database
@@ -62,6 +62,25 @@ func (b *databaseBackend) populateQueue(ctx context.Context, s logical.Storage) 
 		if err != nil {
 			log.Warn("unable to read static role", "error", err, "role", roleName)
 			continue
+		}
+
+		// If an account's NextVaultRotation period is zero time (time.Time{}), it means that the
+		// role was created before we added the `NextVaultRotation` field. In this
+		// case, we need to calculate the next rotation time based on the
+		// LastVaultRotation and the RotationPeriod. However, if the role was
+		// created with skip_import_rotation set, we need to use the current time
+		// instead of LastVaultRotation because LastVaultRotation is 0
+		if role.StaticAccount.NextVaultRotation.IsZero() {
+			log.Debug("NextVaultRotation unset (zero time). Role may predate field", roleName)
+			if role.StaticAccount.LastVaultRotation.IsZero() {
+				log.Debug("Setting NextVaultRotation based on current time", roleName)
+				role.StaticAccount.SetNextVaultRotation(time.Now())
+			} else {
+				log.Debug("Setting NextVaultRotation based on LastVaultRotation", roleName)
+				role.StaticAccount.SetNextVaultRotation(role.StaticAccount.LastVaultRotation)
+			}
+
+			b.StoreStaticRole(ctx, s, role)
 		}
 
 		item := queue.Item{
@@ -234,13 +253,8 @@ func (b *databaseBackend) rotateCredential(ctx context.Context, s logical.Storag
 			// write to storage after updating NextVaultRotation so the next
 			// time this item is checked for rotation our role that we retrieve
 			// from storage reflects that change
-			entry, err := logical.StorageEntryJSON(databaseStaticRolePath+input.RoleName, input.Role)
+			err := b.StoreStaticRole(ctx, s, input.Role)
 			if err != nil {
-				logger.Error("unable to encode entry for storage", "error", err)
-				return false
-			}
-			if err := s.Put(ctx, entry); err != nil {
-				logger.Error("unable to write to storage", "error", err)
 				return false
 			}
 		}
@@ -254,13 +268,24 @@ func (b *databaseBackend) rotateCredential(ctx context.Context, s logical.Storag
 
 	// send an event indicating if the rotation was a success or failure
 	rotated := false
-	defer func() {
+	defer func(s *staticAccount, credType *v5.CredentialType) {
 		if rotated {
+			b.Logger().Info("successfully rotated static role", "name", roleName, "ttl", s.CredentialTTL().Seconds())
 			b.dbEvent(ctx, "rotate", "", roleName, true)
+			recordDatabaseObservation(ctx, b, nil, role.DBName, ObservationTypeDatabaseRotateStaticRoleSuccess,
+				AdditionalDatabaseMetadata{key: "role_name", value: roleName},
+				AdditionalDatabaseMetadata{key: "credential_type", value: credType.String()},
+				AdditionalDatabaseMetadata{key: "credential_ttl", value: s.CredentialTTL().String()},
+				AdditionalDatabaseMetadata{key: "rotation_period", value: s.RotationPeriod.String()},
+				AdditionalDatabaseMetadata{key: "rotation_schedule", value: s.RotationSchedule},
+				AdditionalDatabaseMetadata{key: "next_vault_rotation", value: s.NextVaultRotation.String()})
 		} else {
 			b.dbEvent(ctx, "rotate-fail", "", roleName, false)
+			recordDatabaseObservation(ctx, b, nil, role.DBName, ObservationTypeDatabaseRotateStaticRoleFailure,
+				AdditionalDatabaseMetadata{key: "role_name", value: roleName},
+				AdditionalDatabaseMetadata{key: "credential_type", value: credType.String()})
 		}
-	}()
+	}(role.StaticAccount, &role.CredentialType) // argument is evaluated now, but since it's a pointer should refer correctly to updated values
 
 	// If there is a WAL entry related to this Role, the corresponding WAL ID
 	// should be stored in the Item's Value field.
@@ -270,7 +295,7 @@ func (b *databaseBackend) rotateCredential(ctx context.Context, s logical.Storag
 
 	resp, err := b.setStaticAccount(ctx, s, input)
 	if err != nil {
-		logger.Error("unable to rotate credentials in periodic function", "error", err)
+		logger.Error("unable to rotate credentials in periodic function", "name", roleName, "error", err.Error())
 
 		// Increment the priority enough so that the next call to this method
 		// likely will not attempt to rotate it, as a back-off of sorts
@@ -301,6 +326,7 @@ func (b *databaseBackend) rotateCredential(ctx context.Context, s logical.Storag
 	if err := b.pushItem(item); err != nil {
 		logger.Warn("unable to push item on to queue", "error", err)
 	}
+
 	rotated = true
 	return true
 }
@@ -349,9 +375,9 @@ type setStaticAccountOutput struct {
 
 // setStaticAccount sets the credential for a static account associated with a
 // Role. This method does many things:
-// - verifies role exists and is in the allowed roles list
-// - loads an existing WAL entry if WALID input is given, otherwise creates a
-// new WAL entry
+//   - verifies role exists and is in the allowed roles list
+//   - loads an existing WAL entry if WALID input is given, otherwise creates a
+//     new WAL entry
 //   - gets a database connection
 //   - accepts an input credential, otherwise generates a new one for
 //     the role's credential type
@@ -413,9 +439,15 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 		Commands: input.Role.Statements.Rotation,
 	}
 
+	// Add external password to request so we can use static account connection
+	if input.Role.StaticAccount.SelfManagedPassword != "" {
+		updateReq.SelfManagedPassword = input.Role.StaticAccount.SelfManagedPassword
+	}
+
 	// Use credential from input if available. This happens if we're restoring from
 	// a WAL item or processing the rotation queue with an item that has a WAL
 	// associated with it
+	var usedCredentialFromPreviousRotation bool
 	if output.WALID != "" {
 		wal, err := b.findStaticWAL(ctx, s, output.WALID)
 		if err != nil {
@@ -443,6 +475,7 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 				Statements:  statements,
 			}
 			input.Role.StaticAccount.Password = wal.NewPassword
+			usedCredentialFromPreviousRotation = true
 		case wal.CredentialType == v5.CredentialTypeRSAPrivateKey:
 			// Roll forward by using the credential in the existing WAL entry
 			updateReq.CredentialType = v5.CredentialTypeRSAPrivateKey
@@ -451,6 +484,7 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 				Statements:   statements,
 			}
 			input.Role.StaticAccount.PrivateKey = wal.NewPrivateKey
+			usedCredentialFromPreviousRotation = true
 		}
 	}
 
@@ -464,21 +498,9 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 
 		switch input.Role.CredentialType {
 		case v5.CredentialTypePassword:
-			generator, err := newPasswordGenerator(input.Role.CredentialConfig)
+			newPassword, err := b.generateNewPassword(ctx, input.Role.CredentialConfig, dbConfig.PasswordPolicy, dbi)
 			if err != nil {
-				return output, fmt.Errorf("failed to construct credential generator: %s", err)
-			}
-
-			// Fall back to database config-level password policy if not set on role
-			if generator.PasswordPolicy == "" {
-				generator.PasswordPolicy = dbConfig.PasswordPolicy
-			}
-
-			// Generate the password
-			newPassword, err := generator.generate(ctx, b, dbi.database)
-			if err != nil {
-				b.CloseIfShutdown(dbi, err)
-				return output, fmt.Errorf("failed to generate password: %s", err)
+				return output, err
 			}
 
 			// Set new credential in WAL entry and update user request
@@ -492,15 +514,9 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 			// Set new credential in static account
 			input.Role.StaticAccount.Password = newPassword
 		case v5.CredentialTypeRSAPrivateKey:
-			generator, err := newRSAKeyGenerator(input.Role.CredentialConfig)
+			public, private, err := b.generateNewKeypair(input.Role.CredentialConfig)
 			if err != nil {
-				return output, fmt.Errorf("failed to construct credential generator: %s", err)
-			}
-
-			// Generate the RSA key pair
-			public, private, err := generator.generate(b.GetRandomReader())
-			if err != nil {
-				return output, fmt.Errorf("failed to generate RSA key pair: %s", err)
+				return output, err
 			}
 
 			// Set new credential in WAL entry and update user request
@@ -525,9 +541,24 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 	_, err = dbi.database.UpdateUser(ctx, updateReq, false)
 	if err != nil {
 		b.CloseIfShutdown(dbi, err)
+		if usedCredentialFromPreviousRotation {
+			b.Logger().Debug("credential stored in WAL failed, deleting WAL", "role", input.RoleName, "WAL ID", output.WALID)
+			if err := framework.DeleteWAL(ctx, s, output.WALID); err != nil {
+				b.Logger().Warn("failed to delete WAL", "error", err, "WAL ID", output.WALID)
+			}
+
+			// Generate a new WAL entry and credential for next attempt
+			output.WALID = ""
+		}
 		return output, fmt.Errorf("error setting credentials: %w", err)
 	}
 	modified = true
+
+	// static user password successfully updated in external system
+	// update self-managed password if available for future connections
+	if input.Role.StaticAccount.SelfManagedPassword != "" {
+		input.Role.StaticAccount.SelfManagedPassword = input.Role.StaticAccount.Password
+	}
 
 	// Store updated role information
 	// lvr is the known LastVaultRotation
@@ -536,11 +567,7 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 	input.Role.StaticAccount.SetNextVaultRotation(lvr)
 	output.RotationTime = lvr
 
-	entry, err := logical.StorageEntryJSON(databaseStaticRolePath+input.RoleName, input.Role)
-	if err != nil {
-		return output, err
-	}
-	if err := s.Put(ctx, entry); err != nil {
+	if err := b.StoreStaticRole(ctx, s, input.Role); err != nil {
 		return output, err
 	}
 
@@ -553,6 +580,44 @@ func (b *databaseBackend) setStaticAccount(ctx context.Context, s logical.Storag
 
 	// The WAL has been deleted, return new setStaticAccountOutput without it
 	return &setStaticAccountOutput{RotationTime: lvr}, nil
+}
+
+// Returns a new password, error.
+func (b *databaseBackend) generateNewPassword(ctx context.Context, credentialConfig map[string]interface{}, passwordPolicy string, dbi *dbPluginInstance) (string, error) {
+	generator, err := newPasswordGenerator(credentialConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to construct credential generator: %s", err)
+	}
+
+	// Fall back to database config-level password policy if not set on role
+	if generator.PasswordPolicy == "" {
+		generator.PasswordPolicy = passwordPolicy
+	}
+
+	// Generate the password
+	newPassword, err := generator.generate(ctx, b, dbi.database)
+	if err != nil {
+		b.CloseIfShutdown(dbi, err)
+		return "", fmt.Errorf("failed to generate password: %s", err)
+	}
+
+	return newPassword, nil
+}
+
+// Returns a new public key, private key, error.
+func (b *databaseBackend) generateNewKeypair(credentialConfig map[string]interface{}) ([]byte, []byte, error) {
+	generator, err := newRSAKeyGenerator(credentialConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to construct credential generator: %s", err)
+	}
+
+	// Generate the RSA key pair
+	public, private, err := generator.generate(b.GetRandomReader())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate RSA key pair: %s", err)
+	}
+
+	return public, private, nil
 }
 
 // initQueue preforms the necessary checks and initializations needed to perform

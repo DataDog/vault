@@ -1,10 +1,6 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-export {
-  default,
-  replicationModeDescription,
-  REPLICATION_MODE_DESCRIPTIONS,
-} from 'core/helpers/replication-mode-description';
+export { default } from 'core/helpers/replication-mode-description';

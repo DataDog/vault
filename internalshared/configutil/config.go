@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package configutil
@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/ast"
 	"github.com/hashicorp/hcl/hcl/token"
+	"github.com/hashicorp/vault/helper/random"
 )
 
 // SharedConfig contains some shared values
@@ -31,9 +32,9 @@ type SharedConfig struct {
 	DisableMlock    bool        `hcl:"-"`
 	DisableMlockRaw interface{} `hcl:"disable_mlock"`
 
-	Telemetry *Telemetry `hcl:"telemetry"`
+	Telemetry *Telemetry `hcl:"-"`
 
-	HCPLinkConf *HCPLinkConfig `hcl:"cloud"`
+	HCPLinkConf *HCPLinkConfig `hcl:"-"`
 
 	DefaultMaxRequestDuration    time.Duration `hcl:"-"`
 	DefaultMaxRequestDurationRaw interface{}   `hcl:"default_max_request_duration"`
@@ -55,27 +56,31 @@ type SharedConfig struct {
 	ClusterName string `hcl:"cluster_name"`
 
 	AdministrativeNamespacePath string `hcl:"administrative_namespace_path"`
-
-	RequestLimiter *RequestLimiter `hcl:"request_limiter"`
 }
 
-func ParseConfig(d string) (*SharedConfig, error) {
+func ParseConfig(d string) (cfg *SharedConfig, err error) {
+	cfg, _, err = ParseConfigCheckDuplicate(d)
+	return cfg, err
+}
+
+// TODO (HCL_DUP_KEYS_DEPRECATION): keep only ParseConfig once deprecation is complete
+func ParseConfigCheckDuplicate(d string) (cfg *SharedConfig, duplicate bool, err error) {
 	// Parse!
-	obj, err := hcl.Parse(d)
+	obj, duplicate, err := random.ParseAndCheckForDuplicateHclAttributes(d)
 	if err != nil {
-		return nil, err
+		return nil, duplicate, err
 	}
 
 	// Start building the result
 	var result SharedConfig
 
 	if err := hcl.DecodeObject(&result, obj); err != nil {
-		return nil, err
+		return nil, duplicate, err
 	}
 
 	if result.DefaultMaxRequestDurationRaw != nil {
 		if result.DefaultMaxRequestDuration, err = parseutil.ParseDurationSecond(result.DefaultMaxRequestDurationRaw); err != nil {
-			return nil, err
+			return nil, duplicate, err
 		}
 		result.FoundKeys = append(result.FoundKeys, "DefaultMaxRequestDuration")
 		result.DefaultMaxRequestDurationRaw = nil
@@ -83,7 +88,7 @@ func ParseConfig(d string) (*SharedConfig, error) {
 
 	if result.DisableMlockRaw != nil {
 		if result.DisableMlock, err = parseutil.ParseBool(result.DisableMlockRaw); err != nil {
-			return nil, err
+			return nil, duplicate, err
 		}
 		result.FoundKeys = append(result.FoundKeys, "DisableMlock")
 		result.DisableMlockRaw = nil
@@ -91,34 +96,34 @@ func ParseConfig(d string) (*SharedConfig, error) {
 
 	list, ok := obj.Node.(*ast.ObjectList)
 	if !ok {
-		return nil, fmt.Errorf("error parsing: file doesn't contain a root object")
+		return nil, duplicate, fmt.Errorf("error parsing: file doesn't contain a root object")
 	}
 
 	if o := list.Filter("hsm"); len(o.Items) > 0 {
 		result.found("hsm", "hsm")
 		if err := parseKMS(&result.Seals, o, "hsm", 2); err != nil {
-			return nil, fmt.Errorf("error parsing 'hsm': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'hsm': %w", err)
 		}
 	}
 
 	if o := list.Filter("seal"); len(o.Items) > 0 {
 		result.found("seal", "Seal")
 		if err := parseKMS(&result.Seals, o, "seal", 5); err != nil {
-			return nil, fmt.Errorf("error parsing 'seal': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'seal': %w", err)
 		}
 	}
 
 	if o := list.Filter("kms"); len(o.Items) > 0 {
 		result.found("kms", "Seal")
 		if err := parseKMS(&result.Seals, o, "kms", 3); err != nil {
-			return nil, fmt.Errorf("error parsing 'kms': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'kms': %w", err)
 		}
 	}
 
 	if o := list.Filter("entropy"); len(o.Items) > 0 {
 		result.found("entropy", "Entropy")
 		if err := ParseEntropy(&result, o, "entropy"); err != nil {
-			return nil, fmt.Errorf("error parsing 'entropy': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'entropy': %w", err)
 		}
 	}
 
@@ -126,7 +131,7 @@ func ParseConfig(d string) (*SharedConfig, error) {
 		result.found("listener", "Listener")
 		listeners, err := ParseListeners(o)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing 'listener': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'listener': %w", err)
 		}
 		// Update the shared config
 		result.Listeners = listeners
@@ -140,37 +145,30 @@ func ParseConfig(d string) (*SharedConfig, error) {
 	if o := list.Filter("user_lockout"); len(o.Items) > 0 {
 		result.found("user_lockout", "UserLockout")
 		if err := ParseUserLockouts(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'user_lockout': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'user_lockout': %w", err)
 		}
 	}
 
 	if o := list.Filter("telemetry"); len(o.Items) > 0 {
 		result.found("telemetry", "Telemetry")
 		if err := parseTelemetry(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'telemetry': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'telemetry': %w", err)
 		}
 	}
 
 	if o := list.Filter("cloud"); len(o.Items) > 0 {
 		result.found("cloud", "Cloud")
 		if err := parseCloud(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'cloud': %w", err)
-		}
-	}
-
-	if o := list.Filter("request_limiter"); len(o.Items) > 0 {
-		result.found("request_limiter", "RequestLimiter")
-		if err := parseRequestLimiter(&result, o); err != nil {
-			return nil, fmt.Errorf("error parsing 'request_limiter': %w", err)
+			return nil, duplicate, fmt.Errorf("error parsing 'cloud': %w", err)
 		}
 	}
 
 	entConfig := &(result.EntSharedConfig)
 	if err := entConfig.ParseConfig(list); err != nil {
-		return nil, fmt.Errorf("error parsing enterprise config: %w", err)
+		return nil, duplicate, fmt.Errorf("error parsing enterprise config: %w", err)
 	}
 
-	return &result, nil
+	return &result, duplicate, nil
 }
 
 // Sanitized returns a copy of the config with all values that are considered
@@ -291,13 +289,6 @@ func (c *SharedConfig) Sanitized() map[string]interface{} {
 			"add_mount_point_rollback_metrics":       c.Telemetry.RollbackMetricsIncludeMountPoint,
 		}
 		result["telemetry"] = sanitizedTelemetry
-	}
-
-	if c.RequestLimiter != nil {
-		sanitizedRequestLimiter := map[string]interface{}{
-			"disable": c.RequestLimiter.Disable,
-		}
-		result["request_limiter"] = sanitizedRequestLimiter
 	}
 
 	return result

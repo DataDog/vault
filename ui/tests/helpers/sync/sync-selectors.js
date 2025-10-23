@@ -1,10 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { click, fillIn } from '@ember/test-helpers';
-import { SELECTORS as GENERAL } from 'vault/tests/helpers/general-selectors';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 export const PAGE = {
   ...GENERAL,
@@ -34,8 +34,6 @@ export const PAGE = {
     sync: {
       mountSelect: '[data-test-sync-mount-select]',
       mountInput: '[data-test-sync-mount-input]',
-      submit: '[data-test-sync-submit]',
-      cancel: '[data-test-sync-cancel]',
       successMessage: '[data-test-sync-success-message]',
     },
     list: {
@@ -51,6 +49,19 @@ export const PAGE = {
     },
   },
   overview: {
+    optInBanner: {
+      container: '[data-test-secrets-sync-opt-in-banner]',
+      enable: '[data-test-secrets-sync-opt-in-banner-enable]',
+      description: '[data-test-secrets-sync-opt-in-banner-description]',
+      dismiss: '[data-test-secrets-sync-opt-in-banner] [data-test-icon="x"]',
+    },
+    activationModal: {
+      container: '[data-test-secrets-sync-opt-in-modal]',
+      checkbox: '[data-test-opt-in-check]',
+      confirm: '[data-test-opt-in-confirm]',
+      cancel: '[data-test-opt-in-cancel]',
+    },
+    optInError: '[data-test-opt-in-error]',
     createDestination: '[data-test-create-destination]',
     table: {
       row: '[data-test-overview-table-row]',
@@ -63,31 +74,32 @@ export const PAGE = {
       action: (name) => `[data-test-overview-table-action="${name}"]`,
     },
   },
-  syncBadge: {
+  badgeText: {
     icon: (name) => `[data-test-icon="${name}"]`,
     text: '.hds-badge__text',
   },
   selectType: (type) => `[data-test-select-destination="${type}"]`,
   createCancel: '[data-test-destination-create-cancel]',
-  saveButton: '[data-test-save]',
   toolbar: (btnText) => `[data-test-toolbar="${btnText}"]`,
   form: {
-    enableInput: (attr) => `[data-test-enable-field="${attr}"] [data-test-icon="edit"]`,
+    enableInput: (attr) => `[data-test-enable-field="${attr}"] [data-test-icon="edit"]`, // TODO duplicated in general-selectors as this component became more widely used
+    fieldGroupHeader: (group) => `[data-test-destination-header="${group}"]`,
+    fieldGroupSubtext: (group) => `[data-test-destination-subText="${group}"]`,
     fillInByAttr: async (attr, value) => {
       // for handling more complex form input elements by attr name
       switch (attr) {
         case 'granularity':
-          return await click(`[data-test-radio="secret-key"]`);
+          return await click(`${GENERAL.radioByAttr('secret-key')}`);
         case 'credentials':
-          await click('[data-test-text-toggle]');
-          return fillIn('[data-test-text-file-textarea]', value);
-        case 'customTags':
+          await click(GENERAL.textToggle);
+          return fillIn(GENERAL.maskedInput, value);
+        case 'custom_tags':
           await fillIn('[data-test-kv-key="0"]', 'foo');
           return fillIn('[data-test-kv-value="0"]', value);
-        case 'deploymentEnvironments':
-          await click('[data-test-input="deploymentEnvironments"] input#development');
-          await click('[data-test-input="deploymentEnvironments"] input#preview');
-          return await click('[data-test-input="deploymentEnvironments"] input#production');
+        case 'deployment_environments':
+          await click(`${GENERAL.inputGroupByAttr('deployment_environments')} input#development`);
+          await click(`${GENERAL.inputGroupByAttr('deployment_environments')} input#preview`);
+          return await click(`${GENERAL.inputGroupByAttr('deployment_environments')} input#production`);
         default:
           return fillIn(`[data-test-input="${attr}"]`, value);
       }

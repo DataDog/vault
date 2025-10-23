@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package issuing
@@ -143,7 +143,7 @@ func _cleanupInternalCRLMapping(ctx context.Context, s logical.Storage, mapping 
 	// Depending on which path we're writing this config to, we need to
 	// remove CRLs from the relevant folder too.
 	isLocal := path == StorageLocalCRLConfig
-	baseCRLPath := "crls/"
+	baseCRLPath := PathCrls
 	if !isLocal {
 		baseCRLPath = "unified-crls/"
 	}

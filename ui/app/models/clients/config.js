@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -14,6 +14,10 @@ const validations = {
       validator: (model) => parseInt(model.retentionMonths) >= model.minimumRetentionMonths,
       message: (model) =>
         `Retention period must be greater than or equal to ${model.minimumRetentionMonths}.`,
+    },
+    {
+      validator: (model) => parseInt(model.retentionMonths) <= 60,
+      message: 'Retention period must be less than or equal to 60.',
     },
   ],
 };
@@ -31,8 +35,10 @@ export default class ClientsConfigModel extends Model {
 
   @attr('number') minimumRetentionMonths;
 
+  // refers specifically to the activitylog and will always be on for enterprise
   @attr('string') enabled;
 
+  // reporting_enabled is for automated reporting and only true of the customer hasn’t opted-out of automated license reporting
   @attr('boolean') reportingEnabled;
 
   @attr('date') billingStartTimestamp;

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,7 +11,7 @@ const REPLICATION_MODE_DESCRIPTIONS = {
     'Performance Replication scales workloads horizontally across clusters to make requests faster. Local secondaries handle read requests but forward writes to the primary to be handled.',
 };
 
-export function replicationModeDescription([mode]) {
+function replicationModeDescription([mode]) {
   return REPLICATION_MODE_DESCRIPTIONS[mode];
 }
 

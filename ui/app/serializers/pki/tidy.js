@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,6 +11,8 @@ export default class PkiTidySerializer extends ApplicationSerializer {
     if (tidyType === 'manual') {
       delete data?.enabled;
       delete data?.intervalDuration;
+      delete data?.minStartupBackoffDuration;
+      delete data?.maxStartupBackoffDuration;
     }
     return data;
   }

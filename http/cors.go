@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-secure-stdlib/strutil"
+	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/vault"
 )
 
@@ -49,6 +50,7 @@ func wrapCORSHandler(h http.Handler, core *vault.Core) http.Handler {
 		}
 
 		if req.Method == http.MethodOptions && !strutil.StrListContains(allowedMethods, requestMethod) {
+			defer logical.IncrementResponseStatusCodeMetric(http.StatusMethodNotAllowed)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}

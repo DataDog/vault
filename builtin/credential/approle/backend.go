@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package approle
@@ -109,6 +109,10 @@ func Backend(conf *logical.BackendConfig) (*backend, error) {
 			LocalStorage: []string{
 				secretIDLocalPrefix,
 				secretIDAccessorLocalPrefix,
+			},
+			SealWrapStorage: []string{
+				secretIDPrefix,
+				secretIDLocalPrefix,
 			},
 		},
 		Paths: framework.PathAppend(

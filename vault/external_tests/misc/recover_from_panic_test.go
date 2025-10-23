@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package misc
@@ -19,7 +19,8 @@ func TestRecoverFromPanic(t *testing.T) {
 		LogicalBackends: map[string]logical.Factory{
 			"noop": vault.NoopBackendFactory,
 		},
-		EnableRaw: true,
+		EnableRaw:    true,
+		DisableMlock: true,
 	}
 	cluster := vault.NewTestCluster(t, coreConfig, &vault.TestClusterOptions{
 		HandlerFunc: vaulthttp.Handler,

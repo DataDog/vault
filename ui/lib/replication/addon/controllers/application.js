@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,9 +7,9 @@ import { isPresent } from '@ember/utils';
 import { alias } from '@ember/object/computed';
 import { service } from '@ember/service';
 import Controller from '@ember/controller';
-import { copy } from 'ember-copy';
 import { resolve } from 'rsvp';
 import decodeConfigFromJWT from 'replication/utils/decode-config-from-jwt';
+import { buildWaiter } from '@ember/test-waiters';
 
 const DEFAULTS = {
   token: null,
@@ -23,11 +23,16 @@ const DEFAULTS = {
     paths: [],
   },
 };
+const waiter = buildWaiter('replication-actions');
 
-export default Controller.extend(copy(DEFAULTS, true), {
+/**
+ * @type Class
+ */
+export default Controller.extend(structuredClone(DEFAULTS), {
   isModalActive: false,
   isTokenCopied: false,
   expirationDate: null,
+  router: service('app-router'),
   store: service(),
   rm: service('replication-mode'),
   replicationMode: alias('rm.mode'),
@@ -54,7 +59,7 @@ export default Controller.extend(copy(DEFAULTS, true), {
   },
 
   reset() {
-    this.setProperties(copy(DEFAULTS, true));
+    this.setProperties(structuredClone(DEFAULTS));
   },
 
   submitSuccess(resp, action) {
@@ -87,6 +92,7 @@ export default Controller.extend(copy(DEFAULTS, true), {
   },
 
   submitHandler(action, clusterMode, data, event) {
+    const waiterToken = waiter.beginAsync();
     const replicationMode = this.replicationMode;
     if (event && event.preventDefault) {
       event.preventDefault();
@@ -116,7 +122,10 @@ export default Controller.extend(copy(DEFAULTS, true), {
         },
         (...args) => this.submitError(...args)
       )
-      .finally(() => this.set('secondaryToRevoke', null));
+      .finally(() => {
+        this.set('secondaryToRevoke', null);
+        waiter.endAsync(waiterToken);
+      });
   },
 
   actions: {
@@ -125,7 +134,7 @@ export default Controller.extend(copy(DEFAULTS, true), {
     },
     closeTokenModal() {
       this.toggleProperty('isModalActive');
-      this.transitionToRoute('mode.secondaries');
+      this.router.transitionTo('vault.cluster.replication.mode.secondaries');
       this.set('isTokenCopied', false);
     },
     onCopy() {

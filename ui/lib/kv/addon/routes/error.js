@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -12,8 +12,8 @@ export default class KvErrorRoute extends Route {
   setupController(controller) {
     super.setupController(...arguments);
     controller.breadcrumbs = [
-      { label: 'secrets', route: 'secrets', linkExternal: true },
-      { label: this.secretMountPath.currentPath, route: 'list' },
+      { label: 'Secrets', route: 'secrets', linkExternal: true },
+      { label: this.secretMountPath.currentPath, route: 'list', model: this.secretMountPath.currentPath },
     ];
     controller.mountName = this.secretMountPath.currentPath;
   }

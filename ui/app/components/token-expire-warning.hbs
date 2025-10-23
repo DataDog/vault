@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 {{#if (and this.showWarning (is-after (now interval=1000) @expirationDate))}}
   <Hds::Alert @type="page" @color="critical" data-test-token-expired-banner as |A|>
@@ -10,7 +10,7 @@
       Your auth token expired on
       {{date-format @expirationDate "MMMM do yyyy, h:mm:ss a"}}. You will need to re-authenticate.
     </A.Description>
-    <A.Link::Standalone
+    <A.LinkStandalone
       @icon="arrow-right"
       @iconPosition="trailing"
       @text="Reauthenticate"
@@ -46,7 +46,7 @@
             {{on "click" (perform this.renewToken)}}
             data-test-renew-token-button
           />
-          <A.Link::Standalone
+          <A.LinkStandalone
             @icon="arrow-right"
             @iconPosition="trailing"
             @color="secondary"

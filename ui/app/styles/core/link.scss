@@ -1,19 +1,19 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .link {
   background: transparent;
   border: 0;
-  color: $blue;
+  color: var(--token-color-foreground-action);
   cursor: pointer;
   display: inline;
   font: inherit;
   line-height: normal;
   margin: 0;
   padding: 0;
-  font-weight: $font-weight-semibold;
+  font-weight: var(--token-typography-font-weight-semibold);
   user-select: text;
 
   &[disabled] {

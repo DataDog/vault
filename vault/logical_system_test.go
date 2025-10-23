@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -24,6 +26,8 @@ import (
 	"github.com/hashicorp/go-hclog"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	aeadwrapper "github.com/hashicorp/go-kms-wrapping/wrappers/aead/v2"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/vault/audit"
 	credUserpass "github.com/hashicorp/vault/builtin/credential/userpass"
 	"github.com/hashicorp/vault/helper/builtinplugins"
 	"github.com/hashicorp/vault/helper/experiments"
@@ -716,7 +720,7 @@ path "bar/baz" {
 	capabilities = ["read", "update"]
 }
 path "bar/baz" {
-	capabilities = ["delete"]
+	capabilities = ["delete", "recover"]
 }
 `
 
@@ -824,7 +828,7 @@ func TestSystemBackend_PathCapabilities(t *testing.T) {
 		expected1 := []string{"create", "sudo", "update"}
 		expected2 := expected1
 		expected3 := []string{"update"}
-		expected4 := []string{"delete", "read", "update"}
+		expected4 := []string{"delete", "read", "recover", "update"}
 
 		if !reflect.DeepEqual(resp.Data[path1], expected1) ||
 			!reflect.DeepEqual(resp.Data[path2], expected2) ||
@@ -1072,7 +1076,7 @@ func TestSystemBackend_remount_auth(t *testing.T) {
 		)
 
 		migrationInfo := resp.Data["migration_info"].(*MountMigrationInfo)
-		if migrationInfo.MigrationStatus != MigrationSuccessStatus.String() {
+		if migrationInfo.MigrationStatus != MigrationStatusSuccess.String() {
 			return fmt.Errorf("Expected migration status to be successful, got %q", migrationInfo.MigrationStatus)
 		}
 		return nil
@@ -1224,7 +1228,7 @@ func TestSystemBackend_remount(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 		migrationInfo := resp.Data["migration_info"].(*MountMigrationInfo)
-		if migrationInfo.MigrationStatus != MigrationSuccessStatus.String() {
+		if migrationInfo.MigrationStatus != MigrationStatusSuccess.String() {
 			return fmt.Errorf("Expected migration status to be successful, got %q", migrationInfo.MigrationStatus)
 		}
 		return nil
@@ -2484,7 +2488,7 @@ func TestSystemBackend_tuneAuth(t *testing.T) {
 			Command: "foo",
 			Args:    []string{},
 			Env:     []string{},
-			Sha256:  []byte{},
+			Sha256:  []byte("sha256"),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -2516,6 +2520,146 @@ func TestSystemBackend_tuneAuth(t *testing.T) {
 	}
 	if resp.Data["plugin_version"] != "v1.0.0" {
 		t.Fatalf("got: %#v, expected: %v", resp.Data["version"], "v1.0.0")
+	}
+}
+
+// TestSystemBackend_tune_updatePreV1MountEntryType tests once Vault is migrated post-v1.0.0,
+// the secret/auth mount was enabled in Vault pre-v1.0.0 has its MountEntry.Type updated
+// to the plugin name when tuned with plugin_version
+func TestSystemBackend_tune_updatePreV1MountEntryType(t *testing.T) {
+	tempDir, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	c, _, _ := TestCoreUnsealedWithConfig(t, &CoreConfig{
+		PluginDirectory: tempDir,
+	})
+
+	ctx := namespace.RootContext(nil)
+	testCases := []struct {
+		pluginName string
+		pluginType consts.PluginType
+		mountTable string
+	}{
+		{"consul", consts.PluginTypeSecrets, "mounts"},
+		{"approle", consts.PluginTypeCredential, "auth"},
+	}
+
+	readMountConfig := func(pluginName, mountTable string) map[string]interface{} {
+		t.Helper()
+		req := logical.TestRequest(t, logical.ReadOperation, mountTable+"/"+pluginName)
+		resp, err := c.systemBackend.HandleRequest(ctx, req)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		return resp.Data
+	}
+
+	for _, tc := range testCases {
+		// Enable the mount
+		{
+			req := logical.TestRequest(t, logical.UpdateOperation, tc.mountTable+"/"+tc.pluginName)
+			req.Data["type"] = tc.pluginName
+
+			resp, err := c.systemBackend.HandleRequest(ctx, req)
+			if err != nil {
+				t.Fatalf("err: %v, resp: %#v", err, resp)
+			}
+			if resp != nil {
+				t.Fatalf("bad: %v", resp)
+			}
+
+			config := readMountConfig(tc.pluginName, tc.mountTable)
+			pluginVersion, ok := config["plugin_version"]
+			if !ok || pluginVersion != "" {
+				t.Fatalf("expected empty plugin version in config: %#v", config)
+			}
+		}
+
+		// Directly set MountEntry's Type to "plugin" and Config.PluginName like Vault pre-v1.0.0 does
+		const mountEntryTypeExternalPlugin = "plugin"
+		{
+			var mountEntry *MountEntry
+			if tc.mountTable == "mounts" {
+				mountEntry, err = c.mounts.find(ctx, tc.pluginName+"/")
+			} else {
+				mountEntry, err = c.auth.find(ctx, tc.pluginName+"/")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mountEntry == nil {
+				t.Fatal()
+			}
+			mountEntry.Type = mountEntryTypeExternalPlugin
+			mountEntry.Config.PluginName = tc.pluginName
+			err := c.persistMounts(ctx, c.mounts, &mountEntry.Local)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Verify MountEntry.Type is still "plugin" (Vault pre-v1.0.0)
+		config := readMountConfig(tc.pluginName, tc.mountTable)
+		mountEntryType, ok := config["type"]
+		if !ok || mountEntryType != mountEntryTypeExternalPlugin {
+			t.Fatalf("expected mount type %s but was %s, config: %#v", mountEntryTypeExternalPlugin, mountEntryType, config)
+		}
+
+		// Register the plugin in the catalog, and then try the same request again.
+		const externalPluginVersion string = "v0.0.7"
+		{
+			file, err := os.Create(filepath.Join(tempDir, tc.pluginName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			err = c.pluginCatalog.Set(context.Background(), pluginutil.SetPluginInput{
+				Name:    tc.pluginName,
+				Type:    tc.pluginType,
+				Version: externalPluginVersion,
+				Command: tc.pluginName,
+				Args:    []string{},
+				Env:     []string{},
+				Sha256:  []byte("sha256"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Tune mount with plugin_version
+		{
+			req := logical.TestRequest(t, logical.UpdateOperation, tc.mountTable+"/"+tc.pluginName+"/tune")
+			req.Data["plugin_version"] = externalPluginVersion
+
+			resp, err := c.systemBackend.HandleRequest(ctx, req)
+			if err != nil {
+				t.Fatalf("err: %v, resp: %#v", err, resp)
+			}
+			if resp != nil {
+				t.Fatalf("bad: %v", resp)
+			}
+		}
+
+		// Verify that plugin_version and MountEntry.Type were updated properly
+		config = readMountConfig(tc.pluginName, tc.mountTable)
+		pluginVersion, ok := config["plugin_version"]
+		if !ok || pluginVersion == "" {
+			t.Fatalf("expected non-empty plugin version in config: %#v", config)
+		}
+		if pluginVersion != externalPluginVersion {
+			t.Fatalf("expected plugin version %#v, got %v", externalPluginVersion, pluginVersion)
+		}
+
+		mountEntryType, ok = config["type"]
+		if !ok || mountEntryType != tc.pluginName {
+			t.Fatalf("expected mount type %s, got %s, config: %#v", tc.pluginName, mountEntryType, config)
+		}
 	}
 }
 
@@ -2558,6 +2702,8 @@ func TestSystemBackend_policyCRUD(t *testing.T) {
 	if resp != nil && (resp.IsError() || len(resp.Data) > 0) {
 		t.Fatalf("bad: %#v", resp)
 	}
+	// TODO (HCL_DUP_KEYS_DEPRECATION): remove this expectation once deprecation is done
+	require.NotContains(t, resp.Warnings, "policy contains duplicate attributes, which will no longer be supported in a future version")
 
 	// validate the response structure for policy named Update
 	schema.ValidateResponse(
@@ -2664,12 +2810,47 @@ func TestSystemBackend_policyCRUD(t *testing.T) {
 	}
 }
 
+// TestSystemBackend_writeHCLDuplicateAttributes checks that trying to create a policy with duplicate HCL attributes
+// results in a warning being returned by the API
+func TestSystemBackend_writeHCLDuplicateAttributes(t *testing.T) {
+	// policy with duplicate attribute
+	rules := `path "foo/" { policy = "read" policy = "read" }`
+	req := logical.TestRequest(t, logical.UpdateOperation, "policy/foo")
+	req.Data["policy"] = rules
+
+	t.Run("fails with env unset", func(t *testing.T) {
+		b := testSystemBackend(t)
+		resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+		require.Error(t, err)
+		require.Error(t, resp.Error())
+		require.EqualError(t, resp.Error(), "failed to parse policy: The argument \"policy\" at 1:31 was already set. Each argument can only be defined once")
+	})
+
+	// TODO (HCL_DUP_KEYS_DEPRECATION): leave only test above once deprecation is done
+	t.Run("warning with env set", func(t *testing.T) {
+		t.Setenv(random.AllowHclDuplicatesEnvVar, "true")
+		b := testSystemBackend(t)
+		resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+		if err != nil {
+			t.Fatalf("err: %v %#v", err, resp)
+		}
+		if resp != nil && (resp.IsError() || len(resp.Data) > 0) {
+			t.Fatalf("bad: %#v", resp)
+		}
+		require.Contains(t, resp.Warnings, "policy contains duplicate attributes, which will no longer be supported in a future version")
+	})
+}
+
 func TestSystemBackend_enableAudit(t *testing.T) {
-	c, b, _ := testCoreSystemBackend(t)
-	c.auditBackends["noop"] = corehelpers.NoopAuditFactory(nil)
+	_, b, _ := testCoreSystemBackend(t)
 
 	req := logical.TestRequest(t, logical.UpdateOperation, "audit/foo")
-	req.Data["type"] = "noop"
+	req.Data = map[string]any{
+		"type": audit.TypeFile,
+		"options": map[string]string{
+			"file_path": "discard",
+		},
+	}
 
 	resp, err := b.HandleRequest(namespace.RootContext(nil), req)
 	if err != nil {
@@ -2735,11 +2916,15 @@ func TestSystemBackend_decodeToken(t *testing.T) {
 }
 
 func TestSystemBackend_auditHash(t *testing.T) {
-	c, b, _ := testCoreSystemBackend(t)
-	c.auditBackends["noop"] = corehelpers.NoopAuditFactory(nil)
+	_, b, _ := testCoreSystemBackend(t)
 
 	req := logical.TestRequest(t, logical.UpdateOperation, "audit/foo")
-	req.Data["type"] = "noop"
+	req.Data = map[string]any{
+		"type": audit.TypeFile,
+		"options": map[string]string{
+			"file_path": "discard",
+		},
+	}
 
 	resp, err := b.HandleRequest(namespace.RootContext(nil), req)
 	if err != nil {
@@ -2774,12 +2959,16 @@ func TestSystemBackend_auditHash(t *testing.T) {
 		true,
 	)
 
-	hash, ok := resp.Data["hash"]
+	hashRaw, ok := resp.Data["hash"]
 	if !ok {
 		t.Fatalf("did not get hash back in response, response was %#v", resp.Data)
 	}
-	if hash.(string) != "hmac-sha256:f9320baf0249169e73850cd6156ded0106e2bb6ad8cab01b7bbbebe6d1065317" {
-		t.Fatalf("bad hash back: %s", hash.(string))
+	hash := hashRaw.(string)
+	if !strings.HasPrefix(hash, "hmac-sha256:") {
+		t.Fatalf("bad hash format: %s", hash)
+	}
+	if len(hash) != 76 { // "hmac-sha256:" + 64
+		t.Fatalf("bad hash length: %s", hash)
 	}
 }
 
@@ -2791,23 +2980,26 @@ func TestSystemBackend_enableAudit_invalid(t *testing.T) {
 	if err != logical.ErrInvalidRequest {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != `unknown backend type: "nope"` {
+	if resp.Data["error"] != "unknown backend type: \"nope\": invalid configuration" {
 		t.Fatalf("bad: %v", resp)
 	}
 }
 
 func TestSystemBackend_auditTable(t *testing.T) {
-	c, b, _ := testCoreSystemBackend(t)
-	c.auditBackends["noop"] = corehelpers.NoopAuditFactory(nil)
+	_, b, _ := testCoreSystemBackend(t)
 
 	req := logical.TestRequest(t, logical.UpdateOperation, "audit/foo")
-	req.Data["type"] = "noop"
-	req.Data["description"] = "testing"
-	req.Data["options"] = map[string]interface{}{
-		"foo": "bar",
+	req.Data = map[string]any{
+		"type":        audit.TypeFile,
+		"description": "testing",
+		"local":       true,
+		"options": map[string]string{
+			"file_path": "discard",
+			"foo":       "bar",
+		},
 	}
-	req.Data["local"] = true
-	b.HandleRequest(namespace.RootContext(nil), req)
+	_, err := b.HandleRequest(namespace.RootContext(nil), req)
+	require.NoError(t, err)
 
 	req = logical.TestRequest(t, logical.ReadOperation, "audit")
 	resp, err := b.HandleRequest(namespace.RootContext(nil), req)
@@ -2818,10 +3010,11 @@ func TestSystemBackend_auditTable(t *testing.T) {
 	exp := map[string]interface{}{
 		"foo/": map[string]interface{}{
 			"path":        "foo/",
-			"type":        "noop",
+			"type":        audit.TypeFile,
 			"description": "testing",
 			"options": map[string]string{
-				"foo": "bar",
+				"file_path": "discard",
+				"foo":       "bar",
 			},
 			"local": true,
 		},
@@ -2832,16 +3025,20 @@ func TestSystemBackend_auditTable(t *testing.T) {
 }
 
 func TestSystemBackend_disableAudit(t *testing.T) {
-	c, b, _ := testCoreSystemBackend(t)
-	c.auditBackends["noop"] = corehelpers.NoopAuditFactory(nil)
+	_, b, _ := testCoreSystemBackend(t)
 
 	req := logical.TestRequest(t, logical.UpdateOperation, "audit/foo")
-	req.Data["type"] = "noop"
-	req.Data["description"] = "testing"
-	req.Data["options"] = map[string]interface{}{
-		"foo": "bar",
+	req.Data = map[string]any{
+		"type":        audit.TypeFile,
+		"description": "testing",
+		"local":       true,
+		"options": map[string]string{
+			"file_path": "discard",
+			"foo":       "bar",
+		},
 	}
-	b.HandleRequest(namespace.RootContext(nil), req)
+	_, err := b.HandleRequest(namespace.RootContext(nil), req)
+	require.NoError(t, err)
 
 	// Deregister it
 	req = logical.TestRequest(t, logical.DeleteOperation, "audit/foo")
@@ -4371,8 +4568,8 @@ func TestSystemBackend_InternalUIMounts(t *testing.T) {
 			"token/": map[string]interface{}{
 				"options": map[string]string(nil),
 				"config": map[string]interface{}{
-					"default_lease_ttl": int64(0),
-					"max_lease_ttl":     int64(0),
+					"default_lease_ttl": int64(2764800),
+					"max_lease_ttl":     int64(2764800),
 					"force_no_cache":    false,
 					"token_type":        "default-service",
 				},
@@ -4539,6 +4736,91 @@ func TestSystemBackend_InternalUIMount(t *testing.T) {
 	if err != logical.ErrPermissionDenied {
 		t.Fatal("expected permission denied error")
 	}
+}
+
+// TestSystemBackend_InternalUIResultantACL verifies that segment wildcard and prefix glob ACLs are emitted correctly in the internal UI resultant-acl endpoint.
+func TestSystemBackend_InternalUIResultantACL(t *testing.T) {
+	ctx := namespace.RootContext(nil)
+	core, b, rootToken := testCoreSystemBackend(t)
+
+	// Define a policy that includes a segment wildcard and a prefix glob.
+	rules := `
+name = "ui-res-acl-test"
+path "+/auth/*" {
+  capabilities = ["read"]
+}
+path "sys/*" {
+  capabilities = ["update"]
+}`
+
+	pol, err := ParseACLPolicy(namespace.RootNamespace, rules)
+	require.NoError(t, err)
+	require.NoError(t, core.policyStore.SetPolicy(ctx, pol))
+
+	// Create a non-root token that has this policy attached
+	testMakeServiceTokenViaBackend(t, core.tokenStore, rootToken, "tokenid", "", []string{"ui-res-acl-test"})
+
+	// Call the endpoint as the non-root token; this endpoint evaluates the caller.
+	req := logical.TestRequest(t, logical.ReadOperation, "internal/ui/resultant-acl")
+	req.ClientToken = "tokenid"
+
+	resp, err := b.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
+
+	// Validate response shape.
+	schema.ValidateResponse(
+		t,
+		schema.GetResponseSchema(t, b.(*SystemBackend).Route(req.Path), req.Operation),
+		resp,
+		true,
+	)
+
+	// Basic flags we expect back for a non-root token we’re inspecting.
+	if v, ok := resp.Data["root"].(bool); ok {
+		require.False(t, v, "expected non-root token")
+	}
+
+	// Extract glob paths and ensure both entries are present with expected caps.
+	globPaths, ok := resp.Data["glob_paths"].(map[string]interface{})
+	require.True(t, ok, "glob_paths missing or wrong type")
+
+	getCaps := func(m map[string]interface{}) []string {
+		raw := m["capabilities"]
+		switch a := raw.(type) {
+		case []string:
+			return a
+		case []interface{}:
+			out := make([]string, 0, len(a))
+			for _, x := range a {
+				if s, ok := x.(string); ok {
+					out = append(out, s)
+				}
+			}
+			return out
+		default:
+			return nil
+		}
+	}
+
+	// 1) segment wildcard preserved
+	segRaw, ok := globPaths["+/auth/*"]
+	require.True(t, ok, "segment wildcard path not found")
+	seg, ok := segRaw.(map[string]interface{})
+	require.True(t, ok, "segment wildcard value wrong type")
+	require.Equal(t, []string{"read"}, getCaps(seg))
+
+	// 2) prefix glob preserved (the backend may normalize to "sys/*" or "sys/")
+	prefixKey := "sys/*"
+	if _, ok := globPaths["sys/"]; ok {
+		prefixKey = "sys/"
+	}
+	prefRaw, ok := globPaths[prefixKey]
+	require.True(t, ok, "prefix glob path not found")
+	pref, ok := prefRaw.(map[string]interface{})
+	require.True(t, ok, "prefix glob value wrong type")
+	require.Contains(t, getCaps(pref), "update")
 }
 
 func TestSystemBackend_OpenAPI(t *testing.T) {
@@ -6287,7 +6569,7 @@ func TestValidateVersion_HelpfulErrorWhenBuiltinOverridden(t *testing.T) {
 		Command: command,
 		Args:    nil,
 		Env:     nil,
-		Sha256:  nil,
+		Sha256:  []byte("sha256"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -6949,4 +7231,284 @@ func TestPathInternalUICustomMessagesCommon(t *testing.T) {
 	assert.Equal(t, 3, len(resp.Data["keys"].([]string)))
 	assert.Contains(t, resp.Data, "key_info")
 	assert.Equal(t, 3, len(resp.Data["key_info"].(map[string]any)))
+}
+
+// TestGetLeaderStatus_RedactionSettings verifies that the GetLeaderStatus response
+// is properly redacted based on the provided context.Context.
+func TestGetLeaderStatus_RedactionSettings(t *testing.T) {
+	testCluster := NewTestCluster(t, nil, nil)
+
+	testCluster.Start()
+	defer testCluster.Cleanup()
+
+	testCore := testCluster.Cores[0]
+
+	// Check with no redaction settings
+	resp, err := testCore.GetLeaderStatus(context.Background())
+	assert.NoError(t, err)
+	assert.NotEmpty(t, resp.LeaderAddress)
+	assert.NotEmpty(t, resp.LeaderClusterAddress)
+
+	// Check with redaction setting explicitly disabled
+	ctx := logical.CreateContextRedactionSettings(context.Background(), false, false, false)
+	resp, err = testCore.GetLeaderStatus(ctx)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, resp.LeaderAddress)
+	assert.NotEmpty(t, resp.LeaderClusterAddress)
+
+	// Check with redaction setting enabled
+	ctx = logical.CreateContextRedactionSettings(context.Background(), false, true, false)
+	resp, err = testCore.GetLeaderStatus(ctx)
+	assert.NoError(t, err)
+	assert.Empty(t, resp.LeaderAddress)
+	assert.Empty(t, resp.LeaderClusterAddress)
+}
+
+// TestGetSealStatus_RedactionSettings verifies that the GetSealStatus response
+// is properly redacted based on the provided context.Context.
+func TestGetSealStatus_RedactionSettings(t *testing.T) {
+	// This test function cannot be parallelized, because it messes with the
+	// global version.BuildDate variable.
+	oldBuildDate := version.BuildDate
+	version.BuildDate = time.Now().Format(time.RFC3339)
+	defer func() { version.BuildDate = oldBuildDate }()
+
+	testCluster := NewTestCluster(t, &CoreConfig{
+		ClusterName: "secret-cluster-name",
+	}, nil)
+
+	testCluster.Start()
+	defer testCluster.Cleanup()
+
+	testCore := testCluster.Cores[0]
+
+	// Check with no redaction settings
+	resp, err := testCore.GetSealStatus(context.Background(), false)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, resp.Version)
+	assert.NotEmpty(t, resp.BuildDate)
+	assert.NotEmpty(t, resp.ClusterName)
+
+	// Check with redaction setting explicitly disabled
+	ctx := logical.CreateContextRedactionSettings(context.Background(), false, false, false)
+	resp, err = testCore.GetSealStatus(ctx, false)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, resp.Version)
+	assert.NotEmpty(t, resp.BuildDate)
+	assert.NotEmpty(t, resp.ClusterName)
+
+	// Check with redaction setting enabled
+	ctx = logical.CreateContextRedactionSettings(context.Background(), true, false, true)
+	resp, err = testCore.GetSealStatus(ctx, false)
+	assert.NoError(t, err)
+	assert.Empty(t, resp.Version)
+	assert.Empty(t, resp.BuildDate)
+	assert.Empty(t, resp.ClusterName)
+}
+
+// TestWellKnownSysApi verifies the GET/LIST endpoints of /sys/well-known and /sys/well-known/<label>
+func TestWellKnownSysApi(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+	b := c.systemBackend
+
+	myUuid, err := uuid.GenerateUUID()
+	require.NoError(t, err, "failed generating uuid")
+
+	err = c.WellKnownRedirects.TryRegister(context.Background(), c, myUuid, "mylabel1", "test-path/foo1")
+	require.NoError(t, err, "failed registering well-known redirect 1")
+
+	err = c.WellKnownRedirects.TryRegister(context.Background(), c, myUuid, "mylabel2", "test-path/foo2")
+	require.NoError(t, err, "failed registering well-known redirect 2")
+
+	// Test LIST operation
+	req := logical.TestRequest(t, logical.ListOperation, "well-known")
+	resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+	require.NoError(t, err, "failed list well-known request")
+	require.NotNil(t, resp, "response from list well-known request was nil")
+
+	require.Contains(t, resp.Data["keys"], "mylabel1")
+	require.Contains(t, resp.Data["keys"], "mylabel2")
+	require.Len(t, resp.Data["keys"], 2)
+
+	keyInfo := resp.Data["key_info"].(map[string]interface{})
+	keyInfoLabel1 := keyInfo["mylabel1"].(map[string]interface{})
+	require.Equal(t, myUuid, keyInfoLabel1["mount_uuid"])
+	require.Equal(t, "test-path/foo1", keyInfoLabel1["prefix"])
+
+	keyInfoLabel2 := keyInfo["mylabel2"].(map[string]interface{})
+	require.Equal(t, myUuid, keyInfoLabel2["mount_uuid"])
+	require.Equal(t, "test-path/foo2", keyInfoLabel2["prefix"])
+
+	// Test GET operation
+	req = logical.TestRequest(t, logical.ReadOperation, "well-known/mylabel1")
+	resp, err = b.HandleRequest(namespace.RootContext(nil), req)
+	require.NoError(t, err, "failed get well-known request")
+	require.NotNil(t, resp, "response from get well-known request was nil")
+
+	require.Equal(t, myUuid, resp.Data["mount_uuid"])
+	require.Equal(t, "test-path/foo1", resp.Data["prefix"])
+
+	// Test GET operation on unknown label
+	req = logical.TestRequest(t, logical.ReadOperation, "well-known/mylabel1-unknown")
+	resp, err = b.HandleRequest(namespace.RootContext(nil), req)
+	require.NoError(t, err, "failed get well-known request")
+	require.Nil(t, resp, "response from unknown should have been nil was %v", resp)
+}
+
+// Test_sanitizePath verifies that sanitizePath can correctly remove leading
+// slashes and add trailing slashes
+func Test_sanitizePath(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		path string
+		want string
+	}{
+		{
+			path: "/mount/path",
+			want: "mount/path/",
+		},
+		{
+			path: "///mount/path",
+			want: "mount/path/",
+		},
+		{
+			path: "/mount/path/",
+			want: "mount/path/",
+		},
+		{
+			path: "//mount/path/",
+			want: "mount/path/",
+		},
+		{
+			path: "/\\mount/path/",
+			want: "mount/path/",
+		},
+		{
+			path: "\\mount/path/",
+			want: "\\mount/path/",
+		},
+		{
+			path: "\\//mount/path/",
+			want: "\\//mount/path/",
+		},
+		{
+			path: "",
+			want: "",
+		},
+		{
+			path: "/",
+			want: "",
+		},
+		{
+			path: "///",
+			want: "",
+		},
+		{
+			path: "\\",
+			want: "\\/",
+		},
+		{
+			path: "\\/",
+			want: "\\/",
+		},
+		{
+			path: "/\\",
+			want: "",
+		},
+	}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, sanitizePath(tc.path))
+		})
+	}
+}
+
+// TestFuzz_sanitizePath verifies that randomly generated paths must abide by
+// the invariants:
+//   - if the original path was empty or was only made up of slashes, the
+//     sanitized path must be empty
+//   - otherwise,
+//     -- the sanitized path must not have a slash as a prefix
+//     -- the sanitized path must have a slash as a suffix
+//
+// The randomly generated paths will always have at least 1 slash
+func TestFuzz_sanitizePath(t *testing.T) {
+	slashesOrEmpty := regexp.MustCompile(`/*`)
+	valid := func(path, newPath string) bool {
+		if newPath == "" && slashesOrEmpty.MatchString(path) {
+			return true
+		}
+		if strings.HasPrefix(newPath, "/") {
+			return false
+		}
+		return strings.HasSuffix(newPath, "/")
+	}
+
+	r := rand.New(rand.NewSource(time.Now().Unix()))
+	gen := &random.StringGenerator{
+		Length: 10,
+		Rules: []random.Rule{
+			random.CharsetRule{
+				Charset:  random.LowercaseRuneset,
+				MinChars: 1,
+			},
+			random.CharsetRule{
+				Charset:  []rune{'/'},
+				MinChars: 1,
+			},
+		},
+	}
+	for i := 0; i < 100; i++ {
+		path, err := gen.Generate(context.Background(), r)
+		require.NoError(t, err)
+		newPath := sanitizePath(path)
+		require.True(t, valid(path, newPath), `"%s" not sanitized correctly, got "%s"`, path, newPath)
+	}
+}
+
+// TestSealStatus_Removed checks if the seal-status endpoint returns the
+// correct value for RemovedFromCluster when provided with different backends
+func TestSealStatus_Removed(t *testing.T) {
+	removedCore, err := TestCoreWithMockRemovableNodeHABackend(t, true)
+	require.NoError(t, err)
+	notRemovedCore, err := TestCoreWithMockRemovableNodeHABackend(t, false)
+	require.NoError(t, err)
+	testCases := []struct {
+		name      string
+		core      *Core
+		wantField bool
+		wantTrue  bool
+	}{
+		{
+			name:      "removed",
+			core:      removedCore,
+			wantField: true,
+			wantTrue:  true,
+		},
+		{
+			name:      "not removed",
+			core:      notRemovedCore,
+			wantField: true,
+			wantTrue:  false,
+		},
+		{
+			name:      "different backend",
+			core:      TestCore(t),
+			wantField: false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, err := tc.core.GetSealStatus(context.Background(), true)
+			require.NoError(t, err)
+			if tc.wantField {
+				require.NotNil(t, status.RemovedFromCluster)
+				require.Equal(t, tc.wantTrue, *status.RemovedFromCluster)
+			} else {
+				require.Nil(t, status.RemovedFromCluster)
+			}
+		})
+	}
 }

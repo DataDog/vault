@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -24,6 +24,10 @@ func (c *ServerCommand) ReloadedCh() chan struct{} {
 	return c.reloadedCh
 }
 
+func (c *ServerCommand) LicenseReloadedCh() chan error {
+	return c.licenseReloadedCh
+}
+
 func testServerCommand(tb testing.TB) (*cli.MockUi, *ServerCommand) {
 	tb.Helper()
 
@@ -36,13 +40,14 @@ func testServerCommand(tb testing.TB) (*cli.MockUi, *ServerCommand) {
 		SighupCh:   MakeSighupCh(),
 		SigUSR2Ch:  MakeSigUSR2Ch(),
 		PhysicalBackends: map[string]physical.Factory{
-			"inmem":    physInmem.NewInmem,
-			"inmem_ha": physInmem.NewInmemHA,
+			"inmem":               physInmem.NewInmem,
+			"inmem_ha":            physInmem.NewInmemHA,
+			"inmem_transactional": physInmem.NewTransactionalInmem,
 		},
 
 		// These prevent us from random sleep guessing...
 		startedCh:         make(chan struct{}, 5),
 		reloadedCh:        make(chan struct{}, 5),
-		licenseReloadedCh: make(chan error),
+		licenseReloadedCh: make(chan error, 1),
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package gcp
@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 
@@ -151,7 +151,7 @@ func (g *gcpMethod) Authenticate(ctx context.Context, client *api.Client) (retPa
 				return
 			}
 			defer resp.Body.Close()
-			jwtBytes, err := ioutil.ReadAll(resp.Body)
+			jwtBytes, err := io.ReadAll(resp.Body)
 			if err != nil {
 				retErr = fmt.Errorf("error reading instance token response body: %w", err)
 				return

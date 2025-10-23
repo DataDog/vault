@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -108,13 +108,17 @@ func TestPluginReloadCommand_Run(t *testing.T) {
 		ui, cmd := testPluginReloadCommand(t)
 		cmd.client = client
 
-		if err := client.Sys().RegisterPlugin(&api.RegisterPluginInput{
+		resp, err := client.Sys().RegisterPluginDetailed(&api.RegisterPluginInput{
 			Name:    pluginName,
 			Type:    api.PluginTypeCredential,
 			Command: pluginName,
 			SHA256:  sha256Sum,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if len(resp.Warnings) > 0 {
+			t.Errorf("expected no warnings, got: %v", resp.Warnings)
 		}
 
 		code := cmd.Run([]string{

@@ -1,22 +1,20 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-import { later, _cancelTimers as cancelTimers } from '@ember/runloop';
 import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
-import { render, settled } from '@ember/test-helpers';
+import { render, click, fillIn } from '@ember/test-helpers';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import { allowAllCapabilitiesStub, noopStub } from 'vault/tests/helpers/stubs';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import { mountBackend } from 'vault/tests/helpers/components/mount-backend-form-helpers';
+import { filterEnginesByMountCategory } from 'vault/utils/all-engines-metadata';
+
 import hbs from 'htmlbars-inline-precompile';
-
-import { create } from 'ember-cli-page-object';
-import mountBackendForm from '../../pages/components/mount-backend-form';
-
 import sinon from 'sinon';
-
-const component = create(mountBackendForm);
+import AuthMethodForm from 'vault/forms/auth/method';
 
 module('Integration | Component | mount backend form', function (hooks) {
   setupRenderingTest(hooks);
@@ -29,70 +27,75 @@ module('Integration | Component | mount backend form', function (hooks) {
     this.store = this.owner.lookup('service:store');
     this.server.post('/sys/capabilities-self', allowAllCapabilitiesStub());
     this.server.post('/sys/auth/foo', noopStub());
-    this.server.post('/sys/mounts/foo', noopStub());
     this.onMountSuccess = sinon.spy();
-  });
-
-  hooks.afterEach(function () {
-    this.server.shutdown();
   });
 
   module('auth method', function (hooks) {
     hooks.beforeEach(function () {
-      this.model = this.store.createRecord('auth-method');
-      this.model.set('config', this.store.createRecord('mount-config'));
+      const defaults = {
+        config: { listing_visibility: false },
+      };
+      this.model = new AuthMethodForm(defaults, { isNew: true });
     });
 
     test('it renders default state', async function (assert) {
+      assert.expect(15);
       await render(
         hbs`<MountBackendForm @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
       );
-      assert.strictEqual(
-        component.header,
-        'Enable an Authentication Method',
-        'renders auth header in default state'
-      );
-      assert.ok(component.types.length > 0, 'renders type picker');
+      assert
+        .dom(GENERAL.title)
+        .hasText('Enable an Authentication Method', 'renders auth header in default state');
+
+      for (const method of filterEnginesByMountCategory({
+        mountCategory: 'auth',
+        isEnterprise: false,
+      }).filter((engine) => engine.type !== 'token')) {
+        assert
+          .dom(GENERAL.cardContainer(method.type))
+          .hasText(method.displayName, `renders type:${method.displayName} picker`);
+      }
     });
 
     test('it changes path when type is changed', async function (assert) {
       await render(
         hbs`<MountBackendForm @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
       );
-      await component.selectType('aws');
-      assert.strictEqual(component.pathValue, 'aws', 'sets the value of the type');
-      await component.back();
-      await component.selectType('approle');
-      assert.strictEqual(component.pathValue, 'approle', 'updates the value of the type');
+
+      await click(GENERAL.cardContainer('aws'));
+      assert.dom(GENERAL.inputByAttr('path')).hasValue('aws', 'sets the value of the type');
+      await click(GENERAL.backButton);
+      await click(GENERAL.cardContainer('approle'));
+      assert.dom(GENERAL.inputByAttr('path')).hasValue('approle', 'updates the value of the type');
     });
 
     test('it keeps path value if the user has changed it', async function (assert) {
       await render(
         hbs`<MountBackendForm @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
       );
-      await component.selectType('approle');
+      await click(GENERAL.cardContainer('approle'));
       assert.strictEqual(this.model.type, 'approle', 'Updates type on model');
-      assert.strictEqual(component.pathValue, 'approle', 'defaults to approle (first in the list)');
-      await component.path('newpath');
+      assert.dom(GENERAL.inputByAttr('path')).hasValue('approle', 'defaults to approle (first in the list)');
+      await fillIn(GENERAL.inputByAttr('path'), 'newpath');
       assert.strictEqual(this.model.path, 'newpath', 'Updates path on model');
-      await component.back();
+      await click(GENERAL.backButton);
       assert.strictEqual(this.model.type, '', 'Clears type on back');
       assert.strictEqual(this.model.path, 'newpath', 'Path is still newPath');
-      await component.selectType('aws');
+      await click(GENERAL.cardContainer('aws'));
       assert.strictEqual(this.model.type, 'aws', 'Updates type on model');
-      assert.strictEqual(component.pathValue, 'newpath', 'keeps custom path value');
+      assert.dom(GENERAL.inputByAttr('path')).hasValue('newpath', 'keeps custom path value');
     });
 
     test('it does not show a selected token type when first mounting an auth method', async function (assert) {
       await render(
         hbs`<MountBackendForm @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
       );
-      await component.selectType('github');
-      await component.toggleOptions();
+      await click(GENERAL.cardContainer('github'));
+      await click(GENERAL.button('Method Options'));
       assert
-        .dom('[data-test-input="config.tokenType"]')
+        .dom(GENERAL.inputByAttr('config.token_type'))
         .hasValue('', 'token type does not have a default value.');
-      const selectOptions = document.querySelector('[data-test-input="config.tokenType"]').options;
+      const selectOptions = document.querySelector(GENERAL.inputByAttr('config.token_type')).options;
       assert.strictEqual(selectOptions[1].text, 'default-service', 'first option is default-service');
       assert.strictEqual(selectOptions[2].text, 'default-batch', 'second option is default-batch');
       assert.strictEqual(selectOptions[3].text, 'batch', 'third option is batch');
@@ -112,81 +115,11 @@ module('Integration | Component | mount backend form', function (hooks) {
       await render(
         hbs`<MountBackendForm @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
       );
-      await component.mount('approle', 'foo');
-      later(() => cancelTimers(), 50);
-      await settled();
+      await mountBackend('approle', 'foo');
 
-      assert.ok(spy.calledOnce, 'calls the passed success method');
-      assert.ok(
+      assert.true(spy.calledOnce, 'calls the passed success method');
+      assert.true(
         this.flashSuccessSpy.calledWith('Successfully mounted the approle auth method at foo.'),
-        'Renders correct flash message'
-      );
-    });
-  });
-
-  module('secrets engine', function (hooks) {
-    hooks.beforeEach(function () {
-      this.model = this.store.createRecord('secret-engine');
-      this.model.set('config', this.store.createRecord('mount-config'));
-    });
-
-    test('it renders secret specific headers', async function (assert) {
-      await render(
-        hbs`<MountBackendForm  @mountType="secret" @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
-      );
-      assert.strictEqual(component.header, 'Enable a Secrets Engine', 'renders secrets header');
-      assert.ok(component.types.length > 0, 'renders type picker');
-    });
-
-    test('it changes path when type is changed', async function (assert) {
-      await render(
-        hbs`<MountBackendForm @mountType="secret" @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
-      );
-      await component.selectType('azure');
-      assert.strictEqual(component.pathValue, 'azure', 'sets the value of the type');
-      await component.back();
-      await component.selectType('nomad');
-      assert.strictEqual(component.pathValue, 'nomad', 'updates the value of the type');
-    });
-
-    test('it keeps path value if the user has changed it', async function (assert) {
-      await render(
-        hbs`<MountBackendForm @mountType="secret" @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
-      );
-      await component.selectType('kv');
-      assert.strictEqual(this.model.type, 'kv', 'Updates type on model');
-      assert.strictEqual(component.pathValue, 'kv', 'path matches mount type');
-      await component.path('newpath');
-      assert.strictEqual(this.model.path, 'newpath', 'Updates path on model');
-      await component.back();
-      assert.strictEqual(this.model.type, '', 'Clears type on back');
-      assert.strictEqual(this.model.path, 'newpath', 'path is still newpath');
-      await component.selectType('ssh');
-      assert.strictEqual(this.model.type, 'ssh', 'Updates type on model');
-      assert.strictEqual(component.pathValue, 'newpath', 'path stays the same');
-    });
-
-    test('it calls mount success', async function (assert) {
-      assert.expect(3);
-
-      this.server.post('/sys/mounts/foo', () => {
-        assert.ok(true, 'it calls enable on an secrets engine');
-        return [204, { 'Content-Type': 'application/json' }];
-      });
-      const spy = sinon.spy();
-      this.set('onMountSuccess', spy);
-
-      await render(
-        hbs`<MountBackendForm @mountType="secret" @mountModel={{this.model}} @onMountSuccess={{this.onMountSuccess}} />`
-      );
-
-      await component.mount('ssh', 'foo');
-      later(() => cancelTimers(), 50);
-      await settled();
-
-      assert.ok(spy.calledOnce, 'calls the passed success method');
-      assert.ok(
-        this.flashSuccessSpy.calledWith('Successfully mounted the ssh secrets engine at foo.'),
         'Renders correct flash message'
       );
     });

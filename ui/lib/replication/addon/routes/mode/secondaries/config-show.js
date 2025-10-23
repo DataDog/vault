@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -29,9 +29,9 @@ export default Base.extend({
     if (
       !this.version.hasPerfReplication ||
       replicationMode !== 'performance' ||
-      !cluster.get(`${replicationMode}.isPrimary`)
+      !cluster[replicationMode].isPrimary
     ) {
-      return this.transitionTo('mode', cluster.get('name'), replicationMode);
+      return this.router.transitionTo('vault.cluster.replication.mode', cluster.name, replicationMode);
     }
   },
 });

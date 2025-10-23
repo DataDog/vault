@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package aws
@@ -66,7 +66,7 @@ func (b *backend) getGroupPolicies(ctx context.Context, s logical.Storage, iamGr
 		return nil, nil, nil
 	}
 
-	iamClient, err = b.clientIAM(ctx, s)
+	iamClient, err = b.clientIAM(ctx, s, nil)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -48,7 +48,7 @@ const testHelper = require('./test-helper');
   console.log('VAULT_ADDR=' + vaultAddr);
 
   try {
-    const testArgs = ['test', '-c', 'testem.enos.js'];
+    const testArgs = ['test', '-c', 'scripts/testem.enos.js'];
 
     if (process.env.TEST_FILTER && process.env.TEST_FILTER.length > 0) {
       testArgs.push('-f=' + process.env.TEST_FILTER);

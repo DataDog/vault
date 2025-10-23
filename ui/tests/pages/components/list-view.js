@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,12 +17,6 @@ export default {
     menuToggle: clickable('[data-test-popup-menu-trigger]'),
   }),
   menuItems: collection('.ember-basic-dropdown-content li', {
-    testContainer: '#ember-testing',
-  }),
-  delete: clickable('[data-test-confirm-action-trigger]', {
-    testContainer: '#ember-testing',
-  }),
-  confirmDelete: clickable('[data-test-confirm-button]', {
     testContainer: '#ember-testing',
   }),
 };

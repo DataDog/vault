@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package transit
@@ -28,7 +28,7 @@ type batchResponseHMACItem struct {
 	HMAC string `json:"hmac,omitempty" mapstructure:"hmac"`
 
 	// Valid indicates whether signature matches the signature derived from the input string
-	Valid bool `json:"valid,omitempty" mapstructure:"valid"`
+	Valid bool `json:"valid" mapstructure:"valid"`
 
 	// Error, if set represents a failure encountered while encrypting a
 	// corresponding batch request item
@@ -257,7 +257,19 @@ func (b *backend) pathHMACVerify(ctx context.Context, req *logical.Request, d *f
 	name := d.Get("name").(string)
 	algorithm := d.Get("urlalgorithm").(string)
 	if algorithm == "" {
-		algorithm = d.Get("algorithm").(string)
+		hashAlgorithmRaw, hasHashAlgorithm := d.GetOk("hash_algorithm")
+		algorithmRaw, hasAlgorithm := d.GetOk("algorithm")
+
+		// As `algorithm` is deprecated, make sure we only read it if
+		// `hash_algorithm` is not present.
+		switch {
+		case hasHashAlgorithm:
+			algorithm = hashAlgorithmRaw.(string)
+		case hasAlgorithm:
+			algorithm = algorithmRaw.(string)
+		default:
+			algorithm = d.Get("hash_algorithm").(string)
+		}
 	}
 
 	// Get the policy

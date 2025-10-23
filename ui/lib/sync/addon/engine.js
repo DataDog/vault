@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -14,8 +14,17 @@ export default class SyncEngine extends Engine {
   modulePrefix = modulePrefix;
   Resolver = Resolver;
   dependencies = {
-    services: ['flash-messages', 'router', 'store', 'version'],
-    externalRoutes: ['kvSecretDetails', 'clientCountOverview'],
+    services: [
+      'flash-messages',
+      'flags',
+      'app-router',
+      'store',
+      'api',
+      'capabilities',
+      'pagination',
+      'version',
+    ],
+    externalRoutes: ['kvSecretOverview', 'clientCountOverview'],
   };
 }
 

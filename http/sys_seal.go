@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -85,6 +85,14 @@ func handleSysUnseal(core *vault.Core) http.Handler {
 			return
 		}
 
+		// Check if this node was removed from the cluster. If so, respond with an error and return,
+		// since we don't want a removed node to be able to unseal.
+		removed, ok := core.IsRemovedFromCluster()
+		if ok && removed {
+			respondError(w, http.StatusInternalServerError, errors.New("node was removed from a HA cluster"))
+			return
+		}
+
 		// Parse the request
 		var req UnsealRequest
 		if _, err := parseJSONRequest(core.PerfStandby(), r, w, &req); err != nil {
@@ -98,7 +106,7 @@ func handleSysUnseal(core *vault.Core) http.Handler {
 				return
 			}
 			core.ResetUnsealProcess()
-			handleSysSealStatusRaw(core, w)
+			handleSysSealStatusRaw(core, w, r)
 			return
 		}
 
@@ -148,7 +156,7 @@ func handleSysUnseal(core *vault.Core) http.Handler {
 		}
 
 		// Return the seal status
-		handleSysSealStatusRaw(core, w)
+		handleSysSealStatusRaw(core, w, r)
 	})
 }
 
@@ -159,7 +167,7 @@ func handleSysSealStatus(core *vault.Core, opt ...ListenerConfigOption) http.Han
 			return
 		}
 
-		handleSysSealStatusRaw(core, w, opt...)
+		handleSysSealStatusRaw(core, w, r, opt...)
 	})
 }
 
@@ -174,25 +182,30 @@ func handleSysSealBackendStatus(core *vault.Core) http.Handler {
 	})
 }
 
-func handleSysSealStatusRaw(core *vault.Core, w http.ResponseWriter, opt ...ListenerConfigOption) {
-	ctx := context.Background()
+func handleSysSealStatusRaw(core *vault.Core, w http.ResponseWriter, r *http.Request, opt ...ListenerConfigOption) {
+	ctx := r.Context()
+
+	var tokenPresent bool
+	token := r.Header.Get(consts.AuthHeaderName)
+	if token != "" {
+		// We don't care about the error, we just want to know if the token exists
+		lock := core.HALock()
+		lock.Lock()
+		tokenEntry, err := core.LookupToken(ctx, token)
+		lock.Unlock()
+		tokenPresent = err == nil && tokenEntry != nil
+	}
+
+	// If there are is no valid token then we will redact the specified values
+	if tokenPresent {
+		ctx = logical.CreateContextRedactionSettings(ctx, false, false, false)
+	}
+
 	status, err := core.GetSealStatus(ctx, true)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-
-	opts, err := getOpts(opt...)
-
-	if opts.withRedactVersion {
-		status.Version = opts.withRedactionValue
-		status.BuildDate = opts.withRedactionValue
-	}
-
-	if opts.withRedactClusterName {
-		status.ClusterName = opts.withRedactionValue
-	}
-
 	respondOk(w, status)
 }
 
@@ -203,7 +216,6 @@ func handleSysSealBackendStatusRaw(core *vault.Core, w http.ResponseWriter, r *h
 		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
-
 	respondOk(w, status)
 }
 

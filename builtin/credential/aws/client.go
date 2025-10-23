@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package awsauth
@@ -6,15 +6,21 @@ package awsauth
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/sts"
 	cleanhttp "github.com/hashicorp/go-cleanhttp"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-secure-stdlib/awsutil"
+	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/sdk/helper/pluginutil"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
@@ -58,6 +64,26 @@ func (b *backend) getRawClientConfig(ctx context.Context, s logical.Storage, reg
 		credsConfig.AccessKey = config.AccessKey
 		credsConfig.SecretKey = config.SecretKey
 		maxRetries = config.MaxRetries
+
+		if config.IdentityTokenAudience != "" {
+			ns, err := namespace.FromContext(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get namespace from context: %w", err)
+			}
+
+			fetcher := &PluginIdentityTokenFetcher{
+				sys:      b.System(),
+				logger:   b.Logger(),
+				ns:       ns,
+				audience: config.IdentityTokenAudience,
+				ttl:      config.IdentityTokenTTL,
+			}
+
+			sessionSuffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+			credsConfig.RoleSessionName = fmt.Sprintf("vault-aws-auth-%s", sessionSuffix)
+			credsConfig.WebIdentityTokenFetcher = fetcher
+			credsConfig.RoleARN = config.RoleARN
+		}
 	}
 
 	credsConfig.HTTPClient = cleanhttp.DefaultClient()
@@ -84,7 +110,7 @@ func (b *backend) getRawClientConfig(ctx context.Context, s logical.Storage, reg
 // It uses getRawClientConfig to obtain config for the runtime environment, and if
 // stsRole is a non-empty string, it will use AssumeRole to obtain a set of assumed
 // credentials. The credentials will expire after 15 minutes but will auto-refresh.
-func (b *backend) getClientConfig(ctx context.Context, s logical.Storage, region, stsRole, accountID, clientType string) (*aws.Config, error) {
+func (b *backend) getClientConfig(ctx context.Context, s logical.Storage, region, stsRole, externalID, accountID, clientType string) (*aws.Config, error) {
 	config, err := b.getRawClientConfig(ctx, s, region, clientType)
 	if err != nil {
 		return nil, err
@@ -105,7 +131,12 @@ func (b *backend) getClientConfig(ctx context.Context, s logical.Storage, region
 		if err != nil {
 			return nil, err
 		}
-		assumedCredentials := stscreds.NewCredentials(sess, stsRole)
+		var assumedCredentials *credentials.Credentials
+		if externalID != "" {
+			assumedCredentials = stscreds.NewCredentials(sess, stsRole, func(p *stscreds.AssumeRoleProvider) { p.ExternalID = aws.String(externalID) })
+		} else {
+			assumedCredentials = stscreds.NewCredentials(sess, stsRole)
+		}
 		// Test that we actually have permissions to assume the role
 		if _, err = assumedCredentials.Get(); err != nil {
 			return nil, err
@@ -144,10 +175,7 @@ func (b *backend) getClientConfig(ctx context.Context, s logical.Storage, region
 // the cached EC2 client objects will be flushed. Config mutex lock should be
 // acquired for write operation before calling this method.
 func (b *backend) flushCachedEC2Clients() {
-	// deleting items in map during iteration is safe
-	for region := range b.EC2ClientsMap {
-		delete(b.EC2ClientsMap, region)
-	}
+	b.EC2ClientsMap = make(map[clientKey]*ec2.EC2)
 }
 
 // flushCachedIAMClients deletes all the cached iam client objects from the
@@ -155,10 +183,7 @@ func (b *backend) flushCachedEC2Clients() {
 // the backend, all the cached IAM client objects will be flushed. Config mutex
 // lock should be acquired for write operation before calling this method.
 func (b *backend) flushCachedIAMClients() {
-	// deleting items in map during iteration is safe
-	for region := range b.IAMClientsMap {
-		delete(b.IAMClientsMap, region)
-	}
+	b.IAMClientsMap = make(map[clientKey]*iam.IAM)
 }
 
 // Gets an entry out of the user ID cache
@@ -180,30 +205,41 @@ func (b *backend) setCachedUserId(userId, arn string) {
 	}
 }
 
-func (b *backend) stsRoleForAccount(ctx context.Context, s logical.Storage, accountID string) (string, error) {
+func (b *backend) stsRoleForAccount(ctx context.Context, s logical.Storage, accountID string) (string, string, error) {
 	// Check if an STS configuration exists for the AWS account
 	sts, err := b.lockedAwsStsEntry(ctx, s, accountID)
 	if err != nil {
-		return "", fmt.Errorf("error fetching STS config for account ID %q: %w", accountID, err)
+		return "", "", fmt.Errorf("error fetching STS config for account ID %q: %w", accountID, err)
 	}
 	// An empty STS role signifies the master account
 	if sts != nil {
-		return sts.StsRole, nil
+		return sts.StsRole, sts.ExternalID, nil
 	}
-	return "", nil
+
+	// Return an error if there's no STS config for an account which is not the default one
+	if b.defaultAWSAccountID != "" && b.defaultAWSAccountID != accountID {
+		return "", "", fmt.Errorf("no STS configuration found for account ID %q", accountID)
+	}
+	return "", "", nil
 }
 
 // clientEC2 creates a client to interact with AWS EC2 API
 func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, accountID string) (*ec2.EC2, error) {
-	stsRole, err := b.stsRoleForAccount(ctx, s, accountID)
+	stsRole, stsExternalID, err := b.stsRoleForAccount(ctx, s, accountID)
 	if err != nil {
 		return nil, err
 	}
 	b.configMutex.RLock()
-	if b.EC2ClientsMap[region] != nil && b.EC2ClientsMap[region][stsRole] != nil {
+
+	key := clientKey{
+		AccountID: accountID,
+		Region:    region,
+		STSRole:   stsRole,
+	}
+	if cachedClient, ok := b.EC2ClientsMap[key]; ok {
 		defer b.configMutex.RUnlock()
 		// If the client object was already created, return it
-		return b.EC2ClientsMap[region][stsRole], nil
+		return cachedClient, nil
 	}
 
 	// Release the read lock and acquire the write lock
@@ -212,13 +248,13 @@ func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, acco
 	defer b.configMutex.Unlock()
 
 	// If the client gets created while switching the locks, return it
-	if b.EC2ClientsMap[region] != nil && b.EC2ClientsMap[region][stsRole] != nil {
-		return b.EC2ClientsMap[region][stsRole], nil
+	if cachedClient, ok := b.EC2ClientsMap[key]; ok {
+		return cachedClient, nil
 	}
 
 	// Create an AWS config object using a chain of providers
 	var awsConfig *aws.Config
-	awsConfig, err = b.getClientConfig(ctx, s, region, stsRole, accountID, "ec2")
+	awsConfig, err = b.getClientConfig(ctx, s, region, stsRole, stsExternalID, accountID, "ec2")
 	if err != nil {
 		return nil, err
 	}
@@ -236,34 +272,36 @@ func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, acco
 	if client == nil {
 		return nil, fmt.Errorf("could not obtain ec2 client")
 	}
-	if _, ok := b.EC2ClientsMap[region]; !ok {
-		b.EC2ClientsMap[region] = map[string]*ec2.EC2{stsRole: client}
-	} else {
-		b.EC2ClientsMap[region][stsRole] = client
-	}
 
-	return b.EC2ClientsMap[region][stsRole], nil
+	b.EC2ClientsMap[key] = client
+	return b.EC2ClientsMap[key], nil
 }
 
 // clientIAM creates a client to interact with AWS IAM API
 func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, accountID string) (*iam.IAM, error) {
-	stsRole, err := b.stsRoleForAccount(ctx, s, accountID)
+	stsRole, stsExternalID, err := b.stsRoleForAccount(ctx, s, accountID)
 	if err != nil {
 		return nil, err
 	}
 	if stsRole == "" {
-		b.Logger().Debug(fmt.Sprintf("no stsRole found for %s", accountID))
+		b.Logger().Debug("no stsRole found for account", "accountID", accountID)
 	} else {
-		b.Logger().Debug(fmt.Sprintf("found stsRole %s for account %s", stsRole, accountID))
+		b.Logger().Debug("found stsRole for account", "stsRole", stsRole, "accountID", accountID)
 	}
 	b.configMutex.RLock()
-	if b.IAMClientsMap[region] != nil && b.IAMClientsMap[region][stsRole] != nil {
+
+	key := clientKey{
+		AccountID: accountID,
+		Region:    region,
+		STSRole:   stsRole,
+	}
+	if cachedClient, ok := b.IAMClientsMap[key]; ok {
 		defer b.configMutex.RUnlock()
 		// If the client object was already created, return it
-		b.Logger().Debug(fmt.Sprintf("returning cached client for region %s and stsRole %s", region, stsRole))
-		return b.IAMClientsMap[region][stsRole], nil
+		b.Logger().Debug("returning cached client for key", "key", key)
+		return cachedClient, nil
 	}
-	b.Logger().Debug(fmt.Sprintf("no cached client for region %s and stsRole %s", region, stsRole))
+	b.Logger().Debug("no cached client for key", "key", key)
 
 	// Release the read lock and acquire the write lock
 	b.configMutex.RUnlock()
@@ -271,13 +309,14 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, acco
 	defer b.configMutex.Unlock()
 
 	// If the client gets created while switching the locks, return it
-	if b.IAMClientsMap[region] != nil && b.IAMClientsMap[region][stsRole] != nil {
-		return b.IAMClientsMap[region][stsRole], nil
+	if cachedClient, ok := b.IAMClientsMap[key]; ok {
+		b.Logger().Debug("returning cached client for key", "key", key)
+		return cachedClient, nil
 	}
 
 	// Create an AWS config object using a chain of providers
 	var awsConfig *aws.Config
-	awsConfig, err = b.getClientConfig(ctx, s, region, stsRole, accountID, "iam")
+	awsConfig, err = b.getClientConfig(ctx, s, region, stsRole, stsExternalID, accountID, "iam")
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +334,39 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, acco
 	if client == nil {
 		return nil, fmt.Errorf("could not obtain iam client")
 	}
-	if _, ok := b.IAMClientsMap[region]; !ok {
-		b.IAMClientsMap[region] = map[string]*iam.IAM{stsRole: client}
-	} else {
-		b.IAMClientsMap[region][stsRole] = client
+	b.IAMClientsMap[key] = client
+	return b.IAMClientsMap[key], nil
+}
+
+// PluginIdentityTokenFetcher fetches plugin identity tokens from Vault. It is provided
+// to the AWS SDK client to keep assumed role credentials refreshed through expiration.
+// When the client's STS credentials expire, it will use this interface to fetch a new
+// plugin identity token and exchange it for new STS credentials.
+type PluginIdentityTokenFetcher struct {
+	sys      logical.SystemView
+	logger   hclog.Logger
+	audience string
+	ns       *namespace.Namespace
+	ttl      time.Duration
+}
+
+var _ stscreds.TokenFetcher = (*PluginIdentityTokenFetcher)(nil)
+
+func (f PluginIdentityTokenFetcher) FetchToken(ctx aws.Context) ([]byte, error) {
+	nsCtx := namespace.ContextWithNamespace(ctx, f.ns)
+	resp, err := f.sys.GenerateIdentityToken(nsCtx, &pluginutil.IdentityTokenRequest{
+		Audience: f.audience,
+		TTL:      f.ttl,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate plugin identity token: %w", err)
 	}
-	return b.IAMClientsMap[region][stsRole], nil
+	f.logger.Info("fetched new plugin identity token")
+
+	if resp.TTL < f.ttl {
+		f.logger.Debug("generated plugin identity token has shorter TTL than requested",
+			"requested", f.ttl, "actual", resp.TTL)
+	}
+
+	return []byte(resp.Token.Token()), nil
 }

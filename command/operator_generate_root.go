@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -23,6 +23,7 @@ var (
 	_ cli.CommandAutocomplete = (*OperatorGenerateRootCommand)(nil)
 )
 
+//go:generate enumer -type=generateRootKind -trimprefix=generateRoot
 type generateRootKind int
 
 const (

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -28,7 +28,7 @@ export default Component.extend({
   isBuiltin: computed('item', 'itemType', function () {
     const item = this.item;
     if (this.itemType === 'alphabet' || this.itemType === 'template') {
-      return item.get('id').startsWith('builtin/');
+      return item.id.startsWith('builtin/');
     }
     return false;
   }),

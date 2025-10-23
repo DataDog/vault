@@ -1,8 +1,8 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 variable "vault_addr" {
-  description = "The host address for the vault instance to test"
+  description = "The local vault API listen address"
   type        = string
 }
 

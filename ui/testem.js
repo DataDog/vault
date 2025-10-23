@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -24,6 +24,9 @@ module.exports = {
         '--remote-debugging-port=0',
         '--window-size=1440,900',
       ].filter(Boolean),
+    },
+    Firefox: {
+      ci: ['--headless'],
     },
   },
   proxies: {

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,9 +17,9 @@ export default class PkiCertificateDetailsRoute extends Route {
   setupController(controller, model) {
     super.setupController(controller, model);
     controller.breadcrumbs = [
-      { label: 'secrets', route: 'secrets', linkExternal: true },
-      { label: this.secretMountPath.currentPath, route: 'overview' },
-      { label: 'certificates', route: 'certificates.index' },
+      { label: 'Secrets', route: 'secrets', linkExternal: true },
+      { label: this.secretMountPath.currentPath, route: 'overview', model: this.secretMountPath.currentPath },
+      { label: 'Certificates', route: 'certificates.index', model: this.secretMountPath.currentPath },
       { label: model.id },
     ];
   }

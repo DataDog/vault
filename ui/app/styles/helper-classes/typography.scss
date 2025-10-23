@@ -1,5 +1,7 @@
+@use '../utils/size_variables';
+
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,45 +10,45 @@
 
 // font size helpers
 .is-size-4 {
-  font-size: $size-4 !important;
+  font-size: var(--token-typography-display-400-font-size) !important;
 }
 
 .is-size-5 {
-  font-size: $size-5 !important;
+  font-size: size_variables.$size-5 !important;
 }
 
 .is-size-6 {
-  font-size: $size-6 !important;
+  font-size: var(--token-typography-body-300-font-size) !important;
 }
 
 .is-size-7 {
-  font-size: $size-7 !important;
+  font-size: size_variables.$size-7 !important;
 }
 
 .is-size-8 {
-  font-size: $size-8 !important;
+  font-size: var(--token-typography-body-200-font-size) !important;
 }
 
 .is-size-9 {
-  font-size: $size-9 !important;
+  font-size: size_variables.$size-9 !important;
 }
 
 // Font weight
 .has-font-weight-normal {
-  font-weight: $font-weight-normal;
+  font-weight: var(--token-typography-font-weight-regular);
 }
 
 .has-text-weight-semibold {
-  font-weight: $font-weight-semibold !important;
+  font-weight: var(--token-typography-font-weight-semibold) !important;
 }
 
 .has-text-weight-bold {
-  font-weight: $font-weight-bold !important;
+  font-weight: var(--token-typography-font-weight-bold) !important;
 }
 
 // Font family
 .is-font-mono {
-  font-family: $family-monospace;
+  font-family: var(--token-typography-font-stack-code);
 }
 
 .masked-font {
@@ -60,6 +62,9 @@
 }
 .is-no-underline {
   text-decoration: none;
+}
+.line-through {
+  text-decoration: line-through;
 }
 
 // Text transformations
@@ -90,20 +95,20 @@
 
 // Text color or styling
 .is-help {
-  font-size: $size-8;
-  margin-top: $size-11;
+  font-size: var(--token-typography-body-200-font-size);
+  margin-top: size_variables.$size-11;
 }
 
 .help {
   display: block;
   font-size: 0.85714rem;
-  margin-top: $size-11;
+  margin-top: size_variables.$size-11;
 }
 
 .sub-text {
   color: var(--token-color-foreground-faint);
-  margin-bottom: $size-11;
-  font-size: $size-8;
+  margin-bottom: size_variables.$size-11;
+  font-size: var(--token-typography-body-200-font-size);
 
   strong {
     color: inherit;

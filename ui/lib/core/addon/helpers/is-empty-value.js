@@ -1,11 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { helper } from '@ember/component/helper';
 
-export default helper(function isEmptyValue([value], { hasDefault = false }) {
+export function isEmptyValue(value, hasDefault = false) {
   if (hasDefault) {
     value = hasDefault;
   }
@@ -13,4 +13,8 @@ export default helper(function isEmptyValue([value], { hasDefault = false }) {
     return Object.keys(value).length === 0;
   }
   return value == null || value === '';
+}
+
+export default helper(function ([value], { hasDefault = false }) {
+  return isEmptyValue(value, hasDefault);
 });

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -14,6 +14,10 @@ module.exports = buildEngine({
 
   lazyLoading: {
     enabled: false,
+  },
+
+  babel: {
+    plugins: [require.resolve('ember-concurrency/async-arrow-task-transform')],
   },
 
   isDevelopingAddon() {

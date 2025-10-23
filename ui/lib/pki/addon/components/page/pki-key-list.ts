@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,6 +10,7 @@ import type PkiKeyModel from 'vault/models/pki/key';
 interface Args {
   keyModels: PkiKeyModel[];
   mountPoint: string;
+  backend: string;
   canImportKey: boolean;
   canGenerateKey: boolean;
   canRead: boolean;

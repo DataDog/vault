@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -13,9 +13,6 @@ const EngineAddon = require('ember-engines/lib/engine-addon');
 module.exports = EngineAddon.extend({
   name: 'open-api-explorer',
 
-  babel: {
-    plugins: [require.resolve('ember-auto-import/babel-plugin')],
-  },
   included() {
     this._super.included && this._super.included.apply(this, arguments);
     // we want to lazy load the CSS deps, importing them here will result in them being added to the

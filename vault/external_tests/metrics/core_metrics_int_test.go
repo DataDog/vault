@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package metrics
@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"testing"
 	"time"
 
@@ -49,7 +49,7 @@ func TestMountTableMetrics(t *testing.T) {
 
 	nonlocalLogicalMountsize, err := gaugeSearchHelper(data, 3)
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Error(err.Error())
 	}
 
 	// Mount new kv
@@ -69,11 +69,11 @@ func TestMountTableMetrics(t *testing.T) {
 
 	nonlocalLogicalMountsizeAfterMount, err := gaugeSearchHelper(data, 4)
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Error(err.Error())
 	}
 
 	if nonlocalLogicalMountsizeAfterMount <= nonlocalLogicalMountsize {
-		t.Errorf("Mount size does not change after new mount is mounted")
+		t.Error("Mount size does not change after new mount is mounted")
 	}
 }
 
@@ -139,7 +139,7 @@ func TestLeaderReElectionMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bodyBytes, err := ioutil.ReadAll(respo.Response.Body)
+	bodyBytes, err := io.ReadAll(respo.Response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestLeaderReElectionMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bodyBytes, err = ioutil.ReadAll(respo.Response.Body)
+	bodyBytes, err = io.ReadAll(respo.Response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}

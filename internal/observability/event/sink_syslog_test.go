@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package event
@@ -24,12 +24,12 @@ func TestNewSyslogSink(t *testing.T) {
 		"format-empty": {
 			format:         "",
 			wantErr:        true,
-			expectedErrMsg: "event.NewSyslogSink: format is required: invalid parameter",
+			expectedErrMsg: "format is required: invalid parameter",
 		},
 		"format-whitespace": {
 			format:         "   ",
 			wantErr:        true,
-			expectedErrMsg: "event.NewSyslogSink: format is required: invalid parameter",
+			expectedErrMsg: "format is required: invalid parameter",
 		},
 		"happy": {
 			format: "json",

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package pluginutil
@@ -445,6 +445,10 @@ func (m *mockRunnerUtil) MlockEnabled() bool {
 
 func (m *mockRunnerUtil) ClusterID(ctx context.Context) (string, error) {
 	return "1234", nil
+}
+
+func (m *mockRunnerUtil) DownloadExtractVerifyPlugin(ctx context.Context, _ *PluginRunner) error {
+	return nil
 }
 
 func TestContainerConfig(t *testing.T) {

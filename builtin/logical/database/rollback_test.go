@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package database
@@ -44,7 +44,7 @@ func TestBackend_RotateRootCredentials_WAL_rollback(t *testing.T) {
 	}
 	defer lb.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	connURL = strings.ReplaceAll(connURL, "postgres:secret", "{{username}}:{{password}}")
@@ -129,12 +129,7 @@ func TestBackend_RotateRootCredentials_WAL_rollback(t *testing.T) {
 	}
 
 	// Put a WAL entry that will be used for rolling back the database password
-	walEntry := &rotateRootCredentialsWAL{
-		ConnectionName: "plugin-test",
-		UserName:       databaseUser,
-		OldPassword:    defaultPassword,
-		NewPassword:    "newSecret",
-	}
+	walEntry := NewRotateRootCredentialsWALPasswordEntry("plugin-test", databaseUser, "newSecret", defaultPassword)
 	_, err = framework.PutWAL(context.Background(), config.StorageView, rotateRootWALKey, walEntry)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +178,7 @@ func TestBackend_RotateRootCredentials_WAL_no_rollback_1(t *testing.T) {
 	}
 	defer lb.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	connURL = strings.ReplaceAll(connURL, "postgres:secret", "{{username}}:{{password}}")
@@ -235,12 +230,7 @@ func TestBackend_RotateRootCredentials_WAL_no_rollback_1(t *testing.T) {
 	}
 
 	// Put a WAL entry
-	walEntry := &rotateRootCredentialsWAL{
-		ConnectionName: "plugin-test",
-		UserName:       databaseUser,
-		OldPassword:    defaultPassword,
-		NewPassword:    "newSecret",
-	}
+	walEntry := NewRotateRootCredentialsWALPasswordEntry("plugin-test", databaseUser, "newSecret", defaultPassword)
 	_, err = framework.PutWAL(context.Background(), config.StorageView, rotateRootWALKey, walEntry)
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +281,7 @@ func TestBackend_RotateRootCredentials_WAL_no_rollback_2(t *testing.T) {
 	}
 	defer lb.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	connURL = strings.ReplaceAll(connURL, "postgres:secret", "{{username}}:{{password}}")
@@ -391,12 +381,7 @@ func TestBackend_RotateRootCredentials_WAL_no_rollback_2(t *testing.T) {
 	}
 
 	// Put a WAL entry
-	walEntry := &rotateRootCredentialsWAL{
-		ConnectionName: "plugin-test",
-		UserName:       databaseUser,
-		OldPassword:    defaultPassword,
-		NewPassword:    "newSecret",
-	}
+	walEntry := NewRotateRootCredentialsWALPasswordEntry("plugin-test", databaseUser, "newSecret", defaultPassword)
 	_, err = framework.PutWAL(context.Background(), config.StorageView, rotateRootWALKey, walEntry)
 	if err != nil {
 		t.Fatal(err)

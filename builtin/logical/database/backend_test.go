@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package database
@@ -23,9 +23,12 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/helper/builtinplugins"
 	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/helper/pluginconsts"
+	"github.com/hashicorp/vault/helper/testhelpers/certhelpers"
 	"github.com/hashicorp/vault/helper/testhelpers/corehelpers"
 	postgreshelper "github.com/hashicorp/vault/helper/testhelpers/postgresql"
 	vaulthttp "github.com/hashicorp/vault/http"
+	"github.com/hashicorp/vault/plugins/database/cassandra"
 	"github.com/hashicorp/vault/plugins/database/postgresql"
 	v4 "github.com/hashicorp/vault/sdk/database/dbplugin"
 	v5 "github.com/hashicorp/vault/sdk/database/dbplugin/v5"
@@ -38,6 +41,7 @@ import (
 	_ "github.com/jackc/pgx/v4"
 	"github.com/mitchellh/mapstructure"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func getClusterPostgresDBWithFactory(t *testing.T, factory logical.Factory) (*vault.TestCluster, logical.SystemView) {
@@ -91,11 +95,21 @@ func TestBackend_PluginMain_PostgresMultiplexed(t *testing.T) {
 	v5.ServeMultiplex(postgresql.New)
 }
 
+// TestBackend_PluginMain_CassandraMultiplexed tests the Cassandra database plugin
+func TestBackend_PluginMain_CassandraMultiplexed(t *testing.T) {
+	if os.Getenv(pluginutil.PluginVaultVersionEnv) == "" {
+		return
+	}
+
+	v5.ServeMultiplex(cassandra.New)
+}
+
 func TestBackend_RoleUpgrade(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	backend := &databaseBackend{}
 
 	roleExpected := &roleEntry{
+		Name: "test",
 		Statements: v4.Statements{
 			CreationStatements: "test",
 			Creation:           []string{"test"},
@@ -209,6 +223,12 @@ func TestBackend_config_connection(t *testing.T) {
 			"root_credentials_rotate_statements": []string{},
 			"password_policy":                    "",
 			"plugin_version":                     "",
+			"verify_connection":                  false,
+			"skip_static_role_import_rotation":   false,
+			"rotation_schedule":                  "",
+			"rotation_period":                    time.Duration(0).Seconds(),
+			"rotation_window":                    time.Duration(0).Seconds(),
+			"disable_automated_rotation":         false,
 		}
 		configReq.Operation = logical.ReadOperation
 		resp, err = b.HandleRequest(namespace.RootContext(nil), configReq)
@@ -263,6 +283,12 @@ func TestBackend_config_connection(t *testing.T) {
 			"root_credentials_rotate_statements": []string{},
 			"password_policy":                    "",
 			"plugin_version":                     "",
+			"verify_connection":                  false,
+			"skip_static_role_import_rotation":   false,
+			"rotation_schedule":                  "",
+			"rotation_period":                    time.Duration(0).Seconds(),
+			"rotation_window":                    time.Duration(0).Seconds(),
+			"disable_automated_rotation":         false,
 		}
 		configReq.Operation = logical.ReadOperation
 		resp, err = b.HandleRequest(namespace.RootContext(nil), configReq)
@@ -271,6 +297,7 @@ func TestBackend_config_connection(t *testing.T) {
 		}
 
 		delete(resp.Data["connection_details"].(map[string]interface{}), "name")
+		delete(resp.Data, "AutomatedRotationParams")
 		if !reflect.DeepEqual(expected, resp.Data) {
 			t.Fatalf("bad: expected:%#v\nactual:%#v\n", expected, resp.Data)
 		}
@@ -306,6 +333,12 @@ func TestBackend_config_connection(t *testing.T) {
 			"root_credentials_rotate_statements": []string{},
 			"password_policy":                    "",
 			"plugin_version":                     "",
+			"verify_connection":                  false,
+			"skip_static_role_import_rotation":   false,
+			"rotation_schedule":                  "",
+			"rotation_period":                    time.Duration(0).Seconds(),
+			"rotation_window":                    time.Duration(0).Seconds(),
+			"disable_automated_rotation":         false,
 		}
 		configReq.Operation = logical.ReadOperation
 		resp, err = b.HandleRequest(namespace.RootContext(nil), configReq)
@@ -314,6 +347,7 @@ func TestBackend_config_connection(t *testing.T) {
 		}
 
 		delete(resp.Data["connection_details"].(map[string]interface{}), "name")
+		delete(resp.Data, "AutomatedRotationParams")
 		if !reflect.DeepEqual(expected, resp.Data) {
 			t.Fatalf("bad: expected:%#v\nactual:%#v\n", expected, resp.Data)
 		}
@@ -345,6 +379,8 @@ func TestBackend_config_connection(t *testing.T) {
 	assert.Equal(t, "plugin-test", eventSender.Events[2].Event.Metadata.AsMap()["name"])
 }
 
+// TestBackend_BadConnectionString tests that an error response resulting from
+// a failed connection does not expose the URL. The middleware should sanitize it.
 func TestBackend_BadConnectionString(t *testing.T) {
 	cluster, sys := getClusterPostgresDB(t)
 	defer cluster.Cleanup()
@@ -359,7 +395,7 @@ func TestBackend_BadConnectionString(t *testing.T) {
 	}
 	defer b.Cleanup(context.Background())
 
-	cleanup, _ := postgreshelper.PrepareTestContainer(t, "13.4-buster")
+	cleanup, _ := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	respCheck := func(req *logical.Request) {
@@ -410,8 +446,8 @@ func TestBackend_basic(t *testing.T) {
 	}
 	defer b.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "13.4-buster")
-	defer cleanup()
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
+	t.Cleanup(cleanup)
 
 	// Configure a connection
 	data := map[string]interface{}{
@@ -658,6 +694,7 @@ func (s *singletonDBFactory) factory(context.Context, *logical.BackendConfig) (l
 }
 
 func TestBackend_connectionCrud(t *testing.T) {
+	t.Parallel()
 	dbFactory := &singletonDBFactory{}
 	cluster, sys := getClusterPostgresDBWithFactory(t, dbFactory.factory)
 	defer cluster.Cleanup()
@@ -665,7 +702,7 @@ func TestBackend_connectionCrud(t *testing.T) {
 	dbFactory.sys = sys
 	client := cluster.Cores[0].Client.Logical()
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "13.4-buster")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	// Mount the database plugin.
@@ -715,7 +752,6 @@ func TestBackend_connectionCrud(t *testing.T) {
 		"allowed_roles":  []string{"plugin-role-test"},
 		"username":       "postgres",
 		"password":       "secret",
-		"private_key":    "PRIVATE_KEY",
 	})
 	if err != nil {
 		t.Fatalf("err:%s resp:%#v\n", err, resp)
@@ -736,9 +772,6 @@ func TestBackend_connectionCrud(t *testing.T) {
 	if _, exists := returnedConnectionDetails["password"]; exists {
 		t.Fatal("password should NOT be found in the returned config")
 	}
-	if _, exists := returnedConnectionDetails["private_key"]; exists {
-		t.Fatal("private_key should NOT be found in the returned config")
-	}
 
 	// Replace connection url with templated version
 	templatedConnURL := strings.ReplaceAll(connURL, "postgres:secret", "{{username}}:{{password}}")
@@ -748,7 +781,6 @@ func TestBackend_connectionCrud(t *testing.T) {
 		"allowed_roles":  []string{"plugin-role-test"},
 		"username":       "postgres",
 		"password":       "secret",
-		"private_key":    "PRIVATE_KEY",
 	})
 	if err != nil {
 		t.Fatalf("err:%s resp:%#v\n", err, resp)
@@ -765,6 +797,12 @@ func TestBackend_connectionCrud(t *testing.T) {
 		"root_credentials_rotate_statements": []any{},
 		"password_policy":                    "",
 		"plugin_version":                     "",
+		"verify_connection":                  false,
+		"skip_static_role_import_rotation":   false,
+		"rotation_schedule":                  "",
+		"rotation_period":                    json.Number("0"),
+		"rotation_window":                    json.Number("0"),
+		"disable_automated_rotation":         false,
 	}
 	resp, err = client.Read("database/config/plugin-test")
 	if err != nil {
@@ -772,6 +810,7 @@ func TestBackend_connectionCrud(t *testing.T) {
 	}
 
 	delete(resp.Data["connection_details"].(map[string]interface{}), "name")
+	delete(resp.Data, "AutomatedRotationParams")
 	if diff := deep.Equal(resp.Data, expected); diff != nil {
 		t.Fatal(strings.Join(diff, "\n"))
 	}
@@ -854,6 +893,57 @@ func TestBackend_connectionCrud(t *testing.T) {
 	}
 }
 
+func TestBackend_connectionSanitizePrivateKey(t *testing.T) {
+	t.Parallel()
+	dbFactory := &singletonDBFactory{}
+	cluster, sys := getClusterPostgresDBWithFactory(t, dbFactory.factory)
+	defer cluster.Cleanup()
+
+	dbFactory.sys = sys
+	client := cluster.Cores[0].Client.Logical()
+
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
+	defer cleanup()
+
+	// Mount the database plugin.
+	resp, err := client.Write("sys/mounts/database", map[string]interface{}{
+		"type": "database",
+	})
+	if err != nil {
+		t.Fatalf("err:%s resp:%#v\n", err, resp)
+	}
+
+	caCert := certhelpers.NewCert(t, certhelpers.CommonName("ca"), certhelpers.IsCA(true), certhelpers.SelfSign())
+	clientCert := certhelpers.NewCert(t, certhelpers.CommonName("postgres"), certhelpers.DNS("localhost"), certhelpers.Parent(caCert))
+
+	// Create a connection
+	resp, err = client.Write("database/config/plugin-test", map[string]interface{}{
+		"connection_url":    connURL,
+		"plugin_name":       "postgresql-database-plugin",
+		"allowed_roles":     []string{"plugin-role-test"},
+		"username":          "postgres",
+		"tls_certificate":   string(clientCert.CombinedPEM()),
+		"private_key":       string(clientCert.PrivateKeyPEM()),
+		"tls_ca":            string(caCert.CombinedPEM()),
+		"verify_connection": false,
+	})
+	if err != nil {
+		t.Fatalf("err:%s resp:%#v\n", err, resp)
+	}
+
+	resp, err = client.Read("database/config/plugin-test")
+	if err != nil {
+		t.Fatalf("err:%s resp:%#v\n", err, resp)
+	}
+	returnedConnectionDetails := resp.Data["connection_details"].(map[string]interface{})
+	if strings.Contains(returnedConnectionDetails["connection_url"].(string), "secret") {
+		t.Fatal("password should not be found in the connection url")
+	}
+	if _, exists := returnedConnectionDetails["private_key"]; exists {
+		t.Fatal("private_key should NOT be found in the returned config")
+	}
+}
+
 func TestBackend_roleCrud(t *testing.T) {
 	cluster, sys := getClusterPostgresDB(t)
 	defer cluster.Cleanup()
@@ -872,7 +962,7 @@ func TestBackend_roleCrud(t *testing.T) {
 	}
 	defer b.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "13.4-buster")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	// Configure a connection
@@ -1121,7 +1211,7 @@ func TestBackend_allowedRoles(t *testing.T) {
 	}
 	defer b.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "13.4-buster")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	// Configure a connection
@@ -1318,7 +1408,7 @@ func TestBackend_RotateRootCredentials(t *testing.T) {
 	}
 	defer b.Cleanup(context.Background())
 
-	cleanup, connURL := postgreshelper.PrepareTestContainer(t, "13.4-buster")
+	cleanup, connURL := postgreshelper.PrepareTestContainer(t)
 	defer cleanup()
 
 	connURL = strings.ReplaceAll(connURL, "postgres:secret", "{{username}}:{{password}}")
@@ -1451,7 +1541,7 @@ func TestBackend_ConnectionURL_redacted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cleanup, u := postgreshelper.PrepareTestContainerWithPassword(t, "13.4-buster", tt.password)
+			cleanup, u := postgreshelper.PrepareTestContainerWithPassword(t, tt.password)
 			t.Cleanup(cleanup)
 
 			p, err := url.Parse(u)
@@ -1511,6 +1601,133 @@ func TestBackend_ConnectionURL_redacted(t *testing.T) {
 					t.Fatalf("password was not redacted by URL.Redacted()")
 				}
 			}
+		})
+	}
+}
+
+// TestBackend_GetConnectionMetrics tests the GetConnectionMetrics method
+// of the database backend to ensure it correctly counts the number of connections
+// for each plugin type.
+func TestBackend_GetConnectionMetrics(t *testing.T) {
+	cluster, sys := getCluster(t)
+	defer cluster.Cleanup()
+
+	vault.TestAddTestPlugin(t, cluster.Cores[0].Core, "cassandra-database-plugin", consts.PluginTypeDatabase, "", "TestBackend_PluginMain_CassandraMultiplexed",
+		[]string{fmt.Sprintf("%s=%s", pluginutil.PluginCACertPEMEnv, cluster.CACertPEMFile)})
+	vault.TestAddTestPlugin(t, cluster.Cores[0].Core, "postgresql-database-plugin", consts.PluginTypeDatabase, "", "TestBackend_PluginMain_PostgresMultiplexed",
+		[]string{fmt.Sprintf("%s=%s", pluginutil.PluginCACertPEMEnv, cluster.CACertPEMFile)})
+
+	postgresConfig := map[string]interface{}{
+		"name":              "postgres-plugin-test",
+		"plugin_name":       "postgresql-database-plugin",
+		"connection_url":    "some_postgres_url",
+		"username":          "postgres",
+		"password":          "secret",
+		"verify_connection": false,
+	}
+
+	cassandraConfig := map[string]interface{}{
+		"name":              "cassandra-plugin-test",
+		"plugin_name":       "cassandra-database-plugin",
+		"hosts":             "some_cassandra_url",
+		"username":          "cassandra",
+		"password":          "secret",
+		"verify_connection": false,
+	}
+
+	postgresConfigV2 := map[string]interface{}{
+		"name":              "postgres-plugin-test-second-connection",
+		"plugin_name":       "postgresql-database-plugin",
+		"connection_url":    "some_postgres_url",
+		"username":          "postgres",
+		"password":          "secret",
+		"verify_connection": false,
+	}
+
+	cassandraConfigV2 := map[string]interface{}{
+		"name":              "cassandra-plugin-test-second-connection",
+		"plugin_name":       "cassandra-database-plugin",
+		"hosts":             "some_cassandra_url",
+		"username":          "cassandra",
+		"password":          "secret",
+		"verify_connection": false,
+	}
+
+	tests := []struct {
+		name              string
+		connectionConfigs []map[string]interface{}
+		expectedCounts    map[string]int
+	}{
+		{
+			name: "1 Postgres, 1 Cassandra connection",
+			connectionConfigs: []map[string]interface{}{
+				postgresConfig,
+				cassandraConfig,
+			},
+			expectedCounts: map[string]int{
+				pluginconsts.DbPostgresqlPluginType: 1,
+				pluginconsts.DbCassandraPluginType:  1,
+			},
+		},
+		{
+			name: "1 Postgres connection",
+			connectionConfigs: []map[string]interface{}{
+				postgresConfig,
+			},
+			expectedCounts: map[string]int{
+				pluginconsts.DbPostgresqlPluginType: 1,
+			},
+		},
+		{
+			name:              "No Connections",
+			connectionConfigs: []map[string]interface{}{},
+			expectedCounts:    map[string]int{},
+		},
+		{
+			name: " 2 Postgres, 2 Cassandra connections",
+			connectionConfigs: []map[string]interface{}{
+				postgresConfig,
+				postgresConfigV2,
+				cassandraConfig,
+				cassandraConfigV2,
+			},
+			expectedCounts: map[string]int{
+				pluginconsts.DbPostgresqlPluginType: 2,
+				pluginconsts.DbCassandraPluginType:  2,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := logical.TestBackendConfig()
+			config.StorageView = &logical.InmemStorage{}
+			config.System = sys
+
+			b, err := Factory(context.Background(), config)
+			require.NoError(t, err)
+			defer b.Cleanup(context.Background())
+
+			// Create connections
+			for _, connData := range tt.connectionConfigs {
+				req := &logical.Request{
+					Operation: logical.UpdateOperation,
+					Path:      fmt.Sprintf("config/%s", connData["name"]),
+					Storage:   config.StorageView,
+					Data:      connData,
+				}
+				resp, err := b.HandleRequest(namespace.RootContext(nil), req)
+				if err != nil || (resp != nil && resp.IsError()) {
+					t.Fatalf("Failed to configure connection %s: err:%s resp:%#v\n", connData["name"], err, resp)
+				}
+			}
+
+			// Get metric counts
+			metricsReporter, ok := b.(logical.MetricsReporter)
+			require.True(t, ok)
+			connectionCount, err := metricsReporter.GetConnectionMetrics()
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedCounts, connectionCount, "Unexpected connection counts")
 		})
 	}
 }

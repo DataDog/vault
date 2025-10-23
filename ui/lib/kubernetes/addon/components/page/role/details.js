@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,7 +17,7 @@ import errorMessage from 'vault/utils/error-message';
  */
 
 export default class RoleDetailsPageComponent extends Component {
-  @service router;
+  @service('app-router') router;
   @service flashMessages;
 
   get extraFields() {

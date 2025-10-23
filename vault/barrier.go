@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -166,6 +166,8 @@ type SecurityBarrier interface {
 
 	// SecurityBarrier must provide the encryption APIs
 	BarrierEncryptor
+
+	DetectDeadlocks() bool
 }
 
 // BarrierStorage is the storage only interface required for a Barrier.

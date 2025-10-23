@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -19,7 +19,7 @@ import { action } from '@ember/object';
  */
 
 export default class OverviewPageComponent extends Component {
-  @service router;
+  @service('app-router') router;
 
   @tracked selectedRole = null;
   @tracked roleOptions = [];

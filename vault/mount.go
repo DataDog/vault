@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -20,11 +20,13 @@ import (
 	"github.com/hashicorp/vault/builtin/plugin"
 	"github.com/hashicorp/vault/helper/metricsutil"
 	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/helper/pluginconsts"
 	"github.com/hashicorp/vault/helper/versions"
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/helper/jsonutil"
 	"github.com/hashicorp/vault/sdk/helper/pluginutil"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/hashicorp/vault/vault/observations"
 	"github.com/hashicorp/vault/vault/plugincatalog"
 	"github.com/mitchellh/copystructure"
 )
@@ -52,6 +54,11 @@ const (
 	mountTableType = "mounts"
 )
 
+func init() {
+	// Register the keys we use for mount tables
+	registerMountOrNamespaceTablePaths(coreMountConfigPath, coreLocalMountConfigPath)
+}
+
 // ListingVisibilityType represents the types for listing visibility
 type ListingVisibilityType string
 
@@ -70,12 +77,14 @@ const (
 	mountTypeSystem      = "system"
 	mountTypeNSSystem    = "ns_system"
 	mountTypeIdentity    = "identity"
+	mountTypeNSIdentity  = "ns_identity"
 	mountTypeCubbyhole   = "cubbyhole"
 	mountTypePlugin      = "plugin"
 	mountTypeKV          = "kv"
 	mountTypeNSCubbyhole = "ns_cubbyhole"
 	mountTypeToken       = "token"
 	mountTypeNSToken     = "ns_token"
+	mountTypeDatabase    = "database"
 
 	MountTableUpdateStorage   = true
 	MountTableNoUpdateStorage = false
@@ -105,7 +114,6 @@ var (
 		mountPathCubbyhole,
 		mountPathSystem,
 		"audit/",
-		mountPathIdentity,
 	}
 
 	// singletonMounts can only exist in one location and are
@@ -144,25 +152,15 @@ type MountTable struct {
 	Entries []*MountEntry `json:"entries"`
 }
 
+//go:generate enumer -type=MountMigrationStatus -trimprefix=MigrationStatus -transform=kebab
+
 type MountMigrationStatus int
 
 const (
-	MigrationInProgressStatus MountMigrationStatus = iota
-	MigrationSuccessStatus
-	MigrationFailureStatus
+	MigrationStatusInProgress MountMigrationStatus = iota
+	MigrationStatusSuccess
+	MigrationStatusFailure
 )
-
-func (m MountMigrationStatus) String() string {
-	switch m {
-	case MigrationInProgressStatus:
-		return "in-progress"
-	case MigrationSuccessStatus:
-		return "success"
-	case MigrationFailureStatus:
-		return "failure"
-	}
-	return "unknown"
-}
 
 type MountMigrationInfo struct {
 	SourceMount     string `json:"source_mount"`
@@ -355,19 +353,20 @@ type MountEntry struct {
 
 // MountConfig is used to hold settable options
 type MountConfig struct {
-	DefaultLeaseTTL           time.Duration         `json:"default_lease_ttl,omitempty" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"` // Override for global default
-	MaxLeaseTTL               time.Duration         `json:"max_lease_ttl,omitempty" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`             // Override for global default
-	ForceNoCache              bool                  `json:"force_no_cache,omitempty" structs:"force_no_cache" mapstructure:"force_no_cache"`          // Override for global default
-	AuditNonHMACRequestKeys   []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
-	AuditNonHMACResponseKeys  []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
-	ListingVisibility         ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
-	PassthroughRequestHeaders []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
-	AllowedResponseHeaders    []string              `json:"allowed_response_headers,omitempty" structs:"allowed_response_headers" mapstructure:"allowed_response_headers"`
-	TokenType                 logical.TokenType     `json:"token_type,omitempty" structs:"token_type" mapstructure:"token_type"`
-	AllowedManagedKeys        []string              `json:"allowed_managed_keys,omitempty" mapstructure:"allowed_managed_keys"`
-	UserLockoutConfig         *UserLockoutConfig    `json:"user_lockout_config,omitempty" mapstructure:"user_lockout_config"`
-	DelegatedAuthAccessors    []string              `json:"delegated_auth_accessors,omitempty" mapstructure:"delegated_auth_accessors"`
-	IdentityTokenKey          string                `json:"identity_token_key,omitempty" mapstructure:"identity_token_key"`
+	DefaultLeaseTTL            time.Duration         `json:"default_lease_ttl,omitempty" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"` // Override for global default
+	MaxLeaseTTL                time.Duration         `json:"max_lease_ttl,omitempty" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`             // Override for global default
+	ForceNoCache               bool                  `json:"force_no_cache,omitempty" structs:"force_no_cache" mapstructure:"force_no_cache"`          // Override for global default
+	AuditNonHMACRequestKeys    []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
+	AuditNonHMACResponseKeys   []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
+	ListingVisibility          ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
+	PassthroughRequestHeaders  []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
+	AllowedResponseHeaders     []string              `json:"allowed_response_headers,omitempty" structs:"allowed_response_headers" mapstructure:"allowed_response_headers"`
+	TokenType                  logical.TokenType     `json:"token_type,omitempty" structs:"token_type" mapstructure:"token_type"`
+	AllowedManagedKeys         []string              `json:"allowed_managed_keys,omitempty" mapstructure:"allowed_managed_keys"`
+	UserLockoutConfig          *UserLockoutConfig    `json:"user_lockout_config,omitempty" mapstructure:"user_lockout_config"`
+	DelegatedAuthAccessors     []string              `json:"delegated_auth_accessors,omitempty" mapstructure:"delegated_auth_accessors"`
+	IdentityTokenKey           string                `json:"identity_token_key,omitempty" mapstructure:"identity_token_key"`
+	TrimRequestTrailingSlashes bool                  `json:"trim_request_trailing_slashes,omitempty" mapstructure:"trim_request_trailing_slashes"` // If requests to this mount should have trailing slashes trimmed
 
 	// PluginName is the name of the plugin registered in the catalog.
 	//
@@ -395,20 +394,21 @@ type APIUserLockoutConfig struct {
 
 // APIMountConfig is an embedded struct of api.MountConfigInput
 type APIMountConfig struct {
-	DefaultLeaseTTL           string                `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"`
-	MaxLeaseTTL               string                `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`
-	ForceNoCache              bool                  `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`
-	AuditNonHMACRequestKeys   []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
-	AuditNonHMACResponseKeys  []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
-	ListingVisibility         ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
-	PassthroughRequestHeaders []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
-	AllowedResponseHeaders    []string              `json:"allowed_response_headers,omitempty" structs:"allowed_response_headers" mapstructure:"allowed_response_headers"`
-	TokenType                 string                `json:"token_type" structs:"token_type" mapstructure:"token_type"`
-	AllowedManagedKeys        []string              `json:"allowed_managed_keys,omitempty" mapstructure:"allowed_managed_keys"`
-	UserLockoutConfig         *UserLockoutConfig    `json:"user_lockout_config,omitempty" mapstructure:"user_lockout_config"`
-	PluginVersion             string                `json:"plugin_version,omitempty" mapstructure:"plugin_version"`
-	DelegatedAuthAccessors    []string              `json:"delegated_auth_accessors,omitempty" mapstructure:"delegated_auth_accessors"`
-	IdentityTokenKey          string                `json:"identity_token_key,omitempty" mapstructure:"identity_token_key"`
+	DefaultLeaseTTL            string                `json:"default_lease_ttl" structs:"default_lease_ttl" mapstructure:"default_lease_ttl"`
+	MaxLeaseTTL                string                `json:"max_lease_ttl" structs:"max_lease_ttl" mapstructure:"max_lease_ttl"`
+	ForceNoCache               bool                  `json:"force_no_cache" structs:"force_no_cache" mapstructure:"force_no_cache"`
+	AuditNonHMACRequestKeys    []string              `json:"audit_non_hmac_request_keys,omitempty" structs:"audit_non_hmac_request_keys" mapstructure:"audit_non_hmac_request_keys"`
+	AuditNonHMACResponseKeys   []string              `json:"audit_non_hmac_response_keys,omitempty" structs:"audit_non_hmac_response_keys" mapstructure:"audit_non_hmac_response_keys"`
+	ListingVisibility          ListingVisibilityType `json:"listing_visibility,omitempty" structs:"listing_visibility" mapstructure:"listing_visibility"`
+	PassthroughRequestHeaders  []string              `json:"passthrough_request_headers,omitempty" structs:"passthrough_request_headers" mapstructure:"passthrough_request_headers"`
+	AllowedResponseHeaders     []string              `json:"allowed_response_headers,omitempty" structs:"allowed_response_headers" mapstructure:"allowed_response_headers"`
+	TokenType                  string                `json:"token_type" structs:"token_type" mapstructure:"token_type"`
+	AllowedManagedKeys         []string              `json:"allowed_managed_keys,omitempty" mapstructure:"allowed_managed_keys"`
+	UserLockoutConfig          *UserLockoutConfig    `json:"user_lockout_config,omitempty" mapstructure:"user_lockout_config"`
+	PluginVersion              string                `json:"plugin_version,omitempty" mapstructure:"plugin_version"`
+	DelegatedAuthAccessors     []string              `json:"delegated_auth_accessors,omitempty" mapstructure:"delegated_auth_accessors"`
+	IdentityTokenKey           string                `json:"identity_token_key,omitempty" mapstructure:"identity_token_key"`
+	TrimRequestTrailingSlashes bool                  `json:"trim_request_trailing_slashes,omitempty" mapstructure:"trim_request_trailing_slashes"` // If requests to this mount should have trailing slashes trimmed
 
 	// PluginName is the name of the plugin registered in the catalog.
 	//
@@ -680,8 +680,12 @@ func (c *Core) mountInternal(ctx context.Context, entry *MountEntry, updateStora
 		return fmt.Errorf("error creating forwarded writer: %v", err)
 	}
 
+	// add the snapshot storage router, which will use the context to determine
+	// whether a read will be from a snapshot or from the normal barrier storage
+	router := newSnapshotStorageRouter(c, forwarded)
+
 	viewPath := entry.ViewPath()
-	view := NewBarrierView(forwarded, viewPath)
+	view := NewBarrierView(router, viewPath)
 
 	// Singleton mounts cannot be filtered manually on a per-secondary basis
 	// from replication.
@@ -783,6 +787,19 @@ func (c *Core) mountInternal(ctx context.Context, entry *MountEntry, updateStora
 	if c.logger.IsInfo() {
 		c.logger.Info("successful mount", "namespace", entry.Namespace().Path, "path", entry.Path, "type", entry.Type, "version", entry.RunningVersion)
 	}
+
+	err = c.observations.RecordObservationToLedger(ctx, observations.ObservationTypeMountSecretsEnable, ns, map[string]interface{}{
+		"path":                   entry.Path,
+		"local_mount":            entry.Local,
+		"type":                   entry.Type,
+		"accessor":               entry.Accessor,
+		"plugin_version":         entry.Version,
+		"running_plugin_version": entry.RunningVersion,
+	})
+	if err != nil {
+		c.logger.Error("failed to record observation after enabling mount backend", "path", entry.Path, "error", err)
+	}
+
 	return nil
 }
 
@@ -953,7 +970,7 @@ func (c *Core) unmountInternal(ctx context.Context, path string, updateStorage b
 
 	removePathCheckers(c, entry, viewPath)
 
-	if c.quotaManager != nil {
+	if c.quotaManager != nil && !c.IsPerfSecondary() {
 		if err := c.quotaManager.HandleBackendDisabling(ctx, ns.Path, path); err != nil {
 			c.logger.Error("failed to update quotas after disabling mount", "path", path, "error", err)
 			return err
@@ -964,6 +981,18 @@ func (c *Core) unmountInternal(ctx context.Context, path string, updateStorage b
 
 	if c.logger.IsInfo() {
 		c.logger.Info("successfully unmounted", "path", path, "namespace", ns.Path)
+	}
+
+	err = c.observations.RecordObservationToLedger(ctx, observations.ObservationTypeMountSecretsDisable, ns, map[string]interface{}{
+		"path":                   entry.Path,
+		"local_mount":            entry.Local,
+		"type":                   entry.Type,
+		"accessor":               entry.Accessor,
+		"plugin_version":         entry.Version,
+		"running_plugin_version": entry.RunningVersion,
+	})
+	if err != nil {
+		c.logger.Error("failed to record observation after enabling mount backend", "path", entry.Path, "error", err)
 	}
 
 	return nil
@@ -1195,15 +1224,17 @@ func (c *Core) remountSecretsEngine(ctx context.Context, src, dst namespace.Moun
 	srcMatch.Path = dst.MountPath
 
 	// Update the mount table
-	if err := c.persistMounts(ctx, c.mounts, &srcMatch.Local); err != nil {
-		srcMatch.Path = srcPath
-		srcMatch.Tainted = true
-		c.mountsLock.Unlock()
-		if err == logical.ErrReadOnly && c.perfStandby {
-			return err
-		}
+	if updateStorage {
+		if err := c.persistMounts(ctx, c.mounts, &srcMatch.Local); err != nil {
+			srcMatch.Path = srcPath
+			srcMatch.Tainted = true
+			c.mountsLock.Unlock()
+			if err == logical.ErrReadOnly && c.perfStandby {
+				return err
+			}
 
-		return fmt.Errorf("failed to update mount table with error %+v", err)
+			return fmt.Errorf("failed to update mount table with error %+v", err)
+		}
 	}
 
 	// Remount the backend
@@ -1308,6 +1339,24 @@ func (c *Core) loadMounts(ctx context.Context) error {
 			return namespace.ErrNoNamespace
 		}
 		entry.namespace = ns
+
+		// Subtle/hacky: re-register ns with namespaceManager to ensure that in the
+		// case where duplicate namespaces existed due to historical race bugs, we
+		// still ensure the correct namespaces are the ones that "win" the path
+		// registrations. This became an issue when we added Core.warmNamespaceCache
+		// and subsequently discovered customers had latent corruption where there
+		// were multiple namespace IDs with the same path in the namespaces config
+		// entry and loading them into cache made it non-deterministic which one won
+		// the slot in the path index due to map iteration randomness. By explicitly
+		// re-registering them here we enforce the same consistent order of
+		// registration into the path index that we had before warming and so
+		// prevent any apparent regressions. Note that mount entries are a slice not
+		// a map so consistent even if we ever did allow duplicates to be stored. We
+		// want to fix all the root causes of those duplicates but also want to
+		// restore the previous behavior that masked them as a problem. They will
+		// likely be there for a long time to come as they are persistent now even
+		// if we find all the bugs that allowed it to get in that state.
+		NamespaceRegister(ctx, ns, c)
 
 		// Sync values to the cache
 		entry.SyncCache()
@@ -1508,8 +1557,10 @@ func (c *Core) setupMounts(ctx context.Context) error {
 			return fmt.Errorf("error creating forwarded writer: %v", err)
 		}
 
+		storageRouter := newSnapshotStorageRouter(c, forwarded)
+
 		// Create a barrier storage view using the UUID
-		view := NewBarrierView(forwarded, barrierPath)
+		view := NewBarrierView(storageRouter, barrierPath)
 
 		// Singleton mounts cannot be filtered manually on a per-secondary basis
 		// from replication
@@ -1675,6 +1726,8 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 	if err != nil {
 		return nil, err
 	}
+
+	conf := make(map[string]string)
 	var runningSha string
 	factory, ok := c.logicalBackends[t]
 	if !ok {
@@ -1693,13 +1746,22 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 			runningSha = hex.EncodeToString(plug.Sha256)
 		}
 
+		if plug.Download {
+			if err = sysView.DownloadExtractVerifyPlugin(ctx, plug); err != nil {
+				return nil, fmt.Errorf("failed to extract and verify plugin=%q version=%q before mounting: %w",
+					plug.Name, plug.Version, err)
+			}
+		}
+
 		factory = plugin.Factory
 		if !plug.Builtin {
 			factory = wrapFactoryCheckPerms(c, factory)
 		}
+
+		setExternalPluginConfig(plug, conf)
 	}
+
 	// Set up conf to pass in plugin_name
-	conf := make(map[string]string)
 	for k, v := range entry.Options {
 		conf[k] = v
 	}
@@ -1714,6 +1776,12 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 	conf["plugin_type"] = consts.PluginTypeSecrets.String()
 	conf["plugin_version"] = pluginVersion
 
+	pluginOptionsVersion := entry.Options["version"]
+	// If Version isn't specified for a KV mount, it must be version 1.
+	if pluginOptionsVersion == "" && entry.Type == pluginconsts.SecretEngineKV {
+		pluginOptionsVersion = "1"
+	}
+
 	backendLogger := c.baseLogger.Named(fmt.Sprintf("secrets.%s.%s", t, entry.Accessor))
 	c.AddLogger(backendLogger)
 	pluginEventSender, err := c.events.WithPlugin(entry.namespace, &logical.EventPluginInfo{
@@ -1722,18 +1790,39 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 		MountPath:     entry.Path,
 		Plugin:        entry.Type,
 		PluginVersion: pluginVersion,
-		Version:       entry.Options["version"],
+		Version:       pluginOptionsVersion,
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	pluginRunningVersion := pluginVersion
+	if pluginRunningVersion == "" && runningSha == "" {
+		pluginRunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
+	}
+
+	pluginObservationRecorder, err := c.observations.WithPlugin(entry.namespace, &logical.ObservationPluginInfo{
+		MountClass:           consts.PluginTypeSecrets.String(),
+		MountAccessor:        entry.Accessor,
+		MountPath:            entry.Path,
+		Plugin:               entry.Type,
+		PluginVersion:        pluginVersion,
+		RunningPluginVersion: pluginRunningVersion,
+		Version:              pluginOptionsVersion,
+		Local:                entry.Local,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	config := &logical.BackendConfig{
-		StorageView:  view,
-		Logger:       backendLogger,
-		Config:       conf,
-		System:       sysView,
-		BackendUUID:  entry.BackendAwareUUID,
-		EventsSender: pluginEventSender,
+		StorageView:         view,
+		Logger:              backendLogger,
+		Config:              conf,
+		System:              sysView,
+		BackendUUID:         entry.BackendAwareUUID,
+		EventsSender:        pluginEventSender,
+		ObservationRecorder: pluginObservationRecorder,
 	}
 
 	ctx = namespace.ContextWithNamespace(ctx, entry.namespace)
@@ -1746,11 +1835,8 @@ func (c *Core) newLogicalBackend(ctx context.Context, entry *MountEntry, sysView
 		return nil, fmt.Errorf("nil backend of type %q returned from factory", t)
 	}
 
-	entry.RunningVersion = pluginVersion
+	entry.RunningVersion = pluginRunningVersion
 	entry.RunningSha256 = runningSha
-	if entry.RunningVersion == "" && entry.RunningSha256 == "" {
-		entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
-	}
 	addLicenseCallback(c, backend)
 
 	return backend, nil
@@ -1955,7 +2041,7 @@ func (c *Core) createMigrationStatus(from, to namespace.MountPathDetails) (strin
 	migrationInfo := MountMigrationInfo{
 		SourceMount:     from.Namespace.Path + from.MountPath,
 		TargetMount:     to.Namespace.Path + to.MountPath,
-		MigrationStatus: MigrationInProgressStatus.String(),
+		MigrationStatus: MigrationStatusInProgress.String(),
 	}
 	c.mountMigrationTracker.Store(migrationID, migrationInfo)
 	return migrationID, nil

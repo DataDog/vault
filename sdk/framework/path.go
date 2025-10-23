@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package framework
@@ -268,6 +268,9 @@ type DisplayAttributes struct {
 	// EditType is the optional type of form field needed for a property
 	// This is only necessary for a "textarea" or "file"
 	EditType string `json:"editType,omitempty"`
+
+	// Identifier is the primary field rendered in the UI (e.g. name, path, url, etc.)
+	Identifier bool `json:"identifier,omitempty"`
 }
 
 // RequestExample is example of request data.
@@ -282,7 +285,7 @@ type RequestExample struct {
 
 // Response describes and optional demonstrations an operation response.
 type Response struct {
-	Description string                  // summary of the the response and should always be provided
+	Description string                  // summary of the response and should always be provided
 	MediaType   string                  // media type of the response, defaulting to "application/json" if empty
 	Fields      map[string]*FieldSchema // the fields present in this response, used to generate openapi response
 	Example     *logical.Response       // example response data
@@ -383,6 +386,10 @@ func (p *Path) helpCallback(b *Backend) OperationFunc {
 			if env != nil {
 				vaultVersion = env.VaultVersion
 			}
+		}
+		redactVersion, _, _, _ := logical.CtxRedactionSettingsValue(ctx)
+		if redactVersion {
+			vaultVersion = ""
 		}
 		doc := NewOASDocument(vaultVersion)
 		if err := documentPath(p, b, requestResponsePrefix, doc); err != nil {

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -18,6 +18,7 @@ const ALL_FEATURES = [
   'KMIP',
   'Entropy Augmentation',
   'Transform Secrets Engine',
+  'Secrets Sync',
 ];
 
 export function allFeatures() {

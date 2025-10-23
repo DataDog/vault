@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -26,10 +26,12 @@ import (
 	"github.com/hashicorp/go-sockaddr"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/command/server"
+	"github.com/hashicorp/vault/helper/constants"
 	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/helper/identity/mfa"
 	"github.com/hashicorp/vault/helper/metricsutil"
 	"github.com/hashicorp/vault/helper/namespace"
+	"github.com/hashicorp/vault/http/priority"
 	"github.com/hashicorp/vault/internalshared/configutil"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/consts"
@@ -41,6 +43,8 @@ import (
 	"github.com/hashicorp/vault/vault/quotas"
 	"github.com/hashicorp/vault/vault/tokens"
 	uberAtomic "go.uber.org/atomic"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -69,6 +73,11 @@ type HandlerProperties struct {
 	DisablePrintableCheck bool
 	RecoveryMode          bool
 	RecoveryToken         *uberAtomic.String
+
+	// RequestIDGenerator is primary used for testing purposes to allow tests to
+	// control the request IDs deterministically. In production code (i.e. if this
+	// is nil) the handler will generate UUIDs.
+	RequestIDGenerator func() (string, error)
 }
 
 // fetchEntityAndDerivedPolicies returns the entity object for the given entity
@@ -82,28 +91,16 @@ func (c *Core) fetchEntityAndDerivedPolicies(ctx context.Context, tokenNS *names
 		return nil, nil, nil
 	}
 
-	// c.logger.Debug("entity set on the token", "entity_id", te.EntityID)
-
-	// Fetch the entity
-	entity, err := c.identityStore.MemDBEntityByID(entityID, false)
+	entity, err := c.fetchEntity(entityID, false)
+	if entity == nil && err == nil {
+		return nil, nil, nil
+	}
 	if err != nil {
-		c.logger.Error("failed to lookup entity using its ID", "error", err)
 		return nil, nil, err
 	}
 
-	if entity == nil {
-		// If there was no corresponding entity object found, it is
-		// possible that the entity got merged into another entity. Try
-		// finding entity based on the merged entity index.
-		entity, err = c.identityStore.MemDBEntityByMergedEntityID(entityID, false)
-		if err != nil {
-			c.logger.Error("failed to lookup entity in merged entity ID index", "error", err)
-			return nil, nil, err
-		}
-	}
-
 	policies := make(map[string][]string)
-	if entity != nil && !skipDeriveEntityPolicies {
+	if !skipDeriveEntityPolicies {
 		// c.logger.Debug("entity successfully fetched; adding entity policies to token's policies to create ACL")
 
 		// Attach the policies on the entity
@@ -127,6 +124,18 @@ func (c *Core) fetchEntityAndDerivedPolicies(ctx context.Context, tokenNS *names
 	}
 
 	return entity, policies, err
+}
+
+// fetchEntity returns the entity object for the given entity
+// ID. If the entity is merged into a different entity object, the entity into
+// which the given entity ID is merged into will be returned.
+func (c *Core) fetchEntity(entityID string, clone bool) (*identity.Entity, error) {
+	if entityID == "" || c.identityStore == nil {
+		return nil, nil
+	}
+	txn := c.identityStore.db.Txn(false)
+
+	return c.identityStore.fetchEntityInTxn(txn, entityID, clone)
 }
 
 // filterGroupPoliciesByNS takes a context, token namespace, and a map of
@@ -248,7 +257,7 @@ func (c *Core) fetchACLTokenEntryAndEntity(ctx context.Context, req *logical.Req
 
 	// Ensure the token is valid
 	if te == nil {
-		return nil, nil, nil, nil, logical.ErrPermissionDenied
+		return nil, nil, nil, nil, multierror.Append(logical.ErrPermissionDenied, logical.ErrInvalidToken)
 	}
 
 	// CIDR checks bind all tokens except non-expiring root tokens
@@ -316,9 +325,13 @@ func (c *Core) fetchACLTokenEntryAndEntity(ctx context.Context, req *logical.Req
 	// Add the inline policy if it's set
 	policies := make([]*Policy, 0)
 	if te.InlinePolicy != "" {
-		inlinePolicy, err := ParseACLPolicy(tokenNS, te.InlinePolicy)
+		// TODO (HCL_DUP_KEYS_DEPRECATION): return to ParseACLPolicy once the deprecation is done
+		inlinePolicy, duplicate, err := ParseACLPolicyCheckDuplicates(tokenNS, te.InlinePolicy)
 		if err != nil {
 			return nil, nil, nil, nil, ErrInternalError
+		}
+		if duplicate {
+			c.logger.Warn("HCL inline policy contains duplicate attributes, which will no longer be supported in a future version", "namespace", tokenNS.Path)
 		}
 		policies = append(policies, inlinePolicy)
 	}
@@ -334,9 +347,9 @@ func (c *Core) fetchACLTokenEntryAndEntity(ctx context.Context, req *logical.Req
 	return acl, te, entity, identityPolicies, nil
 }
 
-// CheckTokenWithLock calls CheckToken after grabbing the internal stateLock, and also checking that we aren't in the
-// process of shutting down.
-func (c *Core) CheckTokenWithLock(ctx context.Context, req *logical.Request, unauth bool) (*logical.Auth, *logical.TokenEntry, error) {
+// CheckTokenWithLock calls CheckToken after grabbing the internal stateLock,
+// and also checking that we aren't in the process of shutting down.
+func (c *Core) CheckTokenWithLock(ctx context.Context, req *logical.Request) (*logical.Auth, *logical.TokenEntry, error) {
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
 	// first check that we aren't shutting down
@@ -345,9 +358,63 @@ func (c *Core) CheckTokenWithLock(ctx context.Context, req *logical.Request, una
 	} else if c.activeContext != nil && c.activeContext.Err() != nil {
 		return nil, nil, c.activeContext.Err()
 	}
-	return c.CheckToken(ctx, req, unauth)
+	return c.CheckToken(ctx, req, false)
 }
 
+func (c *Core) existenceCheck(ctx context.Context, req *logical.Request) (*logical.Operation, error) {
+	existsResp, checkExists, resourceExists, err := c.router.RouteExistenceCheck(ctx, req)
+	switch err {
+	case logical.ErrUnsupportedPath:
+		// fail later via bad path to avoid confusing items in the log
+		checkExists = false
+	case logical.ErrRelativePath:
+		return nil, errutil.UserError{Err: err.Error()}
+	case nil:
+		if existsResp != nil && existsResp.IsError() {
+			return nil, existsResp.Error()
+		}
+		// Otherwise, continue on
+	default:
+		c.logger.Error("failed to run existence check", "error", err)
+		if _, ok := err.(errutil.UserError); ok {
+			return nil, err
+		} else {
+			return nil, ErrInternalError
+		}
+	}
+	var existenceCheckOp logical.Operation
+	switch {
+	case !checkExists:
+		// No existence check, so always treat it as an update operation, which is how it is pre 0.5
+		existenceCheckOp = logical.UpdateOperation
+	case resourceExists:
+		// It exists, so force an update operation
+		existenceCheckOp = logical.UpdateOperation
+	case !resourceExists:
+		// It doesn't exist, force a create operation
+		existenceCheckOp = logical.CreateOperation
+	default:
+		panic("unreachable code")
+	}
+	return &existenceCheckOp, nil
+}
+
+// CheckToken returns information about the state of authentication for a request.
+// The unauth flag should be set true for "login" requests; these are requests to
+// logical.Paths.Unauthenticated endpoints that are not deleted auth requests,
+// though note that despite being called login requests, not all of them are actually
+// login requests, as in attempts to authenticate and get back a token.
+//
+// Generally speaking, if CheckToken return an error, the request should fail,
+// but there are exceptions, e.g. ErrPerfStandbyPleaseForward may just result in
+// the request being forwarded to the active node.  A returned error does not
+// necessarily mean that the other return values will be nil; often they are
+// useful e.g. for auditing failing requests.
+//
+// When unauth is true, fail root path requests, don't worry about regular
+// ACL policy checks (though sentinel checks may still apply), and don't do
+// client counting.  When unauth is false, an invalid token or a lack of ACL
+// perms will result in an error, and client counting applies.
 func (c *Core) CheckToken(ctx context.Context, req *logical.Request, unauth bool) (*logical.Auth, *logical.TokenEntry, error) {
 	defer metrics.MeasureSince([]string{"core", "check_token"}, time.Now())
 
@@ -390,11 +457,17 @@ func (c *Core) CheckToken(ctx context.Context, req *logical.Request, unauth bool
 	}
 
 	// At this point we won't be forwarding a raw request; we should delete
-	// authorization headers as appropriate
-	switch req.ClientTokenSource {
-	case logical.ClientTokenFromVaultHeader:
+	// authorization headers as appropriate.  Don't delete Authorization headers
+	// if this is an unauth (login) request, as that precludes things like spiffe
+	// auth handling login requests with the payload in the Authorization header.
+	// However, if we did find a valid vault token in the header, we'll still
+	// suppress the header even if unauth is true, on the principle that we
+	// don't want to expose vault tokens to plugins which might do something
+	// nefarious with them.
+	switch {
+	case req.ClientTokenSource == logical.ClientTokenFromVaultHeader:
 		delete(req.Headers, consts.AuthHeaderName)
-	case logical.ClientTokenFromAuthzHeader:
+	case req.ClientTokenSource == logical.ClientTokenFromAuthzHeader && !unauth && te == nil:
 		if headers, ok := req.Headers["Authorization"]; ok {
 			retHeaders := make([]string, 0, len(headers))
 			for _, v := range headers {
@@ -413,41 +486,13 @@ func (c *Core) CheckToken(ctx context.Context, req *logical.Request, unauth bool
 	// whether a particular resource exists. Then we can mark it as an update
 	// or creation as appropriate.
 	if req.Operation == logical.CreateOperation || req.Operation == logical.UpdateOperation {
-		existsResp, checkExists, resourceExists, err := c.router.RouteExistenceCheck(ctx, req)
-		switch err {
-		case logical.ErrUnsupportedPath:
-			// fail later via bad path to avoid confusing items in the log
-			checkExists = false
-		case logical.ErrRelativePath:
-			return nil, te, errutil.UserError{Err: err.Error()}
-		case nil:
-			if existsResp != nil && existsResp.IsError() {
-				return nil, te, existsResp.Error()
-			}
-			// Otherwise, continue on
-		default:
-			c.logger.Error("failed to run existence check", "error", err)
-			if _, ok := err.(errutil.UserError); ok {
-				return nil, te, err
-			} else {
-				return nil, te, ErrInternalError
-			}
+		op, err := c.existenceCheck(ctx, req)
+		if err != nil {
+			return nil, te, err
 		}
-
-		switch {
-		case !checkExists:
-			// No existence check, so always treat it as an update operation, which is how it is pre 0.5
-			req.Operation = logical.UpdateOperation
-		case resourceExists:
-			// It exists, so force an update operation
-			req.Operation = logical.UpdateOperation
-		case !resourceExists:
-			// It doesn't exist, force a create operation
-			req.Operation = logical.CreateOperation
-		default:
-			panic("unreachable code")
-		}
+		req.Operation = *op
 	}
+
 	// Create the auth response
 	auth := &logical.Auth{
 		ClientToken: req.ClientToken,
@@ -476,12 +521,35 @@ func (c *Core) CheckToken(ctx context.Context, req *logical.Request, unauth bool
 		req.ClientID = clientID
 	}
 
+	twoStepRecover := req.Operation == logical.RecoverOperation && req.RecoverSourcePath != "" && req.RecoverSourcePath != req.Path
+	var alternateRecoverCapability *logical.Operation
+	if twoStepRecover {
+		// An existence check call requires the operation to be set to either
+		// create or update. We set it to create here, then switch it back once
+		// the existence check is done.
+		req.Operation = logical.CreateOperation
+		op, err := c.existenceCheck(ctx, req)
+		req.Operation = logical.RecoverOperation
+		if err != nil {
+			return nil, te, err
+		}
+		alternateRecoverCapability = op
+	}
+
 	// Check the standard non-root ACLs. Return the token entry if it's not
 	// allowed so we can decrement the use count.
 	authResults := c.performPolicyChecks(ctx, acl, te, req, entity, &PolicyCheckOpts{
-		Unauth:            unauth,
-		RootPrivsRequired: rootPath,
+		Unauth:                     unauth,
+		RootPrivsRequired:          rootPath,
+		CheckSourcePath:            twoStepRecover,
+		RecoverAlternateCapability: alternateRecoverCapability,
 	})
+
+	// Assign the sudo path priority if the request is issued against a sudo path.
+	if rootPath {
+		pri := uint8(priority.NeverDrop)
+		auth.HTTPRequestPriority = &pri
+	}
 
 	auth.PolicyResults = &logical.PolicyResults{
 		Allowed: authResults.Allowed,
@@ -584,6 +652,15 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 	if ok {
 		ctx = logical.CreateContextOriginalBody(ctx, body)
 	}
+	redactVersion, redactAddresses, redactClusterName, ok := logical.CtxRedactionSettingsValue(httpCtx)
+	if ok {
+		ctx = logical.CreateContextRedactionSettings(ctx, redactVersion, redactAddresses, redactClusterName)
+	}
+	inFlightRequestPriority, ok := httpCtx.Value(logical.CtxKeyInFlightRequestPriority{}).(priority.AOPWritePriority)
+	if ok {
+		ctx = context.WithValue(ctx, logical.CtxKeyInFlightRequestPriority{}, inFlightRequestPriority)
+	}
+
 	resp, err = c.handleCancelableRequest(ctx, req)
 	req.SetTokenEntry(nil)
 	cancel()
@@ -591,26 +668,10 @@ func (c *Core) switchedLockHandleRequest(httpCtx context.Context, req *logical.R
 }
 
 func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request) (resp *logical.Response, err error) {
-	// Allowing writing to a path ending in / makes it extremely difficult to
-	// understand user intent for the filesystem-like backends (kv,
-	// cubbyhole) -- did they want a key named foo/ or did they want to write
-	// to a directory foo/ with no (or forgotten) key, or...? It also affects
-	// lookup, because paths ending in / are considered prefixes by some
-	// backends. Basically, it's all just terrible, so don't allow it.
-	if strings.HasSuffix(req.Path, "/") &&
-		(req.Operation == logical.UpdateOperation ||
-			req.Operation == logical.CreateOperation ||
-			req.Operation == logical.PatchOperation) {
-		return logical.ErrorResponse("cannot write to a path ending in '/'"), nil
-	}
 	waitGroup, err := waitForReplicationState(ctx, c, req)
 	if err != nil {
 		return nil, err
 	}
-
-	// MountPoint will not always be set at this point, so we ensure the req contains it
-	// as it is depended on by some functionality (e.g. quotas)
-	req.MountPoint = c.router.MatchingMount(ctx, req.Path)
 
 	// Decrement the wait group when our request is done
 	if waitGroup != nil {
@@ -621,8 +682,51 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 		return nil, logical.ErrMissingRequiredState
 	}
 
+	// Ensure the req contains a MountPoint as it is depended on by some
+	// functionality (e.g. quotas)
+	var entry *MountEntry
+	req.MountPoint, entry = c.router.MatchingMountAndEntry(ctx, req.Path)
+
+	if entry != nil && entry.Table == mountTableType && !c.IsMountTypeAllowed(entry.Type) {
+		return logical.ErrorResponse("mounts of type %q aren't supported by license", entry.Type), logical.ErrInvalidRequest
+	}
+
+	// If the request requires a snapshot ID, we need to perform checks to
+	// ensure the request is valid and lock the snapshot, so it doesn't get
+	// unloaded while the request is being processed.
+	if req.RequiresSnapshotID != "" {
+		if c.perfStandby {
+			return nil, logical.ErrPerfStandbyPleaseForward
+		}
+		unlockSnapshot, err := c.lockSnapshotForRequest(ctx, req, entry)
+		if err != nil {
+			return logical.ErrorResponse("unable to lock snapshot: " + err.Error()), err
+		}
+		defer unlockSnapshot()
+	}
+	// Allowing writing to a path ending in / makes it extremely difficult to
+	// understand user intent for the filesystem-like backends (kv,
+	// cubbyhole) -- did they want a key named foo/ or did they want to write
+	// to a directory foo/ with no (or forgotten) key, or...? It also affects
+	// lookup, because paths ending in / are considered prefixes by some
+	// backends. Basically, it's all just terrible, so don't allow it.
+	if strings.HasSuffix(req.Path, "/") &&
+		(req.Operation == logical.UpdateOperation ||
+			req.Operation == logical.CreateOperation ||
+			req.Operation == logical.PatchOperation ||
+			req.Operation == logical.RecoverOperation) {
+		if entry == nil || !entry.Config.TrimRequestTrailingSlashes {
+			return logical.ErrorResponse("cannot write to a path ending in '/'"), nil
+		} else {
+			req.Path = strings.TrimSuffix(req.Path, "/")
+		}
+	}
+
 	err = c.PopulateTokenEntry(ctx, req)
 	if err != nil {
+		if errwrap.Contains(err, logical.ErrPermissionDenied.Error()) {
+			return nil, multierror.Append(err, logical.ErrInvalidToken)
+		}
 		return nil, err
 	}
 
@@ -736,7 +840,8 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 		case "sys/leases/lookup", "sys/leases/renew", "sys/leases/revoke", "sys/leases/revoke-force":
 			leaseID, ok := req.Data["lease_id"]
 			// If lease ID is not present, break out and let the backend handle the error
-			if !ok || leaseID == nil {
+			_, isString := leaseID.(string)
+			if !ok || !isString {
 				break
 			}
 			_, nsID := namespace.SplitIDFromString(leaseID.(string))
@@ -868,7 +973,6 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 
 	var nonHMACReqDataKeys []string
 	var nonHMACRespDataKeys []string
-	entry := c.router.MatchingMountEntry(ctx, req.Path)
 	if entry != nil {
 		// Get and set ignored HMAC'd value. Reset those back to empty afterwards.
 		if rawVals, ok := entry.synthesizedConfigCache.Load("audit_non_hmac_request_keys"); ok {
@@ -1001,6 +1105,13 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 		return nil, nil, ctErr
 	}
 
+	// See if the call to CheckToken set any request priority. We push the
+	// processing down into CheckToken so we only have to do a router lookup
+	// once.
+	if auth != nil && auth.HTTPRequestPriority != nil {
+		ctx = context.WithValue(ctx, logical.CtxKeyInFlightRequestPriority{}, *auth.HTTPRequestPriority)
+	}
+
 	// Updating in-flight request data with client/entity ID
 	inFlightReqID, ok := ctx.Value(logical.CtxKeyInFlightRequestID{}).(string)
 	if ok && req.ClientID != "" {
@@ -1021,7 +1132,7 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 		}
 		if te == nil {
 			// Token has been revoked by this point
-			retErr = multierror.Append(retErr, logical.ErrPermissionDenied)
+			retErr = multierror.Append(retErr, logical.ErrPermissionDenied, logical.ErrInvalidToken)
 			return nil, nil, retErr
 		}
 		if te.NumUses == tokenRevocationPending {
@@ -1148,6 +1259,39 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 		}
 	}()
 
+	// This context value will be empty if it's a request that doesn't require a
+	// snapshot. This is done on purpose and handled in the
+	// SnapshotStorageRouter
+	ctx = logical.CreateContextWithSnapshotID(ctx, req.RequiresSnapshotID)
+
+	// recover operations require 2 steps
+	if req.Operation == logical.RecoverOperation {
+		// first do a read operation
+		// this will use the snapshot's storage
+		originalPath := req.Path
+		req.Operation = logical.ReadOperation
+		if req.RecoverSourcePath != "" {
+			req.Path = req.RecoverSourcePath
+		}
+		resp, err := c.doRouting(ctx, req)
+		if err != nil {
+			return nil, auth, err
+		}
+		if resp == nil {
+			return logical.ErrorResponse("no data in the snapshot"), auth, err
+		}
+		if resp.IsError() {
+			return resp, auth, err
+		}
+		// use the response as the data in a recover operation
+		// set the snapshot ID context value to the empty string to ensure that
+		// the write goes to the real storage
+		req.Operation = logical.RecoverOperation
+		req.Path = originalPath
+		req.Data = resp.Data
+		ctx = logical.CreateContextWithSnapshotID(ctx, "")
+	}
+
 	// Route the request
 	resp, routeErr := c.doRouting(ctx, req)
 	if resp != nil {
@@ -1232,18 +1376,24 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 			} else if matchingMountEntry.Options == nil || matchingMountEntry.Options["leased_passthrough"] != "true" {
 				registerLease = false
 				resp.Secret.Renewable = false
+			} else if req.IsSnapshotReadOrList() {
+				registerLease = false
+				resp.Secret.Renewable = false
 			}
 
 		case "plugin":
 			// If we are a plugin type and the plugin name is "kv" check the
 			// mount entry options.
-			if matchingMountEntry.Config.PluginName == "kv" && (matchingMountEntry.Options == nil || matchingMountEntry.Options["leased_passthrough"] != "true") {
+			if matchingMountEntry.Config.PluginName == "kv" && (matchingMountEntry.Options == nil || matchingMountEntry.Options["leased_passthrough"] != "true" || req.IsSnapshotReadOrList()) {
 				registerLease = false
 				resp.Secret.Renewable = false
 			}
 		}
 
 		if registerLease {
+			if req.IsSnapshotReadOrList() {
+				return logical.ErrorResponse("cannot register lease for snapshot read or list"), nil, ErrInternalError
+			}
 			sysView := c.router.MatchingSystemView(ctx, req.Path)
 			if sysView == nil {
 				c.logger.Error("unable to look up sys view for login path", "request_path", req.Path)
@@ -1499,6 +1649,7 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 			return nil, nil, err
 		}
 		if isloginUserLocked {
+			c.logger.Error("login attempts exceeded, user is locked out", "request_path", req.Path)
 			return nil, nil, logical.ErrPermissionDenied
 		}
 	}
@@ -1655,6 +1806,7 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 			var err error
 			// Fetch the entity for the alias, or create an entity if one
 			// doesn't exist.
+
 			entity, entityCreated, err := c.identityStore.CreateOrFetchEntity(ctx, auth.Alias)
 			if err != nil {
 				switch auth.Alias.Local {
@@ -1662,7 +1814,7 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 					// Only create a new entity if the error was a readonly error and the creation flag is true
 					// i.e the entity was in the middle of being created
 					if entityCreated && errors.Is(err, logical.ErrReadOnly) {
-						entity, err = possiblyForwardEntityCreation(ctx, c, err, auth, nil)
+						entity, err = registerLocalAlias(ctx, c, auth.Alias)
 						if err != nil {
 							if strings.Contains(err.Error(), errCreateEntityUnimplemented) {
 								resp.AddWarning("primary cluster doesn't yet issue entities for local auth mounts; falling back to not issuing entities for local auth mounts")
@@ -1672,14 +1824,14 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 							}
 						}
 					}
-					err = updateLocalAlias(ctx, c, auth, entity)
 				default:
 					entity, entityCreated, err = possiblyForwardAliasCreation(ctx, c, err, auth, entity)
+					if err != nil {
+						return nil, nil, err
+					}
 				}
 			}
-			if err != nil {
-				return nil, nil, err
-			}
+
 			if entity == nil {
 				return nil, nil, fmt.Errorf("failed to create an entity for the authenticated alias")
 			}
@@ -1739,7 +1891,7 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 			// run single-phase login MFA check, else run two-phase login MFA check
 			if len(matchedMfaEnforcementList) > 0 && len(req.MFACreds) > 0 {
 				for _, eConfig := range matchedMfaEnforcementList {
-					err = c.validateLoginMFA(ctx, eConfig, entity, req.Connection.RemoteAddr, req.MFACreds)
+					err = c.validateLoginMFA(ctx, eConfig, entity, req.Connection.RemoteAddr, req.MFACreds, nil)
 					if err != nil {
 						return nil, nil, logical.ErrPermissionDenied
 					}
@@ -1755,7 +1907,8 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 					MFAConstraints: make(map[string]*logical.MFAConstraintAny),
 				}
 				for _, eConfig := range matchedMfaEnforcementList {
-					mfaAny, err := c.buildMfaEnforcementResponse(eConfig)
+					onlyMFAEnforcement := len(matchedMfaEnforcementList) == 1
+					mfaAny, err := c.buildMfaEnforcementResponse(eConfig, entity, onlyMFAEnforcement)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -1803,7 +1956,7 @@ func (c *Core) handleLoginRequest(ctx context.Context, req *logical.Request) (re
 		// for new role-based quotas upon creation, rather than counting old leases toward
 		// the total.
 		if reqRole == nil && requiresLease && !c.impreciseLeaseRoleTracking {
-			role = c.DetermineRoleFromLoginRequest(ctx, req.MountPoint, req.Data)
+			role = c.DetermineRoleFromLoginRequest(ctx, req.MountPoint, req.Data, req.Connection, req.Headers)
 		}
 
 		leaseGen, respTokenCreate, errCreateToken := c.LoginCreateToken(ctx, ns, req.Path, source, role, resp)
@@ -2041,7 +2194,7 @@ func (c *Core) LoginCreateToken(ctx context.Context, ns *namespace.Namespace, re
 		if auth.TokenType != logical.TokenTypeBatch {
 			leaseGenerated = true
 		}
-	case err == ErrInternalError:
+	case errors.Is(err, ErrInternalError), isRetryableRPCError(ctx, err):
 		return false, nil, err
 	default:
 		return false, logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
@@ -2069,6 +2222,34 @@ func (c *Core) LoginCreateToken(ctx context.Context, ns *namespace.Namespace, re
 	)
 
 	return leaseGenerated, resp, nil
+}
+
+func isRetryableRPCError(ctx context.Context, err error) bool {
+	stat, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+
+	switch stat.Code() {
+	case codes.Unavailable:
+		return true
+	case codes.Canceled:
+		// if the request context is canceled through a deadline exceeded, we
+		// want to return false. But otherwise, there could have been an EOF or
+		// the RPC client context has been canceled which should be retried
+		ctxErr := ctx.Err()
+		if ctxErr == nil {
+			return true
+		}
+		return !errors.Is(ctxErr, context.DeadlineExceeded)
+	case codes.Unknown:
+		// sometimes a missing HTTP content-type error can happen when multiple
+		// HTTP statuses have been written. This can happen when the error
+		// occurs in the middle of a response. This should be retried.
+		return strings.Contains(err.Error(), "malformed header: missing HTTP content-type")
+	default:
+		return false
+	}
 }
 
 // failedUserLoginProcess updates the userFailedLoginMap with login count and  last failed
@@ -2309,7 +2490,13 @@ func (c *Core) getUserLockoutFromConfig(mountType string) UserLockoutConfig {
 	return defaultUserLockoutConfig
 }
 
-func (c *Core) buildMfaEnforcementResponse(eConfig *mfa.MFAEnforcementConfig) (*logical.MFAConstraintAny, error) {
+func (c *Core) buildMfaEnforcementResponse(eConfig *mfa.MFAEnforcementConfig, entity *identity.Entity, onlyMFAEnforcement bool) (*logical.MFAConstraintAny, error) {
+	if eConfig == nil {
+		return nil, fmt.Errorf("MFA enforcement config is nil")
+	}
+	if entity == nil {
+		return nil, fmt.Errorf("entity is nil")
+	}
 	mfaAny := &logical.MFAConstraintAny{
 		Any: []*logical.MFAMethodID{},
 	}
@@ -2322,15 +2509,36 @@ func (c *Core) buildMfaEnforcementResponse(eConfig *mfa.MFAEnforcementConfig) (*
 		if mConfig.Type == mfaMethodTypeDuo {
 			duoConf, ok := mConfig.Config.(*mfa.Config_DuoConfig)
 			if !ok {
-				return nil, fmt.Errorf("invalid MFA configuration type")
+				return nil, fmt.Errorf("invalid MFA configuration type, expected DuoConfig")
 			}
 			duoUsePasscode = duoConf.DuoConfig.UsePasscode
 		}
+
+		allowSelfEnrollment := false
+		if mConfig.Type == mfaMethodTypeTOTP && constants.IsEnterprise {
+			totpConf, ok := mConfig.Config.(*mfa.Config_TOTPConfig)
+			if !ok {
+				return nil, fmt.Errorf("invalid MFA configuration type, expected TOTPConfig")
+			}
+			enrollmentEnabled := totpConf.TOTPConfig.GetEnableSelfEnrollment()
+			_, entityHasMFASecretForMethodID := entity.MFASecrets[methodID]
+			if enrollmentEnabled && !entityHasMFASecretForMethodID && onlyMFAEnforcement {
+				// If enable_self_enrollment setting on the TOTP MFA method config is set to
+				// true and the entity does not have an MFA secret yet, we will allow
+				// self-service enrollment as long as only a single MFA enforcement applies to
+				// this login request.
+				allowSelfEnrollment = true
+			}
+		}
+
 		mfaMethod := &logical.MFAMethodID{
 			Type:         mConfig.Type,
 			ID:           methodID,
 			UsesPasscode: mConfig.Type == mfaMethodTypeTOTP || duoUsePasscode,
 			Name:         mConfig.Name,
+			// This will be used by the client to determine whether it should offer the user
+			// a way to generate an MFA secret for this method.
+			SelfEnrollmentEnabled: allowSelfEnrollment,
 		}
 		mfaAny.Any = append(mfaAny.Any, mfaMethod)
 	}
@@ -2376,7 +2584,7 @@ func (c *Core) RegisterAuth(ctx context.Context, tokenTTL time.Duration, path st
 
 	if err := c.tokenStore.create(ctx, &te); err != nil {
 		c.logger.Error("failed to create token", "error", err)
-		return ErrInternalError
+		return possiblyWrapOverloadedError("failed to create token", err)
 	}
 
 	// Populate the client token, accessor, and TTL
@@ -2396,7 +2604,7 @@ func (c *Core) RegisterAuth(ctx context.Context, tokenTTL time.Duration, path st
 				c.logger.Warn("failed to clean up token lease during login request", "request_path", path, "error", err)
 			}
 			c.logger.Error("failed to register token lease during login request", "request_path", path, "error", err)
-			return ErrInternalError
+			return possiblyWrapOverloadedError("failed to register token lease during login request", err)
 		}
 		if te.ExternalID != "" {
 			auth.ClientToken = te.ExternalID
@@ -2436,6 +2644,8 @@ func (c *Core) LocalGetUserFailedLoginInfo(ctx context.Context, userKey FailedLo
 // LocalUpdateUserFailedLoginInfo updates the failed login information for a user based on alias name and mountAccessor
 func (c *Core) LocalUpdateUserFailedLoginInfo(ctx context.Context, userKey FailedLoginUser, failedLoginInfo *FailedLoginInfo, deleteEntry bool) error {
 	c.userFailedLoginInfoLock.Lock()
+	defer c.userFailedLoginInfoLock.Unlock()
+
 	switch deleteEntry {
 	case false:
 		// update entry in the map
@@ -2478,7 +2688,6 @@ func (c *Core) LocalUpdateUserFailedLoginInfo(ctx context.Context, userKey Faile
 		// delete the entry from the map, if no key exists it is no-op
 		delete(c.userFailedLoginInfo, userKey)
 	}
-	c.userFailedLoginInfoLock.Unlock()
 	return nil
 }
 
@@ -2636,7 +2845,6 @@ func (c *Core) checkSSCTokenInternal(ctx context.Context, token string, isPerfSt
 	if !strings.HasPrefix(token, consts.ServiceTokenPrefix) {
 		return token, nil
 	}
-
 	// Check token length to guess if this is an server side consistent token or not.
 	// Note that even when the DisableSSCTokens flag is set, index
 	// bearing tokens that have already been given out may still be used.
@@ -2655,12 +2863,19 @@ func (c *Core) checkSSCTokenInternal(ctx context.Context, token string, isPerfSt
 
 	err = proto.Unmarshal(tokenBytes, signedToken)
 	if err != nil {
-		return "", fmt.Errorf("error occurred when unmarshalling ssc token: %w", err)
+		// Log a warning here, but don't return an error. This is because we want don't
+		// want to forward the request to the active node if the token is invalid.
+		c.logger.Debug("error occurred when unmarshalling ssc token: %w", err)
+		return token, nil
 	}
 	hm, err := c.tokenStore.CalculateSignedTokenHMAC(signedToken.Token)
 	if !hmac.Equal(hm, signedToken.Hmac) {
-		return "", fmt.Errorf("token mac for %+v is incorrect: err %w", signedToken, err)
+		// As above, don't return an error so that the request is handled like normal,
+		// and handled by the node that received it.
+		c.logger.Debug("token mac is incorrect", "token", signedToken.Token)
+		return token, nil
 	}
+
 	plainToken := &tokens.Token{}
 	err = proto.Unmarshal([]byte(signedToken.Token), plainToken)
 	if err != nil {
@@ -2681,11 +2896,13 @@ func (c *Core) checkSSCTokenInternal(ctx context.Context, token string, isPerfSt
 	if c.HasWALState(requiredWalState, isPerfStandby) {
 		return plainToken.Random, nil
 	}
+
 	// Make sure to forward the request instead of checking the token if the flag
 	// is set and we're on a perf standby
 	if c.ForwardToActive() == ForwardSSCTokenToActive && isPerfStandby {
 		return "", logical.ErrPerfStandbyPleaseForward
 	}
+
 	// In this case, the server side consistent token cannot be used on this node. We return the appropriate
 	// status code.
 	return "", logical.ErrMissingRequiredState

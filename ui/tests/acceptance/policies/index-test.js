@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,7 +10,6 @@ import {
   fillIn,
   visit,
   click,
-  find,
   waitFor,
   waitUntil,
 } from '@ember/test-helpers';
@@ -18,27 +17,26 @@ import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
 import { v4 as uuidv4 } from 'uuid';
 
-import authPage from 'vault/tests/pages/auth';
+import { login } from 'vault/tests/helpers/auth/auth-helpers';
 import { runCmd } from 'vault/tests/helpers/commands';
+import codemirror, { setCodeEditorValue } from 'vault/tests/helpers/codemirror';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 const SELECT = {
   policyByName: (name) => `[data-test-policy-link="${name}"]`,
   filterBar: '[data-test-component="navigate-input"]',
-  delete: '[data-test-confirm-action-trigger]',
-  confirmDelete: '[data-test-confirm-button]',
-  createLink: '[data-test-policy-create-link]',
+  createPolicy: '[data-test-policy-create-link]',
   nameInput: '[data-test-policy-input="name"]',
-  save: '[data-test-policy-save]',
-  createError: '[data-test-message-error]',
   policyTitle: '[data-test-policy-name]',
   listBreadcrumb: '[data-test-policy-list-link] a',
 };
+
 module('Acceptance | policies/acl', function (hooks) {
   setupApplicationTest(hooks);
 
   hooks.beforeEach(function () {
     this.uid = uuidv4();
-    return authPage.login();
+    return login();
   });
 
   test('it lists default and root acls', async function (assert) {
@@ -71,8 +69,8 @@ module('Acceptance | policies/acl', function (hooks) {
     await waitFor(SELECT.policyByName(policyName));
     assert.dom(SELECT.policyByName(policyName)).exists('policy is shown in list');
     await click(`${SELECT.policyByName(policyName)} [data-test-popup-menu-trigger]`);
-    await click(SELECT.delete);
-    await click(SELECT.confirmDelete);
+    await click(GENERAL.confirmTrigger);
+    await click(GENERAL.confirmButton);
     assert.dom(SELECT.policyByName(policyName)).doesNotExist('policy is deleted successfully');
   });
 
@@ -83,11 +81,15 @@ module('Acceptance | policies/acl', function (hooks) {
 
     await visit('/vault/policies/acl');
     // new policy creation
-    await click(SELECT.createLink);
+    await click(SELECT.createPolicy);
 
     await fillIn(SELECT.nameInput, policyName);
-    find('.CodeMirror').CodeMirror.setValue(policyString);
-    await click(SELECT.save);
+
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, policyString);
+
+    await click(GENERAL.submitButton);
     assert.strictEqual(
       currentURL(),
       `/vault/policy/acl/${policyName}`,
@@ -103,15 +105,19 @@ module('Acceptance | policies/acl', function (hooks) {
 
     await visit('/vault/policies/acl');
     // new policy creation
-    await click(SELECT.createLink);
+    await click(SELECT.createPolicy);
 
     await fillIn(SELECT.nameInput, policyName);
-    await click(SELECT.save);
+    await click(GENERAL.submitButton);
     assert
-      .dom(SELECT.createError)
+      .dom(GENERAL.messageError)
       .hasText(`Error 'policy' parameter not supplied or empty`, 'renders error message on save');
-    find('.CodeMirror').CodeMirror.setValue(policyString);
-    await click(SELECT.save);
+
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, policyString);
+
+    await click(GENERAL.submitButton);
 
     await waitUntil(() => currentURL() === `/vault/policy/acl/${encodeURIComponent(policyLower)}`);
     assert.strictEqual(
@@ -120,8 +126,7 @@ module('Acceptance | policies/acl', function (hooks) {
       'navigates to policy show on successful save'
     );
     assert.dom(SELECT.policyTitle).hasText(policyLower, 'displays the policy name on the show page');
-    // will fail if you have a license about to expire.
-    assert.dom('[data-test-flash-message].is-info').doesNotExist('no flash message is displayed on save');
+    assert.dom(GENERAL.latestFlashContent).hasText(`ACL policy "${policyLower}" was successfully created.`);
     await click(SELECT.listBreadcrumb);
 
     assert.strictEqual(currentURL(), `/vault/policies/acl`, 'navigates to policy list from breadcrumb');
@@ -133,12 +138,9 @@ module('Acceptance | policies/acl', function (hooks) {
 
     // policy deletion
     await click(SELECT.policyByName(policyLower));
-
     await click('[data-test-policy-edit-toggle]');
-
-    await click('[data-test-confirm-action-trigger]');
-
-    await click('[data-test-confirm-button]');
+    await click(GENERAL.confirmTrigger);
+    await click(GENERAL.confirmButton);
     await waitUntil(() => currentURL() === `/vault/policies/acl`);
     assert.strictEqual(
       currentURL(),

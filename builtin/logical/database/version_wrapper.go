@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package database
@@ -35,6 +35,7 @@ func newDatabaseWrapper(ctx context.Context, pluginName string, pluginVersion st
 	if versions.IsBuiltinVersion(pluginVersion) {
 		pluginVersion = ""
 	}
+
 	newDB, err := v5.PluginFactoryVersion(ctx, pluginName, pluginVersion, sys, logger)
 	if err == nil {
 		dbw = databaseVersionWrapper{

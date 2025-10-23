@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -6,6 +6,7 @@ package vault
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"sort"
@@ -13,10 +14,12 @@ import (
 
 	"github.com/armon/go-radix"
 	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/go-secure-stdlib/parseutil"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/hashicorp/vault/vault/observations"
 	"github.com/mitchellh/copystructure"
 )
 
@@ -39,8 +42,10 @@ type ACL struct {
 }
 
 type PolicyCheckOpts struct {
-	RootPrivsRequired bool
-	Unauth            bool
+	RootPrivsRequired          bool
+	Unauth                     bool
+	CheckSourcePath            bool
+	RecoverAlternateCapability *logical.Operation
 }
 
 type AuthResults struct {
@@ -333,6 +338,9 @@ func (a *ACL) CapabilitiesAndSubscribeEventTypes(ctx context.Context, path strin
 	if capabilities&SubscribeCapabilityInt > 0 {
 		pathCapabilities = append(pathCapabilities, SubscribeCapability)
 	}
+	if capabilities&RecoverCapabilityInt > 0 {
+		pathCapabilities = append(pathCapabilities, RecoverCapability)
+	}
 
 	// If "deny" is explicitly set or if the path has no capabilities at all,
 	// set the path capabilities to "deny"
@@ -467,6 +475,9 @@ CHECK:
 	case logical.PatchOperation:
 		operationAllowed = capabilities&PatchCapabilityInt > 0
 		grantingPolicies = permissions.GrantingPoliciesMap[PatchCapabilityInt]
+	case logical.RecoverOperation:
+		operationAllowed = capabilities&RecoverCapabilityInt > 0
+		grantingPolicies = permissions.GrantingPoliciesMap[RecoverCapabilityInt]
 
 	// These three re-use UpdateCapabilityInt since that's the most appropriate
 	// capability/operation mapping
@@ -504,7 +515,7 @@ CHECK:
 
 	// Only check parameter permissions for operations that can modify
 	// parameters.
-	if op == logical.ReadOperation || op == logical.UpdateOperation || op == logical.CreateOperation || op == logical.PatchOperation {
+	if op == logical.ReadOperation || op == logical.UpdateOperation || op == logical.CreateOperation || op == logical.PatchOperation || op == logical.RecoverOperation {
 		for _, parameter := range permissions.RequiredParameters {
 			if _, ok := req.Data[strings.ToLower(parameter)]; !ok {
 				return
@@ -517,26 +528,25 @@ CHECK:
 			return
 		}
 
-		if len(permissions.DeniedParameters) == 0 {
-			goto ALLOWED_PARAMETERS
-		}
+		useLegacyMatching := os.Getenv("VAULT_LEGACY_EXACT_MATCHING_ON_LIST") != ""
 
-		// Check if all parameters have been denied
-		if _, ok := permissions.DeniedParameters["*"]; ok {
-			return
-		}
+		if len(permissions.DeniedParameters) > 0 {
+			// Check if all parameters have been denied
+			if _, ok := permissions.DeniedParameters["*"]; ok {
+				return
+			}
 
-		for parameter, value := range req.Data {
-			// Check if parameter has been explicitly denied
-			if valueSlice, ok := permissions.DeniedParameters[strings.ToLower(parameter)]; ok {
-				// If the value exists in denied values slice, deny
-				if valueInParameterList(value, valueSlice) {
-					return
+			for parameter, value := range req.Data {
+				// Check if parameter has been explicitly denied
+				if valueSlice, ok := permissions.DeniedParameters[strings.ToLower(parameter)]; ok {
+					// If the value exists in denied values slice, deny
+					if valueInDeniedParameterList(value, valueSlice, useLegacyMatching) {
+						return
+					}
 				}
 			}
 		}
 
-	ALLOWED_PARAMETERS:
 		// If we don't have any allowed parameters set, allow
 		if len(permissions.AllowedParameters) == 0 {
 			ret.Allowed = true
@@ -556,9 +566,9 @@ CHECK:
 				return
 			}
 
-			// If the value doesn't exists in the allowed values slice,
+			// If the value doesn't exist in the allowed values slice,
 			// deny
-			if ok && !valueInParameterList(value, valueSlice) {
+			if ok && !valueInAllowedParameterList(value, valueSlice, useLegacyMatching) {
 				return
 			}
 		}
@@ -734,7 +744,43 @@ SWCPATH:
 	return wcPathDescrs[len(wcPathDescrs)-1].perms
 }
 
-func (c *Core) performPolicyChecks(ctx context.Context, acl *ACL, te *logical.TokenEntry, req *logical.Request, inEntity *identity.Entity, opts *PolicyCheckOpts) *AuthResults {
+func (c *Core) recordPolicyEvaluationObservation(ctx context.Context, te *logical.TokenEntry, req *logical.Request, results *AuthResults) {
+	observation := map[string]interface{}{
+		"request_id": req.ID,
+		"path":       req.Path,
+		"entity_id":  req.EntityID,
+		"client_id":  req.ClientID,
+	}
+	if te != nil {
+		observation["policies"] = te.Policies
+		observation["is_root"] = te.IsRoot()
+	}
+
+	if results != nil {
+		if results.ACLResults != nil {
+			observation["request_allowed"] = results.Allowed
+			observation["request_acl_allowed"] = results.ACLResults.Allowed
+
+			grantingPolicies := make([]logical.PolicyInfo, 0)
+			if len(results.ACLResults.GrantingPolicies) > 0 {
+				grantingPolicies = append(grantingPolicies, results.ACLResults.GrantingPolicies...)
+			}
+			if results.SentinelResults != nil && len(results.SentinelResults.GrantingPolicies) > 0 {
+				grantingPolicies = append(grantingPolicies, results.SentinelResults.GrantingPolicies...)
+			}
+			if len(grantingPolicies) > 0 {
+				observation["granting_policies"] = grantingPolicies
+			}
+
+			err := c.Observations().RecordObservationToLedger(ctx, observations.ObservationTypePolicyACLEvaluation, nil, observation)
+			if err != nil {
+				c.logger.Error("error recording observation for policy checks", "error", err)
+			}
+		}
+	}
+}
+
+func (c *Core) performPolicyChecksSinglePath(ctx context.Context, acl *ACL, te *logical.TokenEntry, req *logical.Request, inEntity *identity.Entity, opts *PolicyCheckOpts) *AuthResults {
 	ret := new(AuthResults)
 
 	// First, perform normal ACL checks if requested. The only time no ACL
@@ -745,35 +791,111 @@ func (c *Core) performPolicyChecks(ctx context.Context, acl *ACL, te *logical.To
 		ret.RootPrivs = ret.ACLResults.RootPrivs
 		// Root is always allowed; skip Sentinel/MFA checks
 		if ret.ACLResults.IsRoot {
-			// logger.Warn("token is root, skipping checks")
 			ret.Allowed = true
+			c.recordPolicyEvaluationObservation(ctx, te, req, ret)
 			return ret
 		}
 		if !ret.ACLResults.Allowed {
+			c.recordPolicyEvaluationObservation(ctx, te, req, ret)
 			return ret
 		}
 		// Since HelpOperation was fast-pathed inside AllowOperation, RootPrivs will not have been populated in this
 		// case, so we need to special-case that here as well, or we'll block HelpOperation on all sudo-protected paths.
 		if !ret.RootPrivs && opts.RootPrivsRequired && req.Operation != logical.HelpOperation {
+			c.recordPolicyEvaluationObservation(ctx, te, req, ret)
 			return ret
 		}
 	}
 
 	c.performEntPolicyChecks(ctx, acl, te, req, inEntity, opts, ret)
 
+	c.recordPolicyEvaluationObservation(ctx, te, req, ret)
 	return ret
 }
 
-func valueInParameterList(v interface{}, list []interface{}) bool {
+func valueInAllowedParameterList(v interface{}, list []interface{}, useLegacyMatching bool) bool {
 	// Empty list is equivalent to the item always existing in the list
 	if len(list) == 0 {
 		return true
 	}
 
-	return valueInSlice(v, list)
+	if valueInParameterList(v, list) {
+		return true
+	}
+
+	if useLegacyMatching {
+		// prevent execution of the new behaviour if we're in legacy mode
+		return false
+	}
+
+	if vSlice, ok := v.([]interface{}); ok {
+		// when not running in legacy mode, we run a relaxed check for slices that verifies if all
+		// elements in the slice exist in the allowed list, as opposed to checking if the allowed
+		// list contains a single element that matches the entire slice (but this whole-slice match
+		// is still supported)
+		for _, v := range vSlice {
+			if !valueInParameterList(v, list) {
+				return false
+			}
+		}
+
+		return true
+	} else if vString, ok := v.(string); ok {
+		// At this point we don't know if the field is of framework.TypeCommaStringSlice, but we assume it is
+		// because failing to match a value because of it being in a comma-separated string is way more likely
+		// and worse than accidentally matching a substring of a string value.
+		if vSlice, err := parseutil.ParseCommaStringSlice(vString); err == nil {
+			for _, v := range vSlice {
+				if !valueInParameterList(v, list) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
-func valueInSlice(v interface{}, list []interface{}) bool {
+func valueInDeniedParameterList(v interface{}, list []interface{}, useLegacyMatching bool) bool {
+	// Empty list is equivalent to the item always existing in the list
+	if len(list) == 0 {
+		return true
+	}
+
+	if valueInParameterList(v, list) {
+		return true
+	}
+
+	if useLegacyMatching {
+		// prevent execution of the new behaviour if we're in legacy mode
+		return false
+	}
+
+	// The new behaviour is that if any value in the slice is in the denied list, we deny.
+	if vSlice, ok := v.([]interface{}); ok {
+		for _, v := range vSlice {
+			if valueInParameterList(v, list) {
+				return true
+			}
+		}
+	} else if vString, ok := v.(string); ok {
+		// At this point we don't know if the field is of framework.TypeCommaStringSlice, but we assume it is
+		// because failing to match a value because of it being in a comma-separated string is way more likely
+		// and worse than accidentally matching a substring of a string value.
+		if vSlice, err := parseutil.ParseCommaStringSlice(vString); err == nil {
+			for _, v := range vSlice {
+				if valueInParameterList(v, list) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func valueInParameterList(v interface{}, list []interface{}) bool {
 	for _, el := range list {
 		if el == nil || v == nil {
 			// It doesn't seem possible to set up a nil entry in the list, but it is possible
@@ -782,11 +904,8 @@ func valueInSlice(v interface{}, list []interface{}) bool {
 			if el == v {
 				return true
 			}
-		} else if reflect.TypeOf(el).String() == "string" && reflect.TypeOf(v).String() == "string" {
-			item := el.(string)
-			val := v.(string)
-
-			if strutil.GlobbedStringsMatch(item, val) {
+		} else if elStr, ok := el.(string); ok {
+			if vStr, ok := v.(string); ok && strutil.GlobbedStringsMatch(elStr, vStr) {
 				return true
 			}
 		} else if reflect.DeepEqual(el, v) {

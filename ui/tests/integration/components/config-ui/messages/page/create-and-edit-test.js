@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,7 +11,11 @@ import { render, click, fillIn } from '@ember/test-helpers';
 import { hbs } from 'ember-cli-htmlbars';
 import { datetimeLocalStringFormat } from 'core/utils/date-formatters';
 import { format, addDays, startOfDay } from 'date-fns';
-import { PAGE } from 'vault/tests/helpers/config-ui/message-selectors';
+import { CUSTOM_MESSAGES } from 'vault/tests/helpers/config-ui/message-selectors';
+import timestamp from 'core/utils/timestamp';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import sinon from 'sinon';
+import CustomMessage from 'vault/forms/custom-message';
 
 module('Integration | Component | messages/page/create-and-edit', function (hooks) {
   setupRenderingTest(hooks);
@@ -19,61 +23,76 @@ module('Integration | Component | messages/page/create-and-edit', function (hook
   setupMirage(hooks);
 
   hooks.beforeEach(function () {
-    this.context = { owner: this.engine };
-    this.store = this.owner.lookup('service:store');
-    this.message = this.store.createRecord('config-ui/message');
+    const now = new Date('2023-07-02T00:00:00Z'); // stub "now" for testing
+    sinon.replace(timestamp, 'now', sinon.fake.returns(now));
+
+    this.message = new CustomMessage(
+      {
+        authenticated: true,
+        type: 'banner',
+        start_time: addDays(startOfDay(timestamp.now()), 1).toISOString(),
+      },
+      { isNew: true }
+    );
+
+    this.renderComponent = () =>
+      render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} @messages={{this.messages}} />`, {
+        owner: this.engine,
+      });
   });
 
   test('it should display all the create form fields and default radio button values', async function (assert) {
-    assert.expect(17);
+    await this.renderComponent();
 
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
-
-    assert.dom(PAGE.title).hasText('Create message');
-    assert.dom(PAGE.radio('authenticated')).exists();
-    assert.dom(PAGE.radio('unauthenticated')).exists();
-    assert.dom(PAGE.radio('authenticated')).isChecked();
-    assert.dom(PAGE.radio('unauthenticated')).isNotChecked();
-    assert.dom(PAGE.radio('banner')).exists();
-    assert.dom(PAGE.radio('modal')).exists();
-    assert.dom(PAGE.radio('banner')).isChecked();
-    assert.dom(PAGE.radio('modal')).isNotChecked();
-    assert.dom(PAGE.field('title')).exists();
-    assert.dom(PAGE.field('message')).exists();
+    assert.dom(GENERAL.title).hasText('Create message');
+    assert.dom(GENERAL.fieldLabelbyAttr('authenticated')).hasText('Where should we display this message?');
+    assert.dom(CUSTOM_MESSAGES.radio('authenticated')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('unauthenticated')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('authenticated')).isChecked();
+    assert.dom(CUSTOM_MESSAGES.radio('unauthenticated')).isNotChecked();
+    assert.dom(GENERAL.fieldLabelbyAttr('type')).hasText('Type');
+    assert.dom(CUSTOM_MESSAGES.radio('banner')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('modal')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('banner')).isChecked();
+    assert.dom(CUSTOM_MESSAGES.radio('modal')).isNotChecked();
+    assert.dom(CUSTOM_MESSAGES.field('title')).exists();
+    assert.dom(CUSTOM_MESSAGES.field('message')).exists();
     assert.dom('[data-test-kv-key="0"]').exists();
     assert.dom('[data-test-kv-value="0"]').exists();
-    assert.dom(PAGE.input('startTime')).exists();
     assert
-      .dom(PAGE.input('startTime'))
-      .hasValue(format(addDays(startOfDay(new Date()), 1), datetimeLocalStringFormat));
-    assert.dom(PAGE.input('endTime')).exists();
-    assert.dom(PAGE.input('endTime')).hasValue('');
+      .dom(CUSTOM_MESSAGES.input('start_time'))
+      .hasValue(
+        format(addDays(startOfDay(timestamp.now()), 1), datetimeLocalStringFormat),
+        `message start_time defaults to midnight of following day. test context start_time: ${
+          this.message.start_time
+        }, now: ${timestamp.now().toISOString()}`
+      );
+    assert.dom(CUSTOM_MESSAGES.input('end_time')).hasValue('');
   });
 
   test('it should display validation errors for invalid form fields', async function (assert) {
     assert.expect(8);
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
 
-    await fillIn(PAGE.input('startTime'), '2024-01-20T00:00');
-    await fillIn(PAGE.input('endTime'), '2024-01-01T00:00');
-    await click(PAGE.button('create-message'));
-    assert.dom(PAGE.input('title')).hasClass('has-error-border');
-    assert.dom(`${PAGE.fieldValidation('title')} ${PAGE.inlineErrorMessage}`).hasText('Title is required.');
-    assert.dom(PAGE.input('message')).hasClass('has-error-border');
+    await this.renderComponent();
+
+    await fillIn(CUSTOM_MESSAGES.input('start_time'), '2024-01-20T00:00');
+    await fillIn(CUSTOM_MESSAGES.input('end_time'), '2024-01-01T00:00');
+    await click(GENERAL.submitButton);
     assert
-      .dom(`${PAGE.fieldValidation('message')} ${PAGE.inlineErrorMessage}`)
+      .dom(GENERAL.validationErrorByAttr('title'))
+      .exists('Validation error for field `title` renders')
+      .hasText('Title is required.');
+    assert
+      .dom(GENERAL.validationErrorByAttr('message'))
+      .exists('Validation error for field `message` renders')
       .hasText('Message is required.');
-    assert.dom(PAGE.input('startTime')).hasClass('has-error-border');
     assert
-      .dom(`${PAGE.fieldValidation('startTime')} ${PAGE.inlineErrorMessage}`)
+      .dom(GENERAL.validationErrorByAttr('start_time'))
+      .exists('Validation error for field `start_time` renders')
       .hasText('Start time is after end time.');
-    assert.dom(PAGE.input('endTime')).hasClass('has-error-border');
     assert
-      .dom(`${PAGE.fieldValidation('endTime')} ${PAGE.inlineErrorMessage}`)
+      .dom(GENERAL.validationErrorByAttr('end_time'))
+      .exists('Validation error for field `end_time` renders')
       .hasText('End time is before start time.');
   });
 
@@ -81,173 +100,158 @@ module('Integration | Component | messages/page/create-and-edit', function (hook
     assert.expect(1);
 
     this.server.post('/sys/config/ui/custom-messages', () => {
-      assert.ok(true, 'POST request made to create message');
+      assert.true(true, 'POST request made to create message');
     });
 
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
-    await fillIn(PAGE.input('title'), 'Awesome custom message title');
+    await this.renderComponent();
+
+    await fillIn(CUSTOM_MESSAGES.input('title'), 'create new message title from component');
     await fillIn(
-      PAGE.input('message'),
-      'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Pulvinar mattis nunc sed blandit libero volutpat sed cras ornare.'
+      CUSTOM_MESSAGES.input('message'),
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit.'
     );
     await fillIn(
-      PAGE.input('startTime'),
+      CUSTOM_MESSAGES.input('start_time'),
       format(addDays(startOfDay(new Date('2023-12-12')), 1), datetimeLocalStringFormat)
     );
     await click('#specificDate');
     await fillIn(
-      PAGE.input('endTime'),
+      CUSTOM_MESSAGES.input('end_time'),
       format(addDays(startOfDay(new Date('2023-12-12')), 10), datetimeLocalStringFormat)
     );
     await fillIn('[data-test-kv-key="0"]', 'Learn more');
     await fillIn('[data-test-kv-value="0"]', 'www.learn.com');
-    await click(PAGE.button('create-message'));
+    await click(GENERAL.submitButton);
   });
 
   test('it should have form vaildations', async function (assert) {
-    assert.expect(4);
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
-    await click(PAGE.button('create-message'));
-    assert.dom(PAGE.input('title')).hasClass('has-error-border', 'show error border for title field');
-    assert.dom(`${PAGE.fieldValidation('title')} ${PAGE.inlineErrorMessage}`).hasText('Title is required.');
-    assert.dom(PAGE.input('message')).hasClass('has-error-border', 'show error border for message field');
-    assert
-      .dom(`${PAGE.fieldValidation('message')} ${PAGE.inlineErrorMessage}`)
-      .hasText('Message is required.');
+    assert.expect(2);
+
+    await this.renderComponent();
+
+    await click(GENERAL.submitButton);
+    assert.dom(`${GENERAL.validationErrorByAttr('title')}`).hasText('Title is required.');
+    assert.dom(`${GENERAL.validationErrorByAttr('message')}`).hasText('Message is required.');
   });
 
   test('it should prepopulate form if form is in edit mode', async function (assert) {
     assert.expect(13);
-    this.store.pushPayload('config-ui/message', {
-      modelName: 'config-ui/message',
+
+    this.message = new CustomMessage({
       id: 'hhhhh-iiii-lllll-dddd',
       type: 'modal',
       authenticated: false,
       title: 'Hello world',
       message: 'Blah blah blah. Some super long message.',
-      start_time: '2023-12-12T08:00:00.000Z',
-      end_time: '2023-12-21T08:00:00.000Z',
+      start_time: new Date('2023-12-12T08:00:00.000Z'),
+      end_time: new Date('2023-12-21T08:00:00.000Z'),
       link: { 'Learn more': 'www.learnmore.com' },
     });
-    this.message = this.store.peekRecord('config-ui/message', 'hhhhh-iiii-lllll-dddd');
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
 
-    assert.dom(PAGE.title).hasText('Edit message');
-    assert.dom(PAGE.radio('authenticated')).exists();
-    assert.dom(PAGE.radio('unauthenticated')).isChecked();
-    assert.dom(PAGE.radio('modal')).exists();
-    assert.dom(PAGE.radio('modal')).isChecked();
-    assert.dom(PAGE.input('title')).hasValue('Hello world');
-    assert.dom(PAGE.input('message')).hasValue('Blah blah blah. Some super long message.');
+    await this.renderComponent();
+
+    assert.dom(GENERAL.title).hasText('Edit message');
+    assert.dom(CUSTOM_MESSAGES.radio('authenticated')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('unauthenticated')).isChecked();
+    assert.dom(CUSTOM_MESSAGES.radio('modal')).exists();
+    assert.dom(CUSTOM_MESSAGES.radio('modal')).isChecked();
+    assert.dom(CUSTOM_MESSAGES.input('title')).hasValue('Hello world');
+    assert.dom(CUSTOM_MESSAGES.input('message')).hasValue('Blah blah blah. Some super long message.');
     assert.dom('[data-test-kv-key="0"]').exists();
     assert.dom('[data-test-kv-key="0"]').hasValue('Learn more');
     assert.dom('[data-test-kv-value="0"]').exists();
     assert.dom('[data-test-kv-value="0"]').hasValue('www.learnmore.com');
     await click('#specificDate');
     assert
-      .dom(PAGE.input('startTime'))
-      .hasValue(format(new Date(this.message.startTime), datetimeLocalStringFormat));
+      .dom(CUSTOM_MESSAGES.input('start_time'))
+      .hasValue(format(new Date(this.message.start_time), datetimeLocalStringFormat));
     assert
-      .dom(PAGE.input('endTime'))
-      .hasValue(format(new Date(this.message.endTime), datetimeLocalStringFormat));
+      .dom(CUSTOM_MESSAGES.input('end_time'))
+      .hasValue(format(new Date(this.message.end_time), datetimeLocalStringFormat));
   });
 
   test('it should show a preview image modal when preview is clicked', async function (assert) {
-    assert.expect(6);
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
-    await fillIn(PAGE.input('title'), 'Awesome custom message title');
+    await this.renderComponent();
+
+    await fillIn(CUSTOM_MESSAGES.input('title'), 'preview modal component test');
     await fillIn(
-      PAGE.input('message'),
-      'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Pulvinar mattis nunc sed blandit libero volutpat sed cras ornare.'
+      CUSTOM_MESSAGES.input('message'),
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit.'
     );
-    await click(PAGE.button('preview'));
-    assert.dom(PAGE.modal('preview modal')).doesNotExist();
-    assert.dom(PAGE.modal('preview image')).exists();
-    assert.dom(PAGE.alertTitle('Awesome custom message title')).hasText('Awesome custom message title');
+    await click(GENERAL.button('preview'));
+    assert.dom(CUSTOM_MESSAGES.modal('preview modal')).doesNotExist();
+    assert.dom(CUSTOM_MESSAGES.modal('preview image')).exists();
     assert
-      .dom(PAGE.alertDescription('Awesome custom message title'))
-      .hasText(
-        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Pulvinar mattis nunc sed blandit libero volutpat sed cras ornare.'
-      );
+      .dom(CUSTOM_MESSAGES.alertTitle('preview modal component test'))
+      .hasText('preview modal component test');
+    assert
+      .dom(CUSTOM_MESSAGES.alertDescription('preview modal component test'))
+      .hasText('Lorem ipsum dolor sit amet, consectetur adipiscing elit.');
     assert.dom('img').hasAttribute('src', '/ui/images/custom-messages-dashboard.png');
-    await click(PAGE.modalButton('Close'));
+
+    await click(GENERAL.button('Close preview'));
     await click('#unauthenticated');
-    await click(PAGE.button('preview'));
+    await click(GENERAL.button('preview'));
     assert.dom('img').hasAttribute('src', '/ui/images/custom-messages-login.png');
   });
 
   test('it should show a preview modal when preview is clicked', async function (assert) {
-    assert.expect(4);
-    await render(hbs`<Messages::Page::CreateAndEdit @message={{this.message}} />`, {
-      owner: this.engine,
-    });
-    await click(PAGE.radio('modal'));
-    await fillIn(PAGE.input('title'), 'Preview modal title');
-    await fillIn(PAGE.input('message'), 'Some preview modal message thats super long.');
-    await click(PAGE.button('preview'));
-    assert.dom(PAGE.modal('preview modal')).exists();
-    assert.dom(PAGE.modal('preview image')).doesNotExist();
-    assert.dom(PAGE.modalTitle('Preview modal title')).hasText('Preview modal title');
-    assert.dom(PAGE.modalBody('Preview modal title')).hasText('Some preview modal message thats super long.');
+    await this.renderComponent();
+
+    await click(CUSTOM_MESSAGES.radio('modal'));
+    await fillIn(CUSTOM_MESSAGES.input('title'), 'Preview modal title');
+    await fillIn(CUSTOM_MESSAGES.input('message'), 'Some preview modal message thats super long.');
+    await click(GENERAL.button('preview'));
+    assert.dom(CUSTOM_MESSAGES.modal('preview modal')).exists();
+    assert.dom(CUSTOM_MESSAGES.modal('preview image')).doesNotExist();
+    assert.dom(CUSTOM_MESSAGES.modalTitle('Preview modal title')).hasText('Preview modal title');
+    assert
+      .dom(CUSTOM_MESSAGES.modalBody('Preview modal title'))
+      .hasText('Some preview modal message thats super long.');
   });
 
   test('it should show multiple modal message', async function (assert) {
-    assert.expect(2);
-
-    this.store.pushPayload('config-ui/message', {
-      modelName: 'config-ui/message',
-      id: '01234567-89ab-cdef-0123-456789abcdef',
-      active: true,
-      type: 'modal',
-      authenticated: true,
-      title: 'Message title 1',
-      message: 'Some long long long message',
-      link: { here: 'www.example.com' },
-      startTime: '2021-08-01T00:00:00Z',
-      endTime: '',
-    });
-    this.store.pushPayload('config-ui/message', {
-      modelName: 'config-ui/message',
-      id: '01234567-89ab-vvvv-0123-456789abcdef',
-      active: true,
-      type: 'modal',
-      authenticated: false,
-      title: 'Message title 2',
-      message: 'Some long long long message',
-      link: { here: 'www.example.com' },
-      startTime: '2021-08-01T00:00:00Z',
-      endTime: '2090-08-01T00:00:00Z',
-    });
-
-    this.messages = this.store.peekAll('config-ui/message');
-
-    await render(
-      hbs`<Messages::Page::CreateAndEdit @message={{this.message}} @messages={{this.messages}} @hasSomeActiveModals={{true}} />`,
+    this.messages = [
       {
-        owner: this.engine,
-      }
-    );
-    await fillIn(PAGE.input('title'), 'Awesome custom message title');
+        id: '01234567-89ab-cdef-0123-456789abcdef',
+        active: true,
+        type: 'modal',
+        authenticated: true,
+        title: 'Message title 1',
+        message: 'Some long long long message',
+        link: { here: 'www.example.com' },
+        start_time: new Date('2021-08-01T00:00:00Z'),
+        end_time: '',
+      },
+      {
+        id: '01234567-89ab-vvvv-0123-456789abcdef',
+        active: true,
+        type: 'modal',
+        authenticated: false,
+        title: 'Message title 2',
+        message: 'Some long long long message',
+        link: { here: 'www.example.com' },
+        start_time: new Date('2021-08-01T00:00:00Z'),
+        end_time: new Date('2090-08-01T00:00:00Z'),
+      },
+    ];
+
+    await this.renderComponent();
+
+    await fillIn(CUSTOM_MESSAGES.input('title'), 'multiple modal message component test');
     await fillIn(
-      PAGE.input('message'),
-      'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Pulvinar mattis nunc sed blandit libero volutpat sed cras ornare.'
+      CUSTOM_MESSAGES.input('message'),
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit.'
     );
-    await click(PAGE.radio('modal'));
-    await click(PAGE.button('create-message'));
-    assert.dom(PAGE.modalTitle('Warning: more than one modal')).exists();
+    await click(CUSTOM_MESSAGES.radio('modal'));
+    await click(GENERAL.submitButton);
+    assert.dom(CUSTOM_MESSAGES.modalTitle('Warning: more than one modal')).exists();
     assert
-      .dom(PAGE.modalBody('Warning: more than one modal'))
+      .dom(CUSTOM_MESSAGES.modalBody('Warning: more than one modal'))
       .hasText(
         'You have an active modal configured after the user logs in and are trying to create another one. It is recommended to avoid having more than one modal at once as it can be intrusive for users. Would you like to continue creating your message? Click “Confirm” to continue.'
       );
-    await click(PAGE.modalButton('confirm'));
+
+    await click(GENERAL.button('confirm-multiple'));
   });
 });

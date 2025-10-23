@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package radius
@@ -6,7 +6,6 @@ package radius
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/policyutil"
@@ -87,7 +86,7 @@ func (b *backend) user(ctx context.Context, s logical.Storage, username string) 
 		return nil, fmt.Errorf("missing username")
 	}
 
-	entry, err := s.Get(ctx, "user/"+strings.ToLower(username))
+	entry, err := s.Get(ctx, "user/"+username)
 	if err != nil {
 		return nil, err
 	}

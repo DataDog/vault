@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/vault/builtin/logical/pki/issuing"
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/certutil"
 	"github.com/hashicorp/vault/sdk/helper/consts"
@@ -278,6 +279,15 @@ include the Common Name (cn); use use_csr_common_name
 for that. Defaults to true.`,
 		},
 
+		"serial_number_source": {
+			Type:     framework.TypeString,
+			Required: true,
+			Description: `Source for the certificate subject serial number.
+If "json-csr" (default), the value from the JSON serial_number field is used,
+falling back to the value in the CSR if empty. If "json", the value from the
+serial_number JSON field is used, ignoring the value in the CSR.`,
+		},
+
 		"ou": {
 			Type: framework.TypeCommaStringSlice,
 			Description: `If set, OU (OrganizationalUnit) will be set to
@@ -364,7 +374,7 @@ non-Hostname, non-Email address CNs.`,
 			Type: framework.TypeCommaStringSlice,
 			Description: `A comma-separated string or list of policy OIDs, or a JSON list of qualified policy
 information, which must include an oid, and may include a notice and/or cps url, using the form 
-[{"oid"="1.3.6.1.4.1.7.8","notice"="I am a user Notice"}, {"oid"="1.3.6.1.4.1.44947.1.2.4 ","cps"="https://example.com"}].`,
+[{"oid"="1.3.6.1.4.1.7.8","notice"="I am a user Notice"}, {"oid"="1.3.6.1.4.1.32473.1.2.4","cps"="https://example.com"}].`,
 		},
 
 		"basic_constraints_valid_for_non_ca": {
@@ -387,6 +397,8 @@ serviced by this role.`,
 		},
 	}
 
+	issuing.AddNoStoreMetadataRoleField(pathRolesResponseFields)
+
 	return &framework.Path{
 		Pattern: "roles/" + framework.GenericNameRegex("name"),
 
@@ -395,7 +407,7 @@ serviced by this role.`,
 			OperationSuffix: "role",
 		},
 
-		Fields: map[string]*framework.FieldSchema{
+		Fields: issuing.AddNoStoreMetadataRoleField(map[string]*framework.FieldSchema{
 			"backend": {
 				Type:        framework.TypeString,
 				Description: "Backend Type",
@@ -674,6 +686,19 @@ for that. Defaults to true.`,
 				},
 			},
 
+			"serial_number_source": {
+				Type:    framework.TypeString,
+				Default: "json-csr",
+				Description: `Source for the certificate subject serial number.
+If "json-csr" (default), the value from the JSON serial_number field is used,
+falling back to the value in the CSR if empty. If "json", the value from the
+serial_number JSON field is used, ignoring the value in the CSR.`,
+				DisplayAttrs: &framework.DisplayAttributes{
+					Name:  "Serial number source",
+					Value: "json-csr",
+				},
+			},
+
 			"ou": {
 				Type: framework.TypeCommaStringSlice,
 				Description: `If set, OU (OrganizationalUnit) will be set to
@@ -777,7 +802,7 @@ non-Hostname, non-Email address CNs.`,
 				Type: framework.TypeCommaStringSlice,
 				Description: `A comma-separated string or list of policy OIDs, or a JSON list of qualified policy
 information, which must include an oid, and may include a notice and/or cps url, using the form 
-[{"oid"="1.3.6.1.4.1.7.8","notice"="I am a user Notice"}, {"oid"="1.3.6.1.4.1.44947.1.2.4 ","cps"="https://example.com"}].`,
+[{"oid"="1.3.6.1.4.1.7.8","notice"="I am a user Notice"}, {"oid"="1.3.6.1.4.1.32473.1.2.4","cps"="https://example.com"}].`,
 			},
 
 			"basic_constraints_valid_for_non_ca": {
@@ -806,7 +831,7 @@ The value format should be given in UTC format YYYY-MM-ddTHH:MM:SSZ.`,
 serviced by this role.`,
 				Default: defaultRef,
 			},
-		},
+		}),
 
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
@@ -896,10 +921,15 @@ func (b *backend) GetRole(ctx context.Context, s logical.Storage, n string) (*is
 }
 
 func (b *backend) pathRoleDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete(ctx, "role/"+data.Get("name").(string))
+	roleName := data.Get("name").(string)
+	err := req.Storage.Delete(ctx, "role/"+roleName)
 	if err != nil {
 		return nil, err
 	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRoleDelete,
+		observe.NewAdditionalPKIMetadata("role_name", roleName),
+	)
 
 	return nil, nil
 }
@@ -921,6 +951,12 @@ func (b *backend) pathRoleRead(ctx context.Context, req *logical.Request, data *
 	resp := &logical.Response{
 		Data: role.ToResponseData(),
 	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRoleRead,
+		observe.NewAdditionalPKIMetadata("issuer_name", role.Issuer),
+		observe.NewAdditionalPKIMetadata("role_name", role.Name),
+	)
+
 	return resp, nil
 }
 
@@ -962,6 +998,7 @@ func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data
 		UsePSS:                        data.Get("use_pss").(bool),
 		UseCSRCommonName:              data.Get("use_csr_common_name").(bool),
 		UseCSRSANs:                    data.Get("use_csr_sans").(bool),
+		SerialNumberSource:            data.Get("serial_number_source").(string),
 		KeyUsage:                      data.Get("key_usage").([]string),
 		ExtKeyUsage:                   data.Get("ext_key_usage").([]string),
 		ExtKeyUsageOIDs:               data.Get("ext_key_usage_oids").([]string),
@@ -974,6 +1011,7 @@ func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data
 		PostalCode:                    data.Get("postal_code").([]string),
 		GenerateLease:                 new(bool),
 		NoStore:                       data.Get("no_store").(bool),
+		NoStoreMetadata:               issuing.GetNoStoreMetadata(data),
 		RequireCN:                     data.Get("require_cn").(bool),
 		CNValidations:                 data.Get("cn_validations").([]string),
 		AllowedSerialNumbers:          data.Get("allowed_serial_numbers").([]string),
@@ -1041,6 +1079,16 @@ func (b *backend) pathRoleCreate(ctx context.Context, req *logical.Request, data
 		return nil, err
 	}
 
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRoleWrite,
+		observe.NewAdditionalPKIMetadata("issuer_name", entry.Issuer),
+		observe.NewAdditionalPKIMetadata("role_name", entry.Name),
+		observe.NewAdditionalPKIMetadata("max_ttl", entry.MaxTTL.String()),
+		observe.NewAdditionalPKIMetadata("ttl", entry.TTL.String()),
+		observe.NewAdditionalPKIMetadata("no_store", entry.NoStore),
+		observe.NewAdditionalPKIMetadata("not_after", entry.NotAfter),
+		observe.NewAdditionalPKIMetadata("not_before", entry.NotBeforeDuration.String()),
+	)
+
 	return resp, nil
 }
 
@@ -1056,6 +1104,12 @@ func validateRole(b *backend, entry *issuing.RoleEntry, ctx context.Context, s l
 
 	if entry.KeyBits, entry.SignatureBits, err = certutil.ValidateDefaultOrValueKeyTypeSignatureLength(entry.KeyType, entry.KeyBits, entry.SignatureBits); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
+	}
+
+	if entry.SerialNumberSource != "" &&
+		entry.SerialNumberSource != "json-csr" &&
+		entry.SerialNumberSource != "json" {
+		return logical.ErrorResponse("unknown serial_number_source %s", entry.SerialNumberSource), nil
 	}
 
 	if len(entry.ExtKeyUsageOIDs) > 0 {
@@ -1162,6 +1216,7 @@ func (b *backend) pathRolePatch(ctx context.Context, req *logical.Request, data 
 		UsePSS:                        getWithExplicitDefault(data, "use_pss", oldEntry.UsePSS).(bool),
 		UseCSRCommonName:              getWithExplicitDefault(data, "use_csr_common_name", oldEntry.UseCSRCommonName).(bool),
 		UseCSRSANs:                    getWithExplicitDefault(data, "use_csr_sans", oldEntry.UseCSRSANs).(bool),
+		SerialNumberSource:            getWithExplicitDefault(data, "serial_number_source", oldEntry.SerialNumberSource).(string),
 		KeyUsage:                      getWithExplicitDefault(data, "key_usage", oldEntry.KeyUsage).([]string),
 		ExtKeyUsage:                   getWithExplicitDefault(data, "ext_key_usage", oldEntry.ExtKeyUsage).([]string),
 		ExtKeyUsageOIDs:               getWithExplicitDefault(data, "ext_key_usage_oids", oldEntry.ExtKeyUsageOIDs).([]string),
@@ -1174,6 +1229,7 @@ func (b *backend) pathRolePatch(ctx context.Context, req *logical.Request, data 
 		PostalCode:                    getWithExplicitDefault(data, "postal_code", oldEntry.PostalCode).([]string),
 		GenerateLease:                 new(bool),
 		NoStore:                       getWithExplicitDefault(data, "no_store", oldEntry.NoStore).(bool),
+		NoStoreMetadata:               issuing.NoStoreMetadataValue(getWithExplicitDefault(data, "no_store_metadata", oldEntry.NoStoreMetadata).(bool)),
 		RequireCN:                     getWithExplicitDefault(data, "require_cn", oldEntry.RequireCN).(bool),
 		CNValidations:                 getWithExplicitDefault(data, "cn_validations", oldEntry.CNValidations).([]string),
 		AllowedSerialNumbers:          getWithExplicitDefault(data, "allowed_serial_numbers", oldEntry.AllowedSerialNumbers).([]string),
@@ -1247,6 +1303,16 @@ func (b *backend) pathRolePatch(ctx context.Context, req *logical.Request, data 
 	if err := req.Storage.Put(ctx, jsonEntry); err != nil {
 		return nil, err
 	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIRolePatch,
+		observe.NewAdditionalPKIMetadata("issuer_name", entry.Issuer),
+		observe.NewAdditionalPKIMetadata("role_name", entry.Name),
+		observe.NewAdditionalPKIMetadata("max_ttl", entry.MaxTTL.String()),
+		observe.NewAdditionalPKIMetadata("ttl", entry.TTL.String()),
+		observe.NewAdditionalPKIMetadata("no_store", entry.NoStore),
+		observe.NewAdditionalPKIMetadata("not_after", entry.NotAfter),
+		observe.NewAdditionalPKIMetadata("not_before", entry.NotBeforeDuration.String()),
+	)
 
 	return resp, nil
 }

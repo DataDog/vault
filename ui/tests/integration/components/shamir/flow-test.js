@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,7 +11,7 @@ import { hbs } from 'ember-cli-htmlbars';
 import Service from '@ember/service';
 import { run } from '@ember/runloop';
 import { reject, resolve } from 'rsvp';
-import { SHAMIR_FORM } from 'vault/tests/helpers/components/shamir';
+import { SHAMIR_FORM } from 'vault/tests/helpers/components/shamir-selectors';
 
 const licenseError = { httpStatus: 500, errors: ['failed because licensing is in an invalid state'] };
 const response = {
@@ -110,25 +110,5 @@ module('Integration | Component | shamir/flow', function (hooks) {
     assert.dom(SHAMIR_FORM.error).exists({ count: 2 }, 'renders errors');
     assert.ok(completeSpy.notCalled, 'checkComplete was not called');
     assert.ok(updateSpy.notCalled, 'updateProgress was not called');
-  });
-
-  test.skip('it throws the error when adapter fails with license error', async function (assert) {
-    assert.expect(2);
-    try {
-      const licenseSpy = sinon.spy();
-      this.set('onLicenseError', licenseSpy);
-      await render(hbs`
-        <Shamir::Flow
-          @action="response-with-license"
-          @threshold={{3}}
-          @progress={{2}}
-          @onLicenseError={{this.onLicenseError}}
-        />`);
-      await fillIn(SHAMIR_FORM.input, this.keyPart);
-      await click(SHAMIR_FORM.submitButton);
-      assert.ok(licenseSpy.calledOnce, 'license error triggered');
-    } catch (e) {
-      assert.deepEqual(e, licenseError, 'throws the error');
-    }
   });
 });

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -42,12 +42,15 @@ func handleMetricsUnauthenticated(core *vault.Core) http.Handler {
 		w.Header().Set("Content-Type", resp.Data[logical.HTTPContentType].(string))
 		switch v := resp.Data[logical.HTTPRawBody].(type) {
 		case string:
+			defer logical.IncrementResponseStatusCodeMetric(status)
 			w.WriteHeader(status)
 			w.Write([]byte(v))
 		case []byte:
+			defer logical.IncrementResponseStatusCodeMetric(status)
 			w.WriteHeader(status)
 			w.Write(v)
 		default:
+			defer logical.IncrementResponseStatusCodeMetric(http.StatusInternalServerError)
 			respondError(w, http.StatusInternalServerError, fmt.Errorf("wrong response returned"))
 		}
 	})

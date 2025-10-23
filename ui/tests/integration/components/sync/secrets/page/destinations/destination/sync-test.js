@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,40 +7,38 @@ import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
 import { setupEngine } from 'ember-engines/test-support';
 import { setupMirage } from 'ember-cli-mirage/test-support';
-import { setupModels } from 'vault/tests/helpers/sync/setup-models';
+import { setupDataStubs } from 'vault/tests/helpers/sync/setup-hooks';
 import hbs from 'htmlbars-inline-precompile';
-import { render, click, fillIn, settled } from '@ember/test-helpers';
+import { render, click, fillIn } from '@ember/test-helpers';
 import { PAGE } from 'vault/tests/helpers/sync/sync-selectors';
-import { allowAllCapabilitiesStub } from 'vault/tests/helpers/stubs';
-import { selectChoose } from 'ember-power-select/test-support/helpers';
-import sinon from 'sinon';
+import { selectChoose } from 'ember-power-select/test-support';
 import { Response } from 'miragejs';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
+import sinon from 'sinon';
 
 const { destinations, searchSelect, messageError, kvSuggestion } = PAGE;
-const { mountSelect, mountInput, submit, cancel, successMessage } = destinations.sync;
+const { mountSelect, mountInput, successMessage } = destinations.sync;
 
 module('Integration | Component | sync | Secrets::Page::Destinations::Destination::Sync', function (hooks) {
   setupRenderingTest(hooks);
   setupEngine(hooks, 'sync');
   setupMirage(hooks);
-  setupModels(hooks);
+  setupDataStubs(hooks);
 
   hooks.beforeEach(async function () {
-    this.server.post('/sys/capabilities-self', allowAllCapabilitiesStub());
+    const api = this.owner.lookup('service:api');
+    this.mountsStub = sinon
+      .stub(api.sys, 'internalUiListEnabledVisibleMounts')
+      .resolves({ secret: { 'my-kv/': { type: 'kv', options: { version: '2' } } } });
 
-    this.server.get('/sys/internal/ui/mounts', () => ({
-      data: { secret: { 'my-kv/': { type: 'kv', options: { version: '2' } } } },
-    }));
-    this.server.get('/my-kv/metadata', () => ({
-      data: { keys: ['my-path/', 'my-secret'] },
-    }));
-    this.server.get('/my-kv/metadata/my-path', () => ({
-      data: { keys: ['nested-secret'] },
-    }));
+    this.secretsStub = sinon.stub(api.secrets, 'kvV2List').resolves({ keys: ['my-path/', 'my-secret'] });
 
-    await render(hbs`<Secrets::Page::Destinations::Destination::Sync @destination={{this.destination}} />`, {
-      owner: this.engine,
-    });
+    await render(
+      hbs`<Secrets::Page::Destinations::Destination::Sync @destination={{this.destination}} @capabilities={{this.capabilities}} />`,
+      {
+        owner: this.engine,
+      }
+    );
   });
 
   test('it should fetch and render kv mounts', async function (assert) {
@@ -62,6 +60,7 @@ module('Integration | Component | sync | Secrets::Page::Destinations::Destinatio
 
   test('it should render secret suggestions for nested paths', async function (assert) {
     await selectChoose(mountSelect, '.ember-power-select-option', 1);
+    this.secretsStub.resolves({ keys: ['nested-secret'] });
     await click(kvSuggestion.input);
     await click(searchSelect.option());
     assert
@@ -77,19 +76,18 @@ module('Integration | Component | sync | Secrets::Page::Destinations::Destinatio
       const data = JSON.parse(req.requestBody);
       const expected = { mount: 'my-kv', secret_name: 'my-secret' };
       assert.deepEqual(data, expected, 'Sync request made with mount and secret name');
-      return { data: { associated_secrets: {} } };
+      return { data: { associated_secrets: { 'my-kv_12345': data } } };
     });
-
-    assert.dom(submit).isDisabled('Submit button is disabled when mount is not selected');
-    assert.dom(cancel).hasText('Back', 'back button renders');
+    assert.dom(GENERAL.submitButton).isDisabled('Submit button is disabled when mount is not selected');
+    assert.dom(GENERAL.cancelButton).hasText('Back', 'back button renders');
     await selectChoose(mountSelect, '.ember-power-select-option', 1);
-    assert.dom(submit).isDisabled('Submit button is disabled when secret is not selected');
+    assert.dom(GENERAL.submitButton).isDisabled('Submit button is disabled when secret is not selected');
     await click(kvSuggestion.input);
     await click(searchSelect.option(1));
-    await click(submit);
-    assert.dom(cancel).hasText('View synced secrets', 'view secrets tertiary renders');
+    await click(GENERAL.submitButton);
+    assert.dom(GENERAL.cancelButton).hasText('View synced secrets', 'view secrets tertiary renders');
     assert.dom(kvSuggestion.input).hasNoValue('Secret path is unset after submit success');
-    assert.dom(submit).isDisabled('Submit button is disabled');
+    assert.dom(GENERAL.submitButton).isDisabled('Submit button is disabled');
     assert
       .dom(successMessage)
       .includesText('Sync operation successfully initiated for my-secret.', 'Success banner renders');
@@ -100,9 +98,7 @@ module('Integration | Component | sync | Secrets::Page::Destinations::Destinatio
   test('it should allow manual mount path input if kv mounts are not returned', async function (assert) {
     assert.expect(1);
 
-    this.server.get('/sys/internal/ui/mounts', () => ({
-      data: { secret: { 'cubbyhole/': { type: 'cubbyhole' } } },
-    }));
+    this.mountsStub.resolves({ secret: { 'cubbyhole/': { type: 'cubbyhole' } } });
 
     const { type, name } = this.destination;
     this.server.post(`/sys/sync/destinations/${type}/${name}/associations/set`, (schema, req) => {
@@ -119,7 +115,7 @@ module('Integration | Component | sync | Secrets::Page::Destinations::Destinatio
     await fillIn(mountInput, 'my-kv');
     await click(kvSuggestion.input);
     await click(searchSelect.option(1));
-    await click(submit);
+    await click(GENERAL.submitButton);
   });
 
   test('it should render alert banner on sync error', async function (assert) {
@@ -134,29 +130,7 @@ module('Integration | Component | sync | Secrets::Page::Destinations::Destinatio
     await selectChoose(mountSelect, '.ember-power-select-option', 1);
     await click(kvSuggestion.input);
     await click(searchSelect.option(1));
-    await click(submit);
-
+    await click(GENERAL.submitButton);
     assert.dom(messageError).hasTextContaining(error, 'Error renders in alert banner');
-  });
-
-  test('it should clear sync associations from store in willDestroy hook', async function (assert) {
-    const clearDatasetStub = sinon.stub(this.store, 'clearDataset');
-
-    this.renderComponent = true;
-    await render(
-      hbs`
-      {{#if this.renderComponent}}
-        <Secrets::Page::Destinations::Destination::Sync @destination={{this.destination}} />
-      {{/if}}
-    `,
-      { owner: this.engine }
-    );
-    this.set('renderComponent', false);
-    await settled();
-
-    assert.true(
-      clearDatasetStub.calledWith('sync/association'),
-      'Sync associations are cleared from store on component teardown'
-    );
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -18,14 +18,13 @@ export default Route.extend({
     return this.modelFor('vault.cluster.access.method');
   },
 
-  setupController(controller) {
+  setupController(controller, model) {
     const { section_name: section } = this.paramsFor(this.routeName);
     this._super(...arguments);
     controller.set('section', section);
-    const method = this.modelFor('vault.cluster.access.method');
     controller.set(
       'paths',
-      method.paths.paths.filter((path) => path.navigation)
+      model.paths.paths.filter((path) => path.navigation)
     );
   },
 });

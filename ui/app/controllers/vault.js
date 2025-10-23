@@ -1,17 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Controller from '@ember/controller';
 
 export default class VaultController extends Controller {
-  queryParams = [
-    {
-      wrappedToken: 'wrapped_token',
-      redirectTo: 'redirect_to',
-    },
-  ];
-  wrappedToken = '';
+  queryParams = [{ redirectTo: 'redirect_to' }];
   redirectTo = '';
 }

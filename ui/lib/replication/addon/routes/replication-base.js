@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,7 +8,11 @@ import { service } from '@ember/service';
 import Route from '@ember/routing/route';
 import UnloadModelRouteMixin from 'vault/mixins/unload-model-route';
 
+/**
+ * @type Class
+ */
 export default Route.extend(UnloadModelRouteMixin, {
+  router: service('app-router'),
   store: service(),
   version: service(),
   rm: service('replication-mode'),

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -34,8 +34,5 @@ const certDisplayFields = [
 ];
 @withFormFields(certDisplayFields, generateFromRole)
 export default class PkiCertificateGenerateModel extends PkiCertificateBaseModel {
-  getHelpUrl(backend) {
-    return `/v1/${backend}/issue/example?help=1`;
-  }
   @attr('string') role; // role name to issue certificate against for request URL
 }

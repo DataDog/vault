@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -29,7 +29,7 @@ export default class VaultClusterOidcProviderRoute extends Route {
   }
 
   beforeModel(transition) {
-    const currentToken = this.auth.get('currentTokenName');
+    const currentToken = this.auth.currentTokenName;
     const qp = transition.to.queryParams;
     // remove redirect_to if carried over from auth
     qp.redirect_to = null;
@@ -148,7 +148,12 @@ export default class VaultClusterOidcProviderRoute extends Route {
     } catch (errorRes) {
       const resp = await errorRes.json();
       const code = resp.error;
-      if (code === 'max_age_violation' || resp?.errors?.includes('permission denied')) {
+      // This go-multierror package formats multiple errors as a single string:
+      // https://github.com/hashicorp/go-multierror/blob/main/format.go#L28
+      // Example: '2 errors occurred:\n\t* permission denied\n\t* invalid token\n\n'
+      // So check for substrings of "permission denied" within each full error message.
+      const permissionDenied = resp?.errors?.some((str) => str.includes('permission denied'));
+      if (code === 'max_age_violation' || permissionDenied) {
         this._redirectToAuth({ ...routeParams, qp, logout: true });
       } else if (code === 'invalid_redirect_uri') {
         return {

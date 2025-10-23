@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,10 +7,16 @@ import Service, { inject as service } from '@ember/service';
 import { keepLatestTask, task } from 'ember-concurrency';
 import { tracked } from '@glimmer/tracking';
 
+/**
+ * This service returns information about a cluster's license/features, version and type (community vs enterprise).
+ */
+
 export default class VersionService extends Service {
   @service store;
+  @service flags;
   @tracked features = [];
   @tracked version = null;
+  @tracked clusterName = null;
   @tracked type = null;
 
   get isEnterprise() {
@@ -42,6 +48,17 @@ export default class VersionService extends Service {
     return this.features.includes('Control Groups');
   }
 
+  get hasSecretsSync() {
+    const isEnterprise = this.isEnterprise;
+    const isHvdManaged = this.flags.isHvdManaged;
+    const onLicense = this.features.includes('Secrets Sync');
+
+    if (!isEnterprise) return false;
+    if (isHvdManaged) return true;
+    if (isEnterprise && onLicense) return true;
+    return false;
+  }
+
   get versionDisplay() {
     if (!this.version) {
       return '';
@@ -52,8 +69,10 @@ export default class VersionService extends Service {
   @task({ drop: true })
   *getVersion() {
     if (this.version) return;
-    const response = yield this.store.adapterFor('cluster').fetchVersion();
-    this.version = response.data?.version;
+    // Fetch seal status with token to get version
+    const response = yield this.store.adapterFor('cluster').sealStatus(false);
+    this.version = response?.version;
+    this.clusterName = response?.cluster_name;
   }
 
   @task

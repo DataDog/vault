@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -22,10 +22,6 @@ export default Model.extend(KeyMixin, {
     return Object.keys(data).map((key) => {
       return { key, value: data[key] };
     });
-  }),
-
-  dataAsJSONString: computed('secretData', function () {
-    return JSON.stringify(this.secretData, null, 2);
   }),
 
   isAdvancedFormat: computed('secretData', function () {

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,10 +10,7 @@ export default class LeasesIndexRoute extends Route {
   @service router;
 
   beforeModel(transition) {
-    if (
-      this.modelFor('vault.cluster.access.leases').get('canList') &&
-      transition.targetName === this.routeName
-    ) {
+    if (this.modelFor('vault.cluster.access.leases').canList && transition.targetName === this.routeName) {
       return this.router.replaceWith('vault.cluster.access.leases.list-root');
     } else {
       return;

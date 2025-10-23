@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package dbplugin
@@ -116,6 +116,7 @@ func TestConversionsHaveAllFields(t *testing.T) {
 					},
 				},
 			},
+			SelfManagedPassword: "test-password",
 		}
 
 		protoReq, err := updateUserReqToProto(req)
@@ -194,6 +195,7 @@ func TestConversionsHaveAllFields(t *testing.T) {
 					},
 				},
 			},
+			SelfManagedPassword: "test-password",
 		}
 
 		protoReq, err := getUpdateUserRequest(req)

@@ -1,10 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Transform from '@ember-data/serializer/transform';
-import { isArray, A } from '@ember/array';
+import { isArray } from '@ember/array';
 /*
   This should go inside a globally available place for all apps
 
@@ -13,16 +13,16 @@ import { isArray, A } from '@ember/array';
 export default class ArrayTransform extends Transform {
   deserialize(value) {
     if (isArray(value)) {
-      return A(value);
+      return [...value];
     } else {
-      return A();
+      return [];
     }
   }
   serialize(value) {
     if (isArray(value)) {
-      return A(value);
+      return [...value];
     } else {
-      return A();
+      return [];
     }
   }
 }

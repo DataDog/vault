@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package credsutil
@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+//go:generate enumer -type=CaseOp -transform=snake
 type CaseOp int
 
 const (

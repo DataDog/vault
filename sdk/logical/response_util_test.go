@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package logical
@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/vault/sdk/helper/consts"
 )
 
 func TestResponseUtil_RespondErrorCommon_basic(t *testing.T) {
@@ -82,6 +84,17 @@ func TestResponseUtil_RespondErrorCommon_basic(t *testing.T) {
 			},
 			expectedErr:    errors.New("error due to wrong credentials"),
 			expectedStatus: 400,
+		},
+		{
+			title:   "Overloaded error",
+			respErr: consts.ErrOverloaded,
+			resp: &Response{
+				Data: map[string]interface{}{
+					"error": "overloaded, try again later",
+				},
+			},
+			expectedErr:    consts.ErrOverloaded,
+			expectedStatus: 503,
 		},
 	}
 

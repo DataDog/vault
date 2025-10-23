@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package awsauth
@@ -12,10 +12,9 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +29,7 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/hashicorp/go-secure-stdlib/awsutil"
 	"github.com/hashicorp/go-secure-stdlib/parseutil"
+	iRegexp "github.com/hashicorp/go-secure-stdlib/regexp"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/vault/helper/pkcs7"
@@ -1396,6 +1396,8 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 		identityAlias = callerUniqueId
 	case identityAliasIAMFullArn:
 		identityAlias = callerID.Arn
+	case identityAliasIAMCanonicalArn:
+		identityAlias = entity.canonicalArn()
 	}
 
 	// If we're just looking up for MFA, return the Alias info
@@ -1454,6 +1456,7 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 
 	inferredEntityType := ""
 	inferredEntityID := ""
+	inferredHostname := ""
 	if roleEntry.InferredEntityType == ec2EntityType {
 		instance, err := b.validateInstance(ctx, req.Storage, entity.SessionInfo, roleEntry.InferredAWSRegion, callerID.Account)
 		if err != nil {
@@ -1480,6 +1483,7 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 
 		inferredEntityType = ec2EntityType
 		inferredEntityID = entity.SessionInfo
+		inferredHostname = *instance.PrivateDnsName
 	}
 
 	auth := &logical.Auth{
@@ -1494,6 +1498,7 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 			"inferred_entity_id":  inferredEntityID,
 			"inferred_aws_region": roleEntry.InferredAWSRegion,
 			"account_id":          entity.AccountNumber,
+			"inferred_hostname":   inferredHostname,
 		},
 		DisplayName: entity.FriendlyName,
 		Alias: &logical.Alias{
@@ -1515,6 +1520,7 @@ func (b *backend) pathLoginUpdateIam(ctx context.Context, req *logical.Request, 
 		"inferred_entity_id":   inferredEntityID,
 		"inferred_aws_region":  roleEntry.InferredAWSRegion,
 		"account_id":           entity.AccountNumber,
+		"inferred_hostname":    inferredHostname,
 	}); err != nil {
 		b.Logger().Warn(fmt.Sprintf("unable to set alias metadata due to %s", err))
 	}
@@ -1672,8 +1678,10 @@ func validateVaultHeaderValue(method string, headers http.Header, parsedUrl *url
 	case http.MethodPost:
 		if authzHeaders, ok := headers["Authorization"]; ok {
 			// authzHeader looks like AWS4-HMAC-SHA256 Credential=AKI..., SignedHeaders=host;x-amz-date;x-vault-awsiam-id, Signature=...
-			// We need to extract out the SignedHeaders
-			re := regexp.MustCompile(".*SignedHeaders=([^,]+)")
+			// We need to extract out the SignedHeaders.
+			// We are using an interned regexp library here to avoid redundant objects and save memory.
+			re := iRegexp.MustCompileInterned(".*SignedHeaders=([^,]+)")
+
 			authzHeader := strings.Join(authzHeaders, ",")
 			matches := re.FindSubmatch([]byte(authzHeader))
 			if len(matches) < 1 {
@@ -1797,7 +1805,7 @@ func submitCallerIdentityRequest(ctx context.Context, maxRetries int, method, en
 	}
 
 	// we check for status code afterwards to also print out response body
-	responseBody, err := ioutil.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, err
 	}

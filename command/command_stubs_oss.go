@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !enterprise
@@ -16,11 +16,6 @@ import (
 func entInitCommands(ui, serverCmdUi cli.Ui, runOpts *RunOptions, commands map[string]cli.CommandFactory) {
 }
 
-func entEnableFourClusterDev(c *ServerCommand, base *vault.CoreConfig, info map[string]string, infoKeys []string, tempDir string) int {
-	c.logger.Error("-dev-four-cluster only supported in enterprise Vault")
-	return 1
-}
-
 func entAdjustCoreConfig(config *server.Config, coreConfig *vault.CoreConfig) {
 }
 
@@ -31,3 +26,8 @@ func entCheckStorageType(coreConfig *vault.CoreConfig) bool {
 func entGetFIPSInfoKey() string {
 	return ""
 }
+
+func entCheckRequestLimiter(_cmd *ServerCommand, _config *server.Config) {
+}
+
+func entExtendAddonHandlers(handlers *vaultHandlers) {}

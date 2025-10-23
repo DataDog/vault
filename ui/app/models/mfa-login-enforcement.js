@@ -1,15 +1,16 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Model, { attr, hasMany } from '@ember-data/model';
 import ArrayProxy from '@ember/array/proxy';
 import PromiseProxyMixin from '@ember/object/promise-proxy-mixin';
-import { methods } from 'vault/helpers/mountable-auth-methods';
 import { withModelValidations } from 'vault/decorators/model-validations';
 import { isPresent } from '@ember/utils';
 import { service } from '@ember/service';
+import { addManyToArray, addToArray } from 'vault/helpers/add-to-array';
+import { filterEnginesByMountCategory } from 'vault/utils/all-engines-metadata';
 
 const validations = {
   name: [{ type: 'presence', message: 'Name is required' }],
@@ -35,7 +36,8 @@ const validations = {
 
 @withModelValidations(validations)
 export default class MfaLoginEnforcementModel extends Model {
-  @service store;
+  @service api;
+
   @attr('string') name;
   @hasMany('mfa-method', { async: true, inverse: null }) mfa_methods;
   @attr('string') namespace_id;
@@ -52,13 +54,13 @@ export default class MfaLoginEnforcementModel extends Model {
 
   async prepareTargets() {
     let authMethods;
-    const targets = [];
+    let targets = [];
 
     if (this.auth_method_accessors.length || this.auth_method_types.length) {
       // fetch all auth methods and lookup by accessor to get mount path and type
       try {
-        const { data } = await this.store.adapterFor('auth-method').findAll();
-        authMethods = Object.keys(data).map((key) => ({ path: key, ...data[key] }));
+        const { data } = await this.api.sys.authListEnabledMethods();
+        authMethods = this.api.responseObjectToArray(data, 'path');
       } catch (error) {
         // swallow this error
       }
@@ -68,7 +70,8 @@ export default class MfaLoginEnforcementModel extends Model {
       const selectedAuthMethods = authMethods.filter((model) => {
         return this.auth_method_accessors.includes(model.accessor);
       });
-      targets.addObjects(
+      targets = addManyToArray(
+        targets,
         selectedAuthMethods.map((method) => ({
           icon: this.iconForMount(method.type),
           link: 'vault.cluster.access.method',
@@ -82,7 +85,7 @@ export default class MfaLoginEnforcementModel extends Model {
     this.auth_method_types.forEach((type) => {
       const icon = this.iconForMount(type);
       const mountCount = authMethods.filterBy('type', type).length;
-      targets.addObject({
+      targets = addToArray(targets, {
         key: 'auth_method_types',
         icon,
         title: type,
@@ -92,7 +95,7 @@ export default class MfaLoginEnforcementModel extends Model {
 
     for (const key of ['identity_entities', 'identity_groups']) {
       (await this[key]).forEach((model) => {
-        targets.addObject({
+        targets = addToArray(targets, {
           key,
           icon: 'user',
           link: 'vault.cluster.access.identity.show',
@@ -107,7 +110,7 @@ export default class MfaLoginEnforcementModel extends Model {
   }
 
   iconForMount(type) {
-    const mountableMethods = methods();
+    const mountableMethods = filterEnginesByMountCategory({ mountCategory: 'auth', isEnterprise: true });
     const mount = mountableMethods.find((method) => method.type === type);
     return mount ? mount.glyph || mount.type : 'token';
   }

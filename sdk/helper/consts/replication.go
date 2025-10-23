@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package consts
@@ -20,6 +20,7 @@ const (
 	// ids to ensure it doesn't collide.
 	CurrentReplicatedSecondaryIdentifier = ".current"
 	CoreFeatureFlagPath                  = "core/cluster/feature-flags"
+	CoreDevelopmentClusterPath           = "core/reporting/development-cluster"
 )
 
 type ReplicationState uint32

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -50,7 +50,7 @@ export default Controller.extend({
     return filterMatchesKey
       ? null
       : content.find(function (key) {
-          return re.test(key.get('id'));
+          return re.test(key.id);
         });
   }),
 
@@ -62,7 +62,7 @@ export default Controller.extend({
       this.set('filterFocused', bool);
     },
     deletePolicy(model) {
-      const policyType = model.get('policyType');
+      const { policyType } = model;
       const name = model.id;
       const flash = this.flashMessages;
       model

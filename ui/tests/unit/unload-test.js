@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -70,7 +70,7 @@ module('Unit | Model | unloadAll works as expected', function (hooks) {
 
     assert.strictEqual(this.store.peekAll('company').length, 0, 'peekAll 0 - companies unloaded');
     assert.strictEqual(
-      this.store.peekAll('company').toArray().length,
+      this.store.peekAll('company').slice().length,
       0,
       'peekAll array 0 - companies unloaded'
     );
@@ -106,7 +106,7 @@ module('Unit | Model | unloadAll works as expected', function (hooks) {
 
     assert.strictEqual(this.store.peekAll('company').length, 0, 'peekAll 0 - companies unloaded');
     assert.strictEqual(
-      this.store.peekAll('company').toArray().length,
+      this.store.peekAll('company').slice().length,
       0,
       'peekAll array 0 - companies unloaded'
     );

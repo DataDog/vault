@@ -1,7 +1,7 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <PageHeader as |p|>
   <p.top>
@@ -21,11 +21,17 @@
 <div class="tabs-container box is-sideless is-fullwidth is-paddingless is-marginless">
   <nav class="tabs" aria-label="tabs">
     <ul>
-      <LinkTo @route="vault.cluster.access.mfa.methods.method" @query={{hash tab="config"}} data-test-tab="config">
+      <LinkTo
+        @route="vault.cluster.access.mfa.methods.method"
+        @model={{this.model.method.id}}
+        @query={{hash tab="config"}}
+        data-test-tab="config"
+      >
         Configuration
       </LinkTo>
       <LinkTo
         @route="vault.cluster.access.mfa.methods.method"
+        @model={{this.model.method.id}}
         @query={{hash tab="enforcements"}}
         data-test-tab="enforcements"
       >
@@ -60,6 +66,7 @@
     </ToolbarActions>
   </Toolbar>
   <div class="box is-fullwidth is-sideless is-paddingless is-marginless">
+    <InfoTableRow @label="ID" @value={{this.model.method.id}} @addCopyButton={{true}} />
     {{#each this.model.method.attrs as |attr|}}
       {{#if (eq attr.type "object")}}
         <InfoTableRow
@@ -72,6 +79,8 @@
           @alwaysRender={{not (is-empty-value (get this.model.method attr.name))}}
           @label={{or attr.options.label (to-label attr.name)}}
           @value={{get this.model.method attr.name}}
+          @formatTtl={{eq attr.options.editType "ttl"}}
+          @helperText={{attr.options.helperText}}
         />
       {{/if}}
     {{/each}}

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package delegated_auth
@@ -327,7 +327,7 @@ func TestDelegatedAuth(t *testing.T) {
 			path:          "login",
 			username:      "allowed-est",
 			password:      "",
-			errorContains: "missing password",
+			errorContains: "invalid credentials",
 		},
 		{
 			name:          "bad-path-within-delegated-auth-error",

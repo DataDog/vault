@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -18,7 +18,7 @@ import errorMessage from 'vault/utils/error-message';
  * @param {object} model - config model that contains kubernetes configuration
  */
 export default class ConfigurePageComponent extends Component {
-  @service router;
+  @service('app-router') router;
   @service store;
 
   @tracked inferredState;

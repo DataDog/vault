@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -30,7 +30,7 @@ export default class NamedPathAdapter extends ApplicationAdapter {
     const [store, { modelName }, snapshot] = arguments;
     const name = snapshot.attr('name');
     // throw error if user attempts to create a record with same name, otherwise POST request silently overrides (updates) the existing model
-    if (store.hasRecordForId(modelName, name)) {
+    if (store.peekRecord({ type: modelName, id: name }) !== null) {
       throw new Error(`A record already exists with the name: ${name}`);
     } else {
       return this._saveRecord(...arguments);

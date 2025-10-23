@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,6 +8,9 @@ import Route from '@ember/routing/route';
 import UnloadModelRoute from 'vault/mixins/unload-model-route';
 import { service } from '@ember/service';
 
+/**
+ * @type Class
+ */
 export default Route.extend(UnloadModelRoute, {
   router: service(),
   store: service(),
@@ -24,7 +27,6 @@ export default Route.extend(UnloadModelRoute, {
     const type = this.policyType();
     return hash({
       policy: this.store.findRecord(`policy/${type}`, params.policy_name),
-      capabilities: this.store.findRecord('capabilities', `sys/policies/${type}/${params.policy_name}`),
     });
   },
 

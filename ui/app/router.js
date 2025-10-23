@@ -1,11 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import EmberRouter from '@ember/routing/router';
 import config from 'vault/config/environment';
-
+import { addDocfyRoutes } from '@docfy/ember';
 export default class Router extends EmberRouter {
   location = config.locationType;
   rootURL = config.rootURL;
@@ -17,6 +17,15 @@ Router.map(function () {
       this.route('dashboard');
       this.mount('config-ui');
       this.mount('sync');
+      this.route('recovery', function () {
+        this.route('snapshots', function () {
+          this.route('load');
+          this.route('snapshot', { path: '/:snapshot_id' }, function () {
+            this.route('manage');
+            this.route('details');
+          });
+        });
+      });
       this.route('oidc-provider-ns', { path: '/*namespace/identity/oidc/provider/:provider_name/authorize' });
       this.route('oidc-provider', { path: '/identity/oidc/provider/:provider_name/authorize' });
       this.route('oidc-callback', { path: '/auth/*auth_path/oidc/callback' });
@@ -29,12 +38,12 @@ Router.map(function () {
       this.route('clients', function () {
         this.route('counts', function () {
           this.route('overview');
-          // this.route('sync'); * unavailable during SYNC BETA (1.16.0), planned for 1.16.1 release
-          this.route('token');
+          this.route('client-list');
         });
         this.route('config');
         this.route('edit');
       });
+      this.route('usage-reporting');
       this.route('storage', { path: '/storage/raft' });
       this.route('storage-restore', { path: '/storage/raft/restore' });
       this.route('settings', function () {
@@ -47,11 +56,6 @@ Router.map(function () {
             this.route('index', { path: '/' });
             this.route('section', { path: '/:section_name' });
           });
-        });
-        this.route('mount-secret-backend');
-        this.route('configure-secret-backend', { path: '/secrets/configure/:backend' }, function () {
-          this.route('index', { path: '/' });
-          this.route('section', { path: '/:section_name' });
         });
       });
       this.route('unseal');
@@ -101,6 +105,7 @@ Router.map(function () {
           this.route('show', { path: '/show/*lease_id' });
         });
         // the outer identity route handles group and entity items
+        // the "identity" routes expect :item_type to be plural
         this.route('identity', { path: '/identity/:item_type' }, function () {
           this.route('index', { path: '/' });
           this.route('create');
@@ -162,7 +167,12 @@ Router.map(function () {
           });
         });
       });
-      this.route('secrets', function () {
+      this.route('secrets-redirect', { path: '/secrets' }); // legacy redirect
+      this.route('secrets', { path: '/secrets-engines' }, function () {
+        this.route('enable', function () {
+          // TODO: Revisit path on create once components are separated - should we specify selected type or just keep it generic as /create?
+          this.route('create', { path: '/:mount_type' });
+        });
         this.route('backends', { path: '/' });
         this.route('backend', { path: '/:backend' }, function () {
           this.mount('kmip');
@@ -171,7 +181,13 @@ Router.map(function () {
           this.mount('ldap');
           this.mount('pki');
           this.route('index', { path: '/' });
-          this.route('configuration');
+          this.route('configuration', function () {
+            this.route('index', { path: '/' }); // this is still used by old engines
+            this.route('general-settings');
+            this.route('plugin-settings');
+            // only CONFIGURABLE_SECRET_ENGINES can be configured and access the edit route
+            this.route('edit');
+          });
           // because globs / params can't be empty,
           // we have to special-case ids of '' with their own routes
           this.route('list-root', { path: '/list/' });
@@ -216,4 +232,7 @@ Router.map(function () {
     });
     this.route('not-found', { path: '/*path' });
   });
+  if (config.environment !== 'production') {
+    addDocfyRoutes(this);
+  }
 });

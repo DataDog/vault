@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -25,7 +25,6 @@ export default Route.extend(ModelBoundaryRoute, {
   }),
 
   beforeModel({ to: { queryParams } }) {
-    const authType = this.auth.getAuthType();
     const ns = this.namespaceService.path;
     this.auth.deleteCurrentToken();
     this.controlGroup.deleteTokens();
@@ -40,14 +39,12 @@ export default Route.extend(ModelBoundaryRoute, {
       this.customMessages.clearCustomMessages();
     }
 
-    queryParams.with = authType;
     if (ns) {
       queryParams.namespace = ns;
     }
     if (Ember.testing) {
-      // TODO: cleanup this replaceWith instance. Using router.replaceWith causes test failures
       // Don't redirect on the test
-      this.replaceWith('vault.cluster.auth', { queryParams });
+      this.router.replaceWith('vault.cluster.auth', { queryParams });
     } else {
       const { cluster_name } = this.paramsFor('vault.cluster');
       location.assign(this.router.urlFor('vault.cluster.auth', cluster_name, { queryParams }));

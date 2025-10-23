@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package awsauth
@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/iam/iamiface"
 	"github.com/hashicorp/go-cleanhttp"
@@ -42,6 +41,10 @@ func (b *backend) pathConfigRotateRoot() *framework.Path {
 }
 
 func (b *backend) pathConfigRotateRootUpdate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	return b.rotateRoot(ctx, req)
+}
+
+func (b *backend) rotateRoot(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	// First get the AWS key and secret and validate that we _can_ rotate them.
 	// We need the read lock here to prevent anything else from mutating it while we're using it.
 	b.configMutex.Lock()
@@ -177,8 +180,8 @@ func (b *backend) pathConfigRotateRootUpdate(ctx context.Context, req *logical.R
 
 	// Previous cached clients need to be cleared because they may have been made using
 	// the soon-to-be-obsolete credentials.
-	b.IAMClientsMap = make(map[string]map[string]*iam.IAM)
-	b.EC2ClientsMap = make(map[string]map[string]*ec2.EC2)
+	b.flushCachedIAMClients()
+	b.flushCachedEC2Clients()
 
 	// Now to clean up the old key.
 	deleteAccessKeyInput := iam.DeleteAccessKeyInput{

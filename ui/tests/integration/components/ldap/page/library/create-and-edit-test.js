@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,6 +10,7 @@ import { setupMirage } from 'ember-cli-mirage/test-support';
 import { render, click, fillIn } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
 import sinon from 'sinon';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 module('Integration | Component | ldap | Page::Library::CreateAndEdit', function (hooks) {
   setupRenderingTest(hooks);
@@ -37,8 +38,8 @@ module('Integration | Component | ldap | Page::Library::CreateAndEdit', function
 
     this.breadcrumbs = [
       { label: 'ldap', route: 'overview' },
-      { label: 'libraries', route: 'libraries' },
-      { label: 'create' },
+      { label: 'Libraries', route: 'libraries' },
+      { label: 'Create' },
     ];
 
     this.renderComponent = () => {
@@ -65,7 +66,7 @@ module('Integration | Component | ldap | Page::Library::CreateAndEdit', function
     assert.dom('[data-test-ttl-value="Max lease TTL"]').hasAnyValue('Max lease ttl renders');
     const checkInValue = this.libraryData.disable_check_in_enforcement ? 'Disabled' : 'Enabled';
     assert
-      .dom(`[data-test-input="disable_check_in_enforcement"] input#${checkInValue}`)
+      .dom(`[data-test-input-group="disable_check_in_enforcement"] input#${checkInValue}`)
       .isChecked('Correct radio is checked for check-in enforcement');
   });
 
@@ -84,13 +85,13 @@ module('Integration | Component | ldap | Page::Library::CreateAndEdit', function
     this.model = this.newModel;
 
     await this.renderComponent();
-    await click('[data-test-save]');
+    await click('[data-test-submit]');
 
     assert
-      .dom('[data-test-field-validation="name"]')
+      .dom(GENERAL.validationErrorByAttr('name'))
       .hasText('Library name is required.', 'Name validation error renders');
     assert
-      .dom('[data-test-field-validation="service_account_names"]')
+      .dom(GENERAL.validationErrorByAttr('service_account_names'))
       .hasText('At least one service account is required.', 'Service account name validation error renders');
     assert
       .dom('[data-test-invalid-form-message]')
@@ -120,8 +121,8 @@ module('Integration | Component | ldap | Page::Library::CreateAndEdit', function
     await click('[data-test-string-list-button="add"]');
     await fillIn('[data-test-string-list-input="1"]', 'bar@baz.com');
     await click('[data-test-string-list-button="add"]');
-    await click('[data-test-input="disable_check_in_enforcement"] input#Disabled');
-    await click('[data-test-save]');
+    await click('[data-test-input-group="disable_check_in_enforcement"] input#Disabled');
+    await click('[data-test-submit]');
 
     assert.ok(
       this.transitionCalledWith('libraries.library.details', 'new-library'),
@@ -147,9 +148,9 @@ module('Integration | Component | ldap | Page::Library::CreateAndEdit', function
 
     await this.renderComponent();
 
-    await click('[data-test-string-list-button="delete"]');
-    await click('[data-test-input="disable_check_in_enforcement"] input#Disabled');
-    await click('[data-test-save]');
+    await click('[data-test-string-list-row="0"] [data-test-string-list-button="delete"]');
+    await click('[data-test-input-group="disable_check_in_enforcement"] input#Disabled');
+    await click('[data-test-submit]');
 
     assert.ok(
       this.transitionCalledWith('libraries.library.details', 'test-library'),

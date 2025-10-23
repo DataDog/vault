@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -21,9 +21,6 @@ import (
 	"github.com/hashicorp/go-uuid"
 	logicalKv "github.com/hashicorp/vault-plugin-secrets-kv"
 	"github.com/hashicorp/vault/audit"
-	"github.com/hashicorp/vault/builtin/audit/file"
-	"github.com/hashicorp/vault/builtin/audit/socket"
-	"github.com/hashicorp/vault/builtin/audit/syslog"
 	logicalDb "github.com/hashicorp/vault/builtin/logical/database"
 	"github.com/hashicorp/vault/builtin/plugin"
 	"github.com/hashicorp/vault/command/server"
@@ -41,6 +38,7 @@ import (
 	"github.com/sasha-s/go-deadlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	uberatomic "go.uber.org/atomic"
 )
 
 // invalidKey is used to test Unseal
@@ -59,24 +57,24 @@ func TestNewCore_configureAuditBackends(t *testing.T) {
 		},
 		"file": {
 			backends: map[string]audit.Factory{
-				"file": file.Factory,
+				"file": audit.NewFileBackend,
 			},
 		},
 		"socket": {
 			backends: map[string]audit.Factory{
-				"socket": socket.Factory,
+				"socket": audit.NewSocketBackend,
 			},
 		},
 		"syslog": {
 			backends: map[string]audit.Factory{
-				"syslog": syslog.Factory,
+				"syslog": audit.NewSyslogBackend,
 			},
 		},
 		"all": {
 			backends: map[string]audit.Factory{
-				"file":   file.Factory,
-				"socket": socket.Factory,
-				"syslog": syslog.Factory,
+				"file":   audit.NewFileBackend,
+				"socket": audit.NewSocketBackend,
+				"syslog": audit.NewSyslogBackend,
 			},
 		},
 	}
@@ -263,6 +261,138 @@ func TestNewCore_configureLogRequestLevel(t *testing.T) {
 	}
 }
 
+// TestCore_FinalizeInFlightReqData validates that the core server
+// correctly finalizes a completed request. It verifies that the request is
+// removed from the in-flight map and the counter is decremented.
+func TestCore_FinalizeInFlightReqData(t *testing.T) {
+	core := &Core{
+		logger:           corehelpers.NewTestLogger(t),
+		logRequestsLevel: uberatomic.NewInt32(int32(log.Info)), // Set to a valid log level
+		inFlightReqData: &InFlightRequests{
+			InFlightReqMap:   &sync.Map{},
+			InFlightReqCount: uberatomic.NewUint64(1),
+		},
+	}
+
+	reqID := "test-req"
+	reqData := InFlightReqData{
+		StartTime:        time.Now(),
+		ClientRemoteAddr: "127.0.0.1",
+		ReqPath:          "/test",
+		Method:           "GET",
+		ClientID:         "client-1",
+	}
+	core.inFlightReqData.InFlightReqMap.Store(reqID, reqData)
+
+	core.FinalizeInFlightReqData(reqID, 200)
+
+	_, ok := core.inFlightReqData.InFlightReqMap.Load(reqID)
+	if ok {
+		t.Errorf("Expected request to be deleted from map")
+	}
+
+	if got := core.inFlightReqData.InFlightReqCount.Load(); got != 0 {
+		t.Errorf("Expected counter to be 0, got %d", got)
+	}
+}
+
+// TestCore_FinalizeInFlightReqData_LogLevelVariants checks that request
+// logging is conditional on the configured log level. It asserts that logging
+// only occurs when a valid log level is set and not for "off" or invalid levels.
+func TestCore_FinalizeInFlightReqData_LogLevelVariants(t *testing.T) {
+	tests := []struct {
+		name         string
+		logLevel     int32
+		expectLogged bool // For manual inspection only
+	}{
+		{"log level off", int32(log.Off), false},
+		{"log level no level (empty)", int32(log.NoLevel), false},
+		{"log level info", int32(log.Info), true},
+		{"log level invalid", int32(-99), false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			core := &Core{
+				logger:           corehelpers.NewTestLogger(t),
+				logRequestsLevel: uberatomic.NewInt32(tc.logLevel),
+				inFlightReqData: &InFlightRequests{
+					InFlightReqMap:   &sync.Map{},
+					InFlightReqCount: uberatomic.NewUint64(1),
+				},
+			}
+			reqID := "test-req"
+			reqData := InFlightReqData{
+				StartTime:        time.Now(),
+				ClientRemoteAddr: "127.0.0.1",
+				ReqPath:          "/test",
+				Method:           "GET",
+				ClientID:         "client-1",
+			}
+			core.inFlightReqData.InFlightReqMap.Store(reqID, reqData)
+
+			core.FinalizeInFlightReqData(reqID, 200)
+
+			_, ok := core.inFlightReqData.InFlightReqMap.Load(reqID)
+			if ok {
+				t.Errorf("Expected request to be deleted from map")
+			}
+
+			if got := core.inFlightReqData.InFlightReqCount.Load(); got != 0 {
+				t.Errorf("Expected counter to be 0, got %d", got)
+			}
+		})
+	}
+}
+
+// TestCore_ReloadLogRequestsLevel ensures the log level for completed
+// requests is correctly updated when the server config is reloaded via SIGHUP,
+// including handling empty or "off" values.
+func TestCore_ReloadLogRequestsLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		configLevel   string
+		expectedLevel log.Level
+	}{
+		{"none", "", log.Off},
+		{"off", "off", log.Off},
+		{"trace", "trace", log.Trace},
+		{"debug", "debug", log.Debug},
+		{"info", "info", log.Info},
+		{"warn", "warn", log.Warn},
+		{"error", "error", log.Error},
+		{"bad", "foo", log.NoLevel},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create an atomic.Value instance and initialize it
+			rawConfig := &atomic.Value{}
+			rawConfig.Store(&server.Config{
+				SharedConfig: &configutil.SharedConfig{},
+			})
+
+			core := &Core{
+				logger:           corehelpers.NewTestLogger(t),
+				logRequestsLevel: uberatomic.NewInt32(0),
+				rawConfig:        rawConfig,
+			}
+			// Simulate config reload
+			conf := &server.Config{
+				SharedConfig:     &configutil.SharedConfig{},
+				LogRequestsLevel: tc.configLevel,
+			}
+			core.rawConfig.Store(conf)
+
+			core.ReloadLogRequestsLevel()
+			got := log.Level(core.logRequestsLevel.Load())
+			require.Equal(t, tc.expectedLevel, got)
+		})
+	}
+}
+
 // TestNewCore_configureListeners tests that we are able to configure listeners
 // on a NewCore via config.
 func TestNewCore_configureListeners(t *testing.T) {
@@ -382,7 +512,7 @@ func TestCore_HasVaultVersion(t *testing.T) {
 	upgradeTime := versionEntry.TimestampInstalled
 
 	if upgradeTime.After(time.Now()) || upgradeTime.Before(time.Now().Add(-1*time.Hour)) {
-		t.Fatalf("upgrade time isn't within reasonable bounds of new core initialization. " +
+		t.Fatal("upgrade time isn't within reasonable bounds of new core initialization. " +
 			fmt.Sprintf("time is: %+v, upgrade time is %+v", time.Now(), upgradeTime))
 	}
 }
@@ -1175,7 +1305,7 @@ func TestCore_HandleRequest_InvalidToken(t *testing.T) {
 	if err == nil || !errwrap.Contains(err, logical.ErrPermissionDenied.Error()) {
 		t.Fatalf("err: %v", err)
 	}
-	if resp.Data["error"] != "permission denied" {
+	if !strings.Contains(resp.Data["error"].(string), "permission denied") {
 		t.Fatalf("bad: %#v", resp)
 	}
 }
@@ -1251,6 +1381,26 @@ func TestCore_HandleRequest_RootPath_WithSudo(t *testing.T) {
 	}
 }
 
+// TestCore_HandleRequest_TokenErrInvalidToken checks that a request made
+// with a non-existent token will return the "permission denied" and "invalid token" error
+func TestCore_HandleRequest_TokenErrInvalidToken(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+
+	req := &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "secret/test",
+		Data: map[string]interface{}{
+			"foo":   "bar",
+			"lease": "1h",
+		},
+		ClientToken: "bogus",
+	}
+	resp, err := c.HandleRequest(namespace.RootContext(nil), req)
+	if err == nil || !errwrap.Contains(err, logical.ErrInvalidToken.Error()) || !errwrap.Contains(err, logical.ErrPermissionDenied.Error()) {
+		t.Fatalf("err: %v, resp: %v", err, resp)
+	}
+}
+
 // Check that standard permissions work
 func TestCore_HandleRequest_PermissionDenied(t *testing.T) {
 	c, _, root := TestCoreUnsealed(t)
@@ -1267,6 +1417,69 @@ func TestCore_HandleRequest_PermissionDenied(t *testing.T) {
 	}
 	resp, err := c.HandleRequest(namespace.RootContext(nil), req)
 	if err == nil || !errwrap.Contains(err, logical.ErrPermissionDenied.Error()) {
+		t.Fatalf("err: %v, resp: %v", err, resp)
+	}
+}
+
+// TestCore_RevokedToken_InvalidTokenError checks that a request
+// returns an "invalid token" and a "permission denied" error when a token
+// that has been revoked is used in a request
+func TestCore_RevokedToken_InvalidTokenError(t *testing.T) {
+	c, _, root := TestCoreUnsealed(t)
+
+	// Set the 'test' policy object to permit access to sys/policy
+	req := &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "sys/policy/test", // root protected!
+		Data: map[string]interface{}{
+			"rules": `path "sys/policy" { policy = "sudo" }`,
+		},
+		ClientToken: root,
+	}
+	resp, err := c.HandleRequest(namespace.RootContext(nil), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp != nil && (resp.IsError() || len(resp.Data) > 0) {
+		t.Fatalf("bad: %#v", resp)
+	}
+
+	// Child token (non-root) but with 'test' policy should have access
+	testMakeServiceTokenViaCore(t, c, root, "child", "", []string{"test"})
+	req = &logical.Request{
+		Operation:   logical.ReadOperation,
+		Path:        "sys/policy", // root protected!
+		ClientToken: "child",
+	}
+	resp, err = c.HandleRequest(namespace.RootContext(nil), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("bad: %#v", resp)
+	}
+
+	// Revoke the token
+	req = &logical.Request{
+		ClientToken: root,
+		Operation:   logical.UpdateOperation,
+		Path:        "auth/token/revoke",
+		Data: map[string]interface{}{
+			"token": "child",
+		},
+	}
+	resp, err = c.HandleRequest(namespace.RootContext(nil), req)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	req = &logical.Request{
+		Operation:   logical.ReadOperation,
+		Path:        "sys/policy", // root protected!
+		ClientToken: "child",
+	}
+	_, err = c.HandleRequest(namespace.RootContext(nil), req)
+	if err == nil || !errwrap.Contains(err, logical.ErrPermissionDenied.Error()) || !errwrap.Contains(err, logical.ErrInvalidToken.Error()) {
 		t.Fatalf("err: %v, resp: %v", err, resp)
 	}
 }
@@ -1460,11 +1673,11 @@ func TestCore_HandleLogin_Token(t *testing.T) {
 
 func TestCore_HandleRequest_AuditTrail(t *testing.T) {
 	// Create a noop audit backend
-	var noop *corehelpers.NoopAudit
+	var noop *audit.NoopAudit
 	c, _, root := TestCoreUnsealed(t)
-	c.auditBackends["noop"] = func(ctx context.Context, config *audit.BackendConfig, headerFormatter audit.HeaderFormatter) (audit.Backend, error) {
+	c.auditBackends["noop"] = func(config *audit.BackendConfig, _ audit.HeaderFormatter) (audit.Backend, error) {
 		var err error
-		noop, err = corehelpers.NewNoopAudit(config, audit.WithHeaderFormatter(headerFormatter))
+		noop, err = audit.NewNoopAudit(config)
 		return noop, err
 	}
 
@@ -1523,11 +1736,11 @@ func TestCore_HandleRequest_AuditTrail(t *testing.T) {
 
 func TestCore_HandleRequest_AuditTrail_noHMACKeys(t *testing.T) {
 	// Create a noop audit backend
-	var noop *corehelpers.NoopAudit
+	var noop *audit.NoopAudit
 	c, _, root := TestCoreUnsealed(t)
-	c.auditBackends["noop"] = func(ctx context.Context, config *audit.BackendConfig, headerFormatter audit.HeaderFormatter) (audit.Backend, error) {
+	c.auditBackends["noop"] = func(config *audit.BackendConfig, _ audit.HeaderFormatter) (audit.Backend, error) {
 		var err error
-		noop, err = corehelpers.NewNoopAudit(config, audit.WithHeaderFormatter(headerFormatter))
+		noop, err = audit.NewNoopAudit(config)
 		return noop, err
 	}
 
@@ -1626,7 +1839,7 @@ func TestCore_HandleRequest_AuditTrail_noHMACKeys(t *testing.T) {
 
 func TestCore_HandleLogin_AuditTrail(t *testing.T) {
 	// Create a badass credential backend that always logs in as armon
-	var noop *corehelpers.NoopAudit
+	var noop *audit.NoopAudit
 	noopBack := &NoopBackend{
 		Login: []string{"login"},
 		Response: &logical.Response{
@@ -1646,9 +1859,9 @@ func TestCore_HandleLogin_AuditTrail(t *testing.T) {
 	c.credentialBackends["noop"] = func(context.Context, *logical.BackendConfig) (logical.Backend, error) {
 		return noopBack, nil
 	}
-	c.auditBackends["noop"] = func(ctx context.Context, config *audit.BackendConfig, headerFormatter audit.HeaderFormatter) (audit.Backend, error) {
+	c.auditBackends["noop"] = func(config *audit.BackendConfig, _ audit.HeaderFormatter) (audit.Backend, error) {
 		var err error
-		noop, err = corehelpers.NewNoopAudit(config, audit.WithHeaderFormatter(headerFormatter))
+		noop, err = audit.NewNoopAudit(config)
 		return noop, err
 	}
 
@@ -3206,11 +3419,12 @@ func TestCore_HandleRequest_TokenCreate_RegisterAuthFailure(t *testing.T) {
 
 // mockServiceRegistration helps test whether standalone ServiceRegistration works
 type mockServiceRegistration struct {
-	notifyActiveCount int
-	notifySealedCount int
-	notifyPerfCount   int
-	notifyInitCount   int
-	runDiscoveryCount int
+	notifyActiveCount         int
+	notifySealedCount         int
+	notifyPerfCount           int
+	notifyInitCount           int
+	notifyConfigurationReload int
+	runDiscoveryCount         int
 }
 
 func (m *mockServiceRegistration) Run(shutdownCh <-chan struct{}, wait *sync.WaitGroup, redirectAddr string) error {
@@ -3235,6 +3449,11 @@ func (m *mockServiceRegistration) NotifyPerformanceStandbyStateChange(isStandby 
 
 func (m *mockServiceRegistration) NotifyInitializedStateChange(isInitialized bool) error {
 	m.notifyInitCount++
+	return nil
+}
+
+func (m *mockServiceRegistration) NotifyConfigurationReload(config *map[string]string) error {
+	m.notifyConfigurationReload++
 	return nil
 }
 
@@ -3294,10 +3513,11 @@ func TestCore_ServiceRegistration(t *testing.T) {
 
 	// Vault should be registered, unsealed, and active
 	if diff := deep.Equal(sr, &mockServiceRegistration{
-		runDiscoveryCount: 1,
-		notifyActiveCount: 1,
-		notifySealedCount: 1,
-		notifyInitCount:   1,
+		runDiscoveryCount:         1,
+		notifyActiveCount:         1,
+		notifySealedCount:         1,
+		notifyInitCount:           1,
+		notifyConfigurationReload: 1,
 	}); diff != nil {
 		t.Fatal(diff)
 	}
@@ -3313,15 +3533,11 @@ func TestDefaultDeadlock(t *testing.T) {
 	InduceDeadlock(t, testCore, 0)
 }
 
-func RestoreDeadlockOpts() func() {
-	opts := deadlock.Opts
-	return func() {
-		deadlock.Opts = opts
-	}
-}
-
 func InduceDeadlock(t *testing.T, vaultcore *Core, expected uint32) {
-	defer RestoreDeadlockOpts()()
+	priorDeadlockFunc := deadlock.Opts.OnPotentialDeadlock
+	defer func() {
+		deadlock.Opts.OnPotentialDeadlock = priorDeadlockFunc
+	}()
 	var deadlocks uint32
 	deadlock.Opts.OnPotentialDeadlock = func() {
 		atomic.AddUint32(&deadlocks, 1)
@@ -3351,6 +3567,79 @@ func InduceDeadlock(t *testing.T, vaultcore *Core, expected uint32) {
 	}
 }
 
+// TestDetectedDeadlockSetting verifies that a Core struct gets the appropriate
+// locking.RWMutex implementation assigned for the stateLock, authLock, and
+// mountsLock fields based on various values that could be obtained from the
+// detect_deadlocks configuration parameter.
+func TestDetectedDeadlockSetting(t *testing.T) {
+	var standardLock string = "*locking.SyncRWMutex"
+	var deadlockLock string = "*locking.DeadlockRWMutex"
+
+	for _, tc := range []struct {
+		name                        string
+		input                       string
+		expectedDetectDeadlockSlice []string
+		expectedStateLockImpl       string
+		expectedAuthLockImpl        string
+		expectedMountsLockImpl      string
+	}{
+		{
+			name:                        "none",
+			input:                       "",
+			expectedDetectDeadlockSlice: []string{},
+			expectedStateLockImpl:       standardLock,
+			expectedAuthLockImpl:        standardLock,
+			expectedMountsLockImpl:      standardLock,
+		},
+		{
+			name:                        "stateLock-only",
+			input:                       "STATELOCK",
+			expectedDetectDeadlockSlice: []string{"statelock"},
+			expectedStateLockImpl:       deadlockLock,
+			expectedAuthLockImpl:        standardLock,
+			expectedMountsLockImpl:      standardLock,
+		},
+		{
+			name:                        "authLock-only",
+			input:                       "AuthLock",
+			expectedDetectDeadlockSlice: []string{"authlock"},
+			expectedStateLockImpl:       standardLock,
+			expectedAuthLockImpl:        deadlockLock,
+			expectedMountsLockImpl:      standardLock,
+		},
+		{
+			name:                        "state-auth-mounts",
+			input:                       "mountsLock,AUTHlock,sTaTeLoCk",
+			expectedDetectDeadlockSlice: []string{"mountslock", "authlock", "statelock"},
+			expectedStateLockImpl:       deadlockLock,
+			expectedAuthLockImpl:        deadlockLock,
+			expectedMountsLockImpl:      deadlockLock,
+		},
+		{
+			name:                        "stateLock-with-unrecognized",
+			input:                       "stateLock,otherLock",
+			expectedDetectDeadlockSlice: []string{"statelock", "otherlock"},
+			expectedStateLockImpl:       deadlockLock,
+			expectedAuthLockImpl:        standardLock,
+			expectedMountsLockImpl:      standardLock,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, _, _ := TestCoreUnsealedWithConfig(t, &CoreConfig{DetectDeadlocks: tc.input})
+
+			assert.ElementsMatch(t, tc.expectedDetectDeadlockSlice, core.detectDeadlocks)
+
+			stateLockImpl := fmt.Sprintf("%T", core.stateLock)
+			authLockImpl := fmt.Sprintf("%T", core.authLock)
+			mountsLockImpl := fmt.Sprintf("%T", core.mountsLock)
+
+			assert.Equal(t, tc.expectedStateLockImpl, stateLockImpl)
+			assert.Equal(t, tc.expectedAuthLockImpl, authLockImpl)
+			assert.Equal(t, tc.expectedMountsLockImpl, mountsLockImpl)
+		})
+	}
+}
+
 func TestSetSeals(t *testing.T) {
 	oldSeal := NewTestSeal(t, &seal.TestSealOpts{
 		StoredKeys:   seal.StoredKeysSupportedGeneric,
@@ -3377,7 +3666,8 @@ func TestSetSeals(t *testing.T) {
 		Generation:   2,
 	})
 
-	err := testCore.SetSeals(newSeal, nil, false)
+	ctx := context.Background()
+	err := testCore.SetSeals(ctx, true, newSeal, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3507,17 +3797,105 @@ func TestBuildUnsealSetupFunctionSlice(t *testing.T) {
 			core: &Core{
 				replicationState: uint32Ptr(uint32(0)),
 			},
-			expectedLength: 25,
+			expectedLength: 28,
 		},
 		{
 			name: "dr secondary core",
 			core: &Core{
 				replicationState: uint32Ptr(uint32(consts.ReplicationDRSecondary)),
 			},
-			expectedLength: 14,
+			expectedLength: 15,
 		},
 	} {
-		funcs := buildUnsealSetupFunctionSlice(testcase.core)
+		funcs := buildUnsealSetupFunctionSlice(testcase.core, true)
 		assert.Equal(t, testcase.expectedLength, len(funcs), testcase.name)
 	}
+}
+
+// TestBarrier_DeadlockDetection verifies that the
+// DeadlockDetection is correctly enabled and disabled when the core is unsealed
+func TestBarrier_DeadlockDetection(t *testing.T) {
+	testCore := TestCore(t)
+	testCoreUnsealed(t, testCore)
+
+	if testCore.barrier.DetectDeadlocks() {
+		t.Fatal("barrierLock has deadlock detection enabled, it shouldn't")
+	}
+
+	testCore = TestCoreWithDeadlockDetection(t, nil, false)
+	testCoreUnsealed(t, testCore)
+
+	if !testCore.barrier.DetectDeadlocks() {
+		t.Fatal("barrierLock doesn't have deadlock detection enabled, it should")
+	}
+}
+
+// TestCore_IsRemovedFromCluster exercises all the execution paths in the
+// IsRemovedFromCluster convenience method of the Core struct.
+func TestCore_IsRemovedFromCluster(t *testing.T) {
+	core := &Core{}
+
+	// Test case where both HA and underlying physical backends ares nil
+	removed, ok := core.IsRemovedFromCluster()
+	if removed || ok {
+		t.Fatalf("expected removed and ok to be false, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend is nil, but the underlying physical is there and does not support RemovableNodeHABackend
+	core.underlyingPhysical = &MockHABackend{}
+	removed, ok = core.IsRemovedFromCluster()
+	if removed || ok {
+		t.Fatalf("expected removed and ok to be false, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend is nil, but the underlying physical is there, supports RemovableNodeHABackend, and is not removed
+	mockHA := &MockRemovableNodeHABackend{}
+	core.underlyingPhysical = mockHA
+	removed, ok = core.IsRemovedFromCluster()
+	if removed || !ok {
+		t.Fatalf("expected removed to be false and ok to be true, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend is nil, but the underlying physical is there, supports RemovableNodeHABackend, and is removed
+	mockHA.Removed = true
+	removed, ok = core.IsRemovedFromCluster()
+	if !removed || !ok {
+		t.Fatalf("expected removed to be false and ok to be true, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend does not support RemovableNodeHABackend
+	core.underlyingPhysical = &MockHABackend{}
+	core.ha = &MockHABackend{}
+	removed, ok = core.IsRemovedFromCluster()
+	if removed || ok {
+		t.Fatalf("expected removed and ok to be false, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend supports RemovableNodeHABackend and is not removed
+	mockHA.Removed = false
+	core.ha = mockHA
+	removed, ok = core.IsRemovedFromCluster()
+	if removed || !ok {
+		t.Fatalf("expected removed and ok to be true, got removed: %v, ok: %v", removed, ok)
+	}
+
+	// Test case where HA backend supports RemovableNodeHABackend and is removed
+	mockHA.Removed = true
+	removed, ok = core.IsRemovedFromCluster()
+	if !removed || !ok {
+		t.Fatalf("expected removed to be false and ok to be true, got removed: %v, ok: %v", removed, ok)
+	}
+}
+
+// Test_administrativeNamespacePath verifies if administrativeNamespacePath function returns the configured administrative namespace path
+func Test_administrativeNamespacePath(t *testing.T) {
+	adminNamespacePath := "admin"
+	coreConfig := &CoreConfig{
+		RawConfig: &server.Config{
+			SharedConfig: &configutil.SharedConfig{AdministrativeNamespacePath: adminNamespacePath},
+		},
+		AdministrativeNamespacePath: adminNamespacePath,
+	}
+	core, _, _ := TestCoreUnsealedWithConfig(t, coreConfig)
+	require.Equal(t, core.administrativeNamespacePath(), adminNamespacePath)
 }

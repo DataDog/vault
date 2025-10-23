@@ -1,14 +1,14 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Route from '@ember/routing/route';
 import { service } from '@ember/service';
-import { hash } from 'rsvp';
+import { kvErrorHandler } from 'kv/utils/kv-error-handler';
 
 export default class KvSecretDetailsRoute extends Route {
-  @service store;
+  @service api;
 
   queryParams = {
     version: {
@@ -16,24 +16,28 @@ export default class KvSecretDetailsRoute extends Route {
     },
   };
 
-  model(params) {
+  async model(params) {
     const parentModel = this.modelFor('secret');
-    // Only fetch versioned data if selected version does not match parent (current) version
-    // and parentModel.secret has failReadErrorCode since permissions aren't version specific
-    if (
-      params.version &&
-      parentModel.secret.version !== params.version &&
-      !parentModel.secret.failReadErrorCode
-    ) {
-      // query params have changed by selecting a different version from the dropdown
-      // fire off new request for that version's secret data
-      const { backend, path } = parentModel;
-      return hash({
-        ...parentModel,
-        secret: this.store.queryRecord('kv/data', { backend, path, version: params.version }),
-      });
+    const { backend, path } = parentModel;
+    let secret;
+    // if a version is selected from the dropdown it triggers a model refresh
+    // and we fire off new request for that version's secret data
+    try {
+      const initOverride = params.version
+        ? (context) => this.api.addQueryParams(context, { version: params.version })
+        : undefined;
+      const { data, metadata } = await this.api.secrets.kvV2Read(path, backend, initOverride);
+      secret = { secretData: data, ...metadata };
+    } catch (error) {
+      const { status, response } = await this.api.parseError(error);
+      const { data, metadata, failReadErrorCode } = kvErrorHandler(status, response);
+      secret = failReadErrorCode ? { failReadErrorCode } : { secretData: data, ...metadata };
     }
-    return parentModel;
+
+    return {
+      ...parentModel,
+      secret,
+    };
   }
 
   // breadcrumbs are set in details/index.js

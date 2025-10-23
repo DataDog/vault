@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/vault/builtin/logical/pki/issuing"
+	"github.com/hashicorp/vault/builtin/logical/pki/observe"
+	"github.com/hashicorp/vault/builtin/logical/pki/revocation"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/helper/errutil"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -116,6 +118,7 @@ func buildPathGenerateRoot(b *backend, pattern string, displayAttrs *framework.D
 	ret.Fields = addCACommonFields(map[string]*framework.FieldSchema{})
 	ret.Fields = addCAKeyGenerationFields(ret.Fields)
 	ret.Fields = addCAIssueFields(ret.Fields)
+	ret.Fields = addCACertKeyUsage(ret.Fields)
 	return ret
 }
 
@@ -196,6 +199,7 @@ extension with CA: true. Only needed as a
 workaround in some compatibility scenarios
 with Active Directory Certificate Services.`,
 	}
+	ret.Fields = addCaCsrKeyUsage(ret.Fields)
 
 	// At this time Go does not support signing CSRs using PSS signatures, see
 	// https://github.com/golang/go/issues/45990
@@ -266,6 +270,12 @@ secret-key (optional) and certificates.`,
 		HelpSynopsis:    pathImportIssuersHelpSyn,
 		HelpDescription: pathImportIssuersHelpDesc,
 	}
+}
+
+// ImportedKeyInfo is a set of information about each key imported.
+type ImportedKeyInfo struct {
+	KeyName string `json:"key_name"`
+	KeyId   string `json:"key_id"`
 }
 
 func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -368,6 +378,8 @@ func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, d
 
 	sc := b.makeStorageContext(ctx, req.Storage)
 
+	importedKeys := make([]*issuing.KeyEntry, 0)
+	importedKeyInfo := make([]*ImportedKeyInfo, 0)
 	for keyIndex, keyPem := range keys {
 		// Handle import of private key.
 		key, existing, err := importKeyFromBytes(sc, keyPem, "")
@@ -377,13 +389,22 @@ func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, d
 
 		if !existing {
 			createdKeys = append(createdKeys, key.ID.String())
+			importedKeys = append(importedKeys, key)
+			keyInfo := &ImportedKeyInfo{
+				KeyName: key.Name,
+				KeyId:   key.ID.String(),
+			}
+			importedKeyInfo = append(importedKeyInfo, keyInfo)
 		} else {
 			existingKeys = append(existingKeys, key.ID.String())
 		}
 	}
 
+	// ImportedIssuerInfo
+	importedIssuers := make([]*issuing.IssuerEntry, 0)
+	importedIssuerInfo := make([]*ImportedIssuerInfo, 0)
 	for certIndex, certPem := range issuers {
-		cert, existing, err := sc.importIssuer(certPem, "")
+		cert, issuerInfo, existing, err := sc.importIssuer(certPem, "")
 		if err != nil {
 			return logical.ErrorResponse(fmt.Sprintf("Error parsing issuer %v: %v\n%v", certIndex, err, certPem)), nil
 		}
@@ -391,6 +412,8 @@ func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, d
 		issuerKeyMap[cert.ID.String()] = cert.KeyID.String()
 		if !existing {
 			createdIssuers = append(createdIssuers, cert.ID.String())
+			importedIssuers = append(importedIssuers, cert)
+			importedIssuerInfo = append(importedIssuerInfo, issuerInfo)
 		} else {
 			existingIssuers = append(existingIssuers, cert.ID.String())
 		}
@@ -407,7 +430,7 @@ func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, d
 	}
 
 	if len(createdIssuers) > 0 {
-		warnings, err := b.CrlBuilder().rebuild(sc, true)
+		warnings, err := b.CrlBuilder().Rebuild(sc, true)
 		if err != nil {
 			// Before returning, check if the error message includes the
 			// string "PSS". If so, it indicates we might've wanted to modify
@@ -489,9 +512,27 @@ func (b *backend) pathImportIssuers(ctx context.Context, req *logical.Request, d
 	// Also while we're here, we should let the user know the next steps.
 	// In particular, if there's no default AIA URLs configuration, we should
 	// tell the user that's probably next.
-	if entries, err := getGlobalAIAURLs(ctx, req.Storage); err == nil && len(entries.IssuingCertificates) == 0 && len(entries.CRLDistributionPoints) == 0 && len(entries.OCSPServers) == 0 {
-		response.AddWarning("This mount hasn't configured any authority information access (AIA) fields; this may make it harder for systems to find missing certificates in the chain or to validate revocation status of certificates. Consider updating /config/urls or the newly generated issuer with this information.")
+	entries, err := getGlobalAIAURLs(ctx, req.Storage)
+	if err != nil {
+		response.AddWarning(fmt.Sprintf("error reading authority information access (AIA) fields: %v", err.Error()))
 	}
+	if err == nil {
+		if len(entries.IssuingCertificates) == 0 && len(entries.CRLDistributionPoints) == 0 && len(entries.DeltaCRLDistributionPoints) == 0 && len(entries.OCSPServers) == 0 {
+			response.AddWarning("This mount hasn't configured any authority information access (AIA) fields; this may make it harder for systems to find missing certificates in the chain or to validate revocation status of certificates. Consider updating /config/urls or the newly generated issuer with this information.")
+		}
+		if len(entries.CRLDistributionPoints) == 0 && len(entries.DeltaCRLDistributionPoints) != 0 {
+			response.AddWarning("delta crl distribution points were set, but no base crl distribution points were set.")
+		}
+	}
+
+	b.pkiObserver.RecordPKIObservation(ctx, req, observe.ObservationTypePKIIssuersImport,
+		observe.NewAdditionalPKIMetadata("mapping", issuerKeyMap),
+		observe.NewAdditionalPKIMetadata("imported_keys", createdKeys),
+		observe.NewAdditionalPKIMetadata("imported_key_info", importedKeyInfo),
+		observe.NewAdditionalPKIMetadata("imported_issuers", createdIssuers),
+		observe.NewAdditionalPKIMetadata("imported_issuer_info", importedIssuerInfo),
+		observe.NewAdditionalPKIMetadata("existing_keys", existingKeys),
+		observe.NewAdditionalPKIMetadata("existing_issuers", existingIssuers))
 
 	return response, nil
 }
@@ -513,6 +554,7 @@ secret-keys.
 
 func pathRevokeIssuer(b *backend) *framework.Path {
 	fields := addIssuerRefField(map[string]*framework.FieldSchema{})
+	responseFields := issuerResponseFields(true)
 
 	return &framework.Path{
 		Pattern: "issuer/" + framework.GenericNameRegex(issuerRefParam) + "/revoke",
@@ -531,83 +573,7 @@ func pathRevokeIssuer(b *backend) *framework.Path {
 				Responses: map[int][]framework.Response{
 					http.StatusOK: {{
 						Description: "OK",
-						Fields: map[string]*framework.FieldSchema{
-							"issuer_id": {
-								Type:        framework.TypeString,
-								Description: `ID of the issuer`,
-								Required:    true,
-							},
-							"issuer_name": {
-								Type:        framework.TypeString,
-								Description: `Name of the issuer`,
-								Required:    true,
-							},
-							"key_id": {
-								Type:        framework.TypeString,
-								Description: `ID of the Key`,
-								Required:    true,
-							},
-							"certificate": {
-								Type:        framework.TypeString,
-								Description: `Certificate`,
-								Required:    true,
-							},
-							"manual_chain": {
-								Type:        framework.TypeCommaStringSlice,
-								Description: `Manual Chain`,
-								Required:    true,
-							},
-							"ca_chain": {
-								Type:        framework.TypeCommaStringSlice,
-								Description: `Certificate Authority Chain`,
-								Required:    true,
-							},
-							"leaf_not_after_behavior": {
-								Type:        framework.TypeString,
-								Description: ``,
-								Required:    true,
-							},
-							"usage": {
-								Type:        framework.TypeString,
-								Description: `Allowed usage`,
-								Required:    true,
-							},
-							"revocation_signature_algorithm": {
-								Type:        framework.TypeString,
-								Description: `Which signature algorithm to use when building CRLs`,
-								Required:    true,
-							},
-							"revoked": {
-								Type:        framework.TypeBool,
-								Description: `Whether the issuer was revoked`,
-								Required:    true,
-							},
-							"issuing_certificates": {
-								Type:        framework.TypeCommaStringSlice,
-								Description: `Specifies the URL values for the Issuing Certificate field`,
-								Required:    true,
-							},
-							"crl_distribution_points": {
-								Type:        framework.TypeStringSlice,
-								Description: `Specifies the URL values for the CRL Distribution Points field`,
-								Required:    true,
-							},
-							"ocsp_servers": {
-								Type:        framework.TypeStringSlice,
-								Description: `Specifies the URL values for the OCSP Servers field`,
-								Required:    true,
-							},
-							"revocation_time": {
-								Type:        framework.TypeInt64,
-								Description: `Time of revocation`,
-								Required:    false,
-							},
-							"revocation_time_rfc3339": {
-								Type:        framework.TypeTime,
-								Description: `RFC formatted time of revocation`,
-								Required:    false,
-							},
-						},
+						Fields:      responseFields,
 					}},
 				},
 				// Read more about why these flags are set in backend.go
@@ -677,7 +643,7 @@ func (b *backend) pathRevokeIssuer(ctx context.Context, req *logical.Request, da
 
 	// Now, if the parent issuer exists within this mount, we'd have written
 	// a storage entry for this certificate, making it appear as any other
-	// leaf. We need to add a revocationInfo entry for this into storage,
+	// leaf. We need to add a RevocationInfo entry for this into storage,
 	// so that it appears as if it was revoked.
 	//
 	// This is a _necessary_ but not necessarily _sufficient_ step to
@@ -688,7 +654,7 @@ func (b *backend) pathRevokeIssuer(ctx context.Context, req *logical.Request, da
 	// include both in two separate CRLs. Hence, the former is the condition
 	// we check in CRL building, but this step satisfies other guarantees
 	// within Vault.
-	certEntry, err := fetchCertBySerial(sc, "certs/", issuer.SerialNumber)
+	certEntry, err := fetchCertBySerial(sc, issuing.PathCerts, issuer.SerialNumber)
 	if err == nil && certEntry != nil {
 		// We've inverted this error check as it doesn't matter; we already
 		// consider this certificate revoked.
@@ -712,7 +678,7 @@ func (b *backend) pathRevokeIssuer(ctx context.Context, req *logical.Request, da
 			//
 			// We'll let a cleanup pass or CRL build identify the issuer for
 			// us.
-			revInfo := revocationInfo{
+			revInfo := revocation.RevocationInfo{
 				CertificateBytes:  issuerCert.Raw,
 				RevocationTime:    issuer.RevocationTime,
 				RevocationTimeUTC: issuer.RevocationTimeUTC,
@@ -731,7 +697,7 @@ func (b *backend) pathRevokeIssuer(ctx context.Context, req *logical.Request, da
 	}
 
 	// Rebuild the CRL to include the newly revoked issuer.
-	warnings, crlErr := b.CrlBuilder().rebuild(sc, false)
+	warnings, crlErr := b.CrlBuilder().Rebuild(sc, false)
 	if crlErr != nil {
 		switch crlErr.(type) {
 		case errutil.UserError:

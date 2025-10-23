@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -15,27 +15,25 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/go-test/deep"
+	"github.com/hashicorp/cli"
 	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-secure-stdlib/base62"
 	"github.com/hashicorp/vault/command/server"
+	"github.com/hashicorp/vault/helper/random"
 	"github.com/hashicorp/vault/sdk/physical"
 	"github.com/hashicorp/vault/vault"
 )
 
 const trailing_slash_key = "trailing_slash/"
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 func TestMigration(t *testing.T) {
+	handlers := newVaultHandlers()
 	t.Run("Default", func(t *testing.T) {
 		data := generateData()
 
-		fromFactory := physicalBackends["file"]
+		fromFactory := handlers.physicalBackends["file"]
 
 		folder := t.TempDir()
 
@@ -51,7 +49,7 @@ func TestMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		toFactory := physicalBackends["inmem"]
+		toFactory := handlers.physicalBackends["inmem"]
 		confTo := map[string]string{}
 		to, err := toFactory(confTo, nil)
 		if err != nil {
@@ -72,7 +70,7 @@ func TestMigration(t *testing.T) {
 	t.Run("Concurrent migration", func(t *testing.T) {
 		data := generateData()
 
-		fromFactory := physicalBackends["file"]
+		fromFactory := handlers.physicalBackends["file"]
 
 		folder := t.TempDir()
 
@@ -88,7 +86,7 @@ func TestMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		toFactory := physicalBackends["inmem"]
+		toFactory := handlers.physicalBackends["inmem"]
 		confTo := map[string]string{}
 		to, err := toFactory(confTo, nil)
 		if err != nil {
@@ -110,7 +108,7 @@ func TestMigration(t *testing.T) {
 	t.Run("Start option", func(t *testing.T) {
 		data := generateData()
 
-		fromFactory := physicalBackends["inmem"]
+		fromFactory := handlers.physicalBackends["inmem"]
 		confFrom := map[string]string{}
 		from, err := fromFactory(confFrom, nil)
 		if err != nil {
@@ -120,7 +118,7 @@ func TestMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		toFactory := physicalBackends["file"]
+		toFactory := handlers.physicalBackends["file"]
 		folder := t.TempDir()
 		confTo := map[string]string{
 			"path": folder,
@@ -149,7 +147,7 @@ func TestMigration(t *testing.T) {
 	t.Run("Start option (parallel)", func(t *testing.T) {
 		data := generateData()
 
-		fromFactory := physicalBackends["inmem"]
+		fromFactory := handlers.physicalBackends["inmem"]
 		confFrom := map[string]string{}
 		from, err := fromFactory(confFrom, nil)
 		if err != nil {
@@ -159,7 +157,7 @@ func TestMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		toFactory := physicalBackends["file"]
+		toFactory := handlers.physicalBackends["file"]
 		folder := t.TempDir()
 		confTo := map[string]string{
 			"path": folder,
@@ -186,31 +184,38 @@ func TestMigration(t *testing.T) {
 	})
 
 	t.Run("Config parsing", func(t *testing.T) {
-		cmd := new(OperatorMigrateCommand)
+		ui := cli.NewMockUi()
+		cmd := &OperatorMigrateCommand{
+			BaseCommand: &BaseCommand{
+				UI: ui,
+			},
+		}
 		cfgName := filepath.Join(t.TempDir(), "migrator")
 		os.WriteFile(cfgName, []byte(`
-storage_source "src_type" {
+storage_source "consul" {
   path = "src_path"
 }
 
-storage_destination "dest_type" {
+storage_destination "raft" {
+  path = "dest_path"
   path = "dest_path"
 }`), 0o644)
 
 		expCfg := &migratorConfig{
 			StorageSource: &server.Storage{
-				Type: "src_type",
+				Type: "consul",
 				Config: map[string]string{
 					"path": "src_path",
 				},
 			},
 			StorageDestination: &server.Storage{
-				Type: "dest_type",
+				Type: "raft",
 				Config: map[string]string{
 					"path": "dest_path",
 				},
 			},
 		}
+		t.Setenv(random.AllowHclDuplicatesEnvVar, "true")
 		cfg, err := cmd.loadMigratorConfig(cfgName)
 		if err != nil {
 			t.Fatal(cfg)
@@ -218,6 +223,9 @@ storage_destination "dest_type" {
 		if diff := deep.Equal(cfg, expCfg); diff != nil {
 			t.Fatal(diff)
 		}
+		// TODO (HCL_DUP_KEYS_DEPRECATION): Remove warning and leave only this "verifyBad" test down below
+		strings.Contains(ui.ErrorWriter.String(), "WARNING: Duplicate keys found in migration configuration file, duplicate keys in HCL files are deprecated and will be forbidden in a future release.")
+		t.Setenv(random.AllowHclDuplicatesEnvVar, "false")
 
 		verifyBad := func(cfg string) {
 			os.WriteFile(cfgName, []byte(cfg), 0o644)
@@ -229,47 +237,57 @@ storage_destination "dest_type" {
 
 		// missing source
 		verifyBad(`
-storage_destination "dest_type" {
+storage_destination "raft" {
   path = "dest_path"
 }`)
 
 		// missing destination
 		verifyBad(`
-storage_source "src_type" {
+storage_source "consul" {
   path = "src_path"
 }`)
 
 		// duplicate source
 		verifyBad(`
-storage_source "src_type" {
+storage_source "consul" {
   path = "src_path"
 }
 
-storage_source "src_type2" {
+storage_source "raft" {
   path = "src_path"
 }
 
-storage_destination "dest_type" {
+storage_destination "raft" {
   path = "dest_path"
 }`)
 
 		// duplicate destination
 		verifyBad(`
-storage_source "src_type" {
+storage_source "consul" {
   path = "src_path"
 }
 
-storage_destination "dest_type" {
+storage_destination "raft" {
   path = "dest_path"
 }
 
-storage_destination "dest_type2" {
+storage_destination "consul" {
+  path = "dest_path"
+}`)
+		// duplicate hcl attribute
+		verifyBad(`
+storage_source "consul" {
+  path = "src_path"
+}
+
+storage_destination "raft" {
+  path = "dest_path"
   path = "dest_path"
 }`)
 	})
 
 	t.Run("DFS Scan", func(t *testing.T) {
-		s, _ := physicalBackends["inmem"](map[string]string{}, nil)
+		s, _ := handlers.physicalBackends["inmem"](map[string]string{}, nil)
 
 		data := generateData()
 		data["cc"] = []byte{}

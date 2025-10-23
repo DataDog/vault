@@ -1,17 +1,16 @@
 {{!
-  Copyright (c) HashiCorp, Inc.
+  Copyright IBM Corp. 2016, 2025
   SPDX-License-Identifier: BUSL-1.1
-~}}
+}}
 
 <Clients::Page::Counts
   @activity={{this.model.activity}}
   @activityError={{this.model.activityError}}
   @config={{this.model.config}}
-  @startTimestamp={{this.model.startTimestamp}}
   @endTimestamp={{this.model.endTimestamp}}
-  @namespace={{this.ns}}
-  @mountPath={{this.mountPath}}
   @onFilterChange={{this.updateQueryParams}}
+  @startTimestamp={{this.model.startTimestamp}}
+  @versionHistory={{this.model.versionHistory}}
 >
   {{outlet}}
 </Clients::Page::Counts>

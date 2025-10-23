@@ -5,8 +5,6 @@ import (
 	"errors"
 )
 
-var encodeIndent = 0
-
 type asn1Object interface {
 	EncodeTo(writer *bytes.Buffer) error
 }
@@ -17,8 +15,6 @@ type asn1Structured struct {
 }
 
 func (s asn1Structured) EncodeTo(out *bytes.Buffer) error {
-	// fmt.Printf("%s--> tag: % X\n", strings.Repeat("| ", encodeIndent), s.tagBytes)
-	encodeIndent++
 	inner := new(bytes.Buffer)
 	for _, obj := range s.content {
 		err := obj.EncodeTo(inner)
@@ -26,7 +22,6 @@ func (s asn1Structured) EncodeTo(out *bytes.Buffer) error {
 			return err
 		}
 	}
-	encodeIndent--
 	out.Write(s.tagBytes)
 	encodeLength(out, inner.Len())
 	out.Write(inner.Bytes())
@@ -47,8 +42,6 @@ func (p asn1Primitive) EncodeTo(out *bytes.Buffer) error {
 	if err = encodeLength(out, p.length); err != nil {
 		return err
 	}
-	// fmt.Printf("%s--> tag: % X length: %d\n", strings.Repeat("| ", encodeIndent), p.tagBytes, p.length)
-	// fmt.Printf("%s--> content length: %d\n", strings.Repeat("| ", encodeIndent), len(p.content))
 	out.Write(p.content)
 
 	return nil
@@ -140,25 +133,22 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	tagStart := offset
 	b := ber[offset]
 	offset++
-	if offset >= berLen {
-		return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
-	}
 	tag := b & 0x1F // last 5 bits
 	if tag == 0x1F {
 		tag = 0
+		if offset >= berLen {
+			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+		}
 		for ber[offset] >= 0x80 {
-			tag = tag*128 + ber[offset] - 0x80
-			offset++
 			if offset >= berLen {
 				return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 			}
+			tag = tag*128 + ber[offset] - 0x80
+			offset++
 		}
 		// jvehent 20170227: this doesn't appear to be used anywhere...
 		// tag = tag*128 + ber[offset] - 0x80
 		offset++
-		if offset >= berLen {
-			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
-		}
 	}
 	tagEnd := offset
 
@@ -170,14 +160,17 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 	}
 	// read length
 	var length int
-	l := ber[offset]
-	offset++
 	if offset >= berLen {
 		return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
 	}
+	l := ber[offset]
+	offset++
 	indefinite := false
 	if l > 0x80 {
 		numberOfBytes := (int)(l & 0x7F)
+		if offset >= berLen {
+			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+		}
 		if numberOfBytes > 4 { // int is only guaranteed to be 32bit
 			return nil, 0, errors.New("ber2der: BER tag length too long")
 		}
@@ -217,6 +210,9 @@ func readObject(ber []byte, offset int) (asn1Object, int, error) {
 		return nil, 0, errors.New("ber2der: Indefinite form tag must have constructed encoding")
 	}
 	if kind == 0 {
+		if offset >= berLen {
+			return nil, 0, errors.New("ber2der: cannot move offset forward, end of ber data reached")
+		}
 		obj = asn1Primitive{
 			tagBytes: ber[tagStart:tagEnd],
 			length:   length,

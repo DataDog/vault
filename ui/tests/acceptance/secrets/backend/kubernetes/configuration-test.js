@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,7 +8,7 @@ import { setupApplicationTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import kubernetesScenario from 'vault/mirage/scenarios/kubernetes';
 import kubernetesHandlers from 'vault/mirage/handlers/kubernetes';
-import authPage from 'vault/tests/pages/auth';
+import { login } from 'vault/tests/helpers/auth/auth-helpers';
 import { visit, click, currentRouteName } from '@ember/test-helpers';
 import { Response } from 'miragejs';
 
@@ -20,12 +20,12 @@ module('Acceptance | kubernetes | configuration', function (hooks) {
     kubernetesHandlers(this.server);
     kubernetesScenario(this.server);
     this.visitConfiguration = () => {
-      return visit('/vault/secrets/kubernetes/kubernetes/configuration');
+      return visit('/vault/secrets-engines/kubernetes/kubernetes/configuration');
     };
     this.validateRoute = (assert, route, message) => {
       assert.strictEqual(currentRouteName(), `vault.cluster.secrets.backend.kubernetes.${route}`, message);
     };
-    return authPage.login();
+    return login();
   });
 
   test('it should transition to configure page on Edit Configuration click from toolbar', async function (assert) {

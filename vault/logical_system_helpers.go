@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -31,9 +31,7 @@ var (
 		return nil
 	}
 
-	sysInitialize = func(b *SystemBackend) func(context.Context, *logical.InitializationRequest) error {
-		return nil
-	}
+	sysInitialize = ceSysInitialize
 
 	sysClean = func(b *SystemBackend) func(context.Context) {
 		return nil
@@ -133,6 +131,11 @@ var (
 		// group-policy-application paths
 		paths = append(paths, buildEnterpriseOnlyPaths(map[string]enterprisePathStub{
 			"config/group-policy-application$": {operations: []logical.Operation{logical.ReadOperation, logical.UpdateOperation}},
+		})...)
+
+		// reporting paths
+		paths = append(paths, buildEnterpriseOnlyPaths(map[string]enterprisePathStub{
+			"reporting/scan$": {operations: []logical.Operation{logical.UpdateOperation}},
 		})...)
 
 		// namespaces paths
@@ -280,6 +283,16 @@ var (
 	checkRaw = func(b *SystemBackend, path string) error { return nil }
 )
 
+func ceSysInitialize(b *SystemBackend) func(context.Context, *logical.InitializationRequest) error {
+	return func(ctx context.Context, req *logical.InitializationRequest) error {
+		err := b.Core.FeatureActivationFlags.Initialize(ctx, b.Core.systemBarrierView)
+		if err != nil {
+			return fmt.Errorf("failed to initialize activation flags: %w", err)
+		}
+		return nil
+	}
+}
+
 // Contains the config for a global plugin reload
 type pluginReloadRequest struct {
 	Type       string            `json:"type"` // Either 'plugins' or 'mounts'
@@ -327,7 +340,7 @@ func (b *SystemBackend) tuneMountTTLs(ctx context.Context, path string, me *Moun
 	if err != nil {
 		me.Config.MaxLeaseTTL = origMax
 		me.Config.DefaultLeaseTTL = origDefault
-		return fmt.Errorf("failed to update mount table, rolling back TTL changes")
+		return fmt.Errorf("failed to update mount table, rolling back TTL changes: %w", err)
 	}
 	if b.Core.logger.IsInfo() {
 		b.Core.logger.Info("mount tuning of leases successful", "path", path)

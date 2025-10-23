@@ -1,5 +1,5 @@
-#!/bin/bash
-# Copyright (c) HashiCorp, Inc.
+#!/usr/bin/env bash
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 fail() {
@@ -7,8 +7,7 @@ fail() {
   exit 1
 }
 
-export VAULT_ADDR="http://localhost:8200"
-
+[[ -z "$VAULT_ADDR" ]] && fail "VAULT_ADDR env variable has not been set"
 [[ -z "$VAULT_AUTOPILOT_UPGRADE_STATUS" ]] && fail "VAULT_AUTOPILOT_UPGRADE_STATUS env variable has not been set"
 [[ -z "$VAULT_AUTOPILOT_UPGRADE_VERSION" ]] && fail "VAULT_AUTOPILOT_UPGRADE_VERSION env variable has not been set"
 [[ -z "$VAULT_TOKEN" ]] && fail "VAULT_TOKEN env variable has not been set"

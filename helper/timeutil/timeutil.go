@@ -1,11 +1,13 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package timeutil
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"testing"
@@ -76,8 +78,8 @@ func IsCurrentMonth(t, compare time.Time) bool {
 	return queryMonthStart.Equal(thisMonthStart)
 }
 
-// GetMostRecentContinuousMonths finds the start time of the most
-// recent set of continguous months.
+// GetMostRecentContiguousMonths finds the start time of the most
+// recent set of continuous months.
 //
 // For example, if the most recent start time is Aug 15, then that range is just 1 month
 // If the recent start times are Aug 1 and July 1 and June 15, then that range is
@@ -178,4 +180,58 @@ func (_ DefaultClock) NewTicker(d time.Duration) *time.Ticker {
 
 func (_ DefaultClock) NewTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
+}
+
+// NormalizeToYear returns date normalized to the latest date
+// within one year of normal. Assumes the date argument is
+// some date before normal.
+func NormalizeToYear(date, normal time.Time) time.Time {
+	for date.AddDate(1, 0, 0).Compare(normal) <= 0 {
+		date = date.AddDate(1, 0, 0)
+	}
+	return date
+}
+
+// GetRandomTimeInMonth gets a random time in same month as input time
+func GetRandomTimeInMonth(inputTime time.Time) (time.Time, error) {
+	firstOfMonth := StartOfMonth(inputTime)
+	year, month, _ := firstOfMonth.Date()
+
+	// Get the last day of the target month
+	_, _, lastDayOfMonth := EndOfMonth(inputTime).Date()
+
+	// Generate random day, hour, minute, and second
+	maxDay := big.NewInt(int64(lastDayOfMonth))
+	randomDayPtr, err := rand.Int(rand.Reader, maxDay)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	maxHour := big.NewInt(int64(24))
+	randomHourPtr, err := rand.Int(rand.Reader, maxHour)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	maxMinute := big.NewInt(int64(60))
+	randomMinutePtr, err := rand.Int(rand.Reader, maxMinute)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	maxSecond := big.NewInt(int64(60))
+	randomSecondPtr, err := rand.Int(rand.Reader, maxSecond)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	randomDay := int(randomDayPtr.Int64() + 1) // +1 because rand.Int returns [0, n)
+	randomHour := int(randomHourPtr.Int64())
+	randomMinute := int(randomMinutePtr.Int64())
+	randomSecond := int(randomSecondPtr.Int64())
+
+	// Create the random time
+	randomTime := time.Date(year, month, randomDay, randomHour, randomMinute, randomSecond, 0, time.UTC)
+
+	return randomTime, nil
 }

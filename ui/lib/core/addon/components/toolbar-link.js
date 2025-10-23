@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -10,15 +10,13 @@ import Component from '@glimmer/component';
  * It should only be used inside of `Toolbar`.
  *
  * @example
- * ```js
  * <Toolbar>
  *   <ToolbarActions>
- *     <ToolbarLink @route="vault.cluster.policies.create" @type="add" @disabled={{true}} @disabledTooltip="This link is disabled">
+ *     <ToolbarLink @route="vault" @type="add">
  *       Create policy
  *     </ToolbarLink>
  *   </ToolbarActions>
  * </Toolbar>
- * ```
  *
  * @param {string} route - route to pass to LinkTo
  * @param {Model} model - model to pass to LinkTo
@@ -26,8 +24,6 @@ import Component from '@glimmer/component';
  * @param {Object} query - query params to pass to LinkTo
  * @param {boolean} replace - replace arg to pass to LinkTo
  * @param {string} type - Use "add" to change icon to plus sign, or pass in your own kind of icon.
- * @param {boolean} disabled - pass true to disable link
- * @param {string} disabledTooltip - tooltip to display on hover when disabled
  */
 
 export default class ToolbarLinkComponent extends Component {

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package pki
@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/vault/builtin/logical/pki/dnstest"
 	"github.com/hashicorp/vault/helper/constants"
 	"github.com/hashicorp/vault/helper/timeutil"
+	"github.com/hashicorp/vault/sdk/helper/testcluster"
 	"github.com/hashicorp/vault/vault"
 	"github.com/hashicorp/vault/vault/activity"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,17 @@ func TestACMEBilling(t *testing.T) {
 
 	cluster, client, _ := setupAcmeBackend(t)
 	defer cluster.Cleanup()
+
+	var activeCore *vault.TestClusterCore
+	{
+		activeNode, _, err := testcluster.GetActiveAndStandbys(t.Context(), cluster)
+		require.NoError(t, err)
+		activeCore = activeNode.(*vault.TestClusterCore)
+	}
+	activeCore.StopPkiCertificateCountConsumerJob()
+	// The new root and int should have been counted, but we are not asserting that here
+	// to avoid a possible race condition with the consumer job.
+	activeCore.ResetPkiCertificateCounts()
 
 	dns := dnstest.SetupResolver(t, "dadgarcorp.com")
 	defer dns.Cleanup()
@@ -67,44 +79,55 @@ func TestACMEBilling(t *testing.T) {
 	// Unique identifier: should increase by one.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI, []string{"dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "pki", expectedCount+1, "new certificate")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// Different identifier; should increase by one.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI, []string{"example.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "pki", expectedCount+1, "new certificate")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// While same identifiers, used together and so thus are unique; increase by one.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI, []string{"example.dadgarcorp.com", "dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "pki", expectedCount+1, "new certificate")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// Same identifiers in different order are not unique; keep the same.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI, []string{"dadgarcorp.com", "example.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "pki", expectedCount, "different order; same identifiers")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// Using a different mount shouldn't affect counts.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI2, []string{"dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "", expectedCount, "different mount; same identifiers")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// But using a different identifier should.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI2, []string{"pki2.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "pki2", expectedCount+1, "different mount with different identifiers")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// A new identifier in a unique namespace will affect results.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKINS1, []string{"unique.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "ns1/pki", expectedCount+1, "unique identifier in a namespace")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// But in a different namespace with the existing identifier will not.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKINS2, []string{"unique.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "", expectedCount, "existing identifier in a namespace")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
+
 	doACMEForDomainWithDNS(t, dns, acmeClientPKI2, []string{"unique.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "", expectedCount, "existing identifier outside of a namespace")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// Creating a unique identifier in a namespace with a mount with the
 	// same name as another namespace should increase counts as well.
 	doACMEForDomainWithDNS(t, dns, acmeClientPKINS2, []string{"very-unique.dadgarcorp.com"})
 	expectedCount = validateClientCount(t, client, "ns2/pki", expectedCount+1, "unique identifier in a different namespace")
+	activeCore.RequirePkiCertificateCounts(t, 1, 1)
 
 	// Check the current fragment
-	fragment := cluster.Cores[0].Core.ResetActivityLog()[0]
+	fragment := activeCore.Core.ResetActivityLog()[0]
 	if fragment == nil {
 		t.Fatal("no fragment created")
 	}
@@ -131,10 +154,10 @@ func validateClientCount(t *testing.T, client *api.Client, mount string, expecte
 
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Data)
-	require.Contains(t, resp.Data, "non_entity_clients")
+	require.Contains(t, resp.Data, "acme_clients")
 	require.Contains(t, resp.Data, "months")
 
-	rawCount := resp.Data["non_entity_clients"].(json.Number)
+	rawCount := resp.Data["acme_clients"].(json.Number)
 	count, err := rawCount.Int64()
 	require.NoError(t, err, "failed to parse number as int64: "+rawCount.String())
 
@@ -158,8 +181,8 @@ func validateClientCount(t *testing.T, client *api.Client, mount string, expecte
 	// Validate this month's aggregate counts match the overall value.
 	require.Contains(t, monthlyInfo, "counts", "expected monthly info to contain a count key")
 	monthlyCounts := monthlyInfo["counts"].(map[string]interface{})
-	require.Contains(t, monthlyCounts, "non_entity_clients", "expected month[0].counts to contain a non_entity_clients key")
-	monthlyCountNonEntityRaw := monthlyCounts["non_entity_clients"].(json.Number)
+	require.Contains(t, monthlyCounts, "acme_clients", "expected month[0].counts to contain a non_entity_clients key")
+	monthlyCountNonEntityRaw := monthlyCounts["acme_clients"].(json.Number)
 	monthlyCountNonEntity, err := monthlyCountNonEntityRaw.Int64()
 	require.NoError(t, err, "failed to parse number as int64: "+monthlyCountNonEntityRaw.String())
 	require.Equal(t, count, monthlyCountNonEntity, "expected equal values for non entity client counts")
@@ -194,8 +217,8 @@ func validateClientCount(t *testing.T, client *api.Client, mount string, expecte
 		// This namespace must have a non-empty aggregate non-entity count.
 		require.Contains(t, namespace, "counts", "expected monthly.namespaces[%v] to contain a counts key", index)
 		namespaceCounts := namespace["counts"].(map[string]interface{})
-		require.Contains(t, namespaceCounts, "non_entity_clients", "expected namespace counts to contain a non_entity_clients key")
-		namespaceCountNonEntityRaw := namespaceCounts["non_entity_clients"].(json.Number)
+		require.Contains(t, namespaceCounts, "acme_clients", "expected namespace counts to contain a non_entity_clients key")
+		namespaceCountNonEntityRaw := namespaceCounts["acme_clients"].(json.Number)
 		namespaceCountNonEntity, err := namespaceCountNonEntityRaw.Int64()
 		require.NoError(t, err, "failed to parse number as int64: "+namespaceCountNonEntityRaw.String())
 		require.Greater(t, namespaceCountNonEntity, int64(0), "expected at least one non-entity client count value in the namespace")
@@ -217,8 +240,8 @@ func validateClientCount(t *testing.T, client *api.Client, mount string, expecte
 			// This mount must also have a non-empty non-entity client count.
 			require.Contains(t, mountInfo, "counts", "expected monthly.namespaces[%v].mounts[%v] to contain a counts key", index, mountIndex)
 			mountCounts := mountInfo["counts"].(map[string]interface{})
-			require.Contains(t, mountCounts, "non_entity_clients", "expected mount counts to contain a non_entity_clients key")
-			mountCountNonEntityRaw := mountCounts["non_entity_clients"].(json.Number)
+			require.Contains(t, mountCounts, "acme_clients", "expected mount counts to contain a non_entity_clients key")
+			mountCountNonEntityRaw := mountCounts["acme_clients"].(json.Number)
 			mountCountNonEntity, err := mountCountNonEntityRaw.Int64()
 			require.NoError(t, err, "failed to parse number as int64: "+mountCountNonEntityRaw.String())
 			require.Greater(t, mountCountNonEntity, int64(0), "expected at least one non-entity client count value in the mount")

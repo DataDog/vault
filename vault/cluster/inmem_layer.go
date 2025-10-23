@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cluster
@@ -114,6 +114,24 @@ func (l *InmemLayer) Listeners() []NetworkListener {
 	}
 
 	return []NetworkListener{l.listener}
+}
+
+// Partition forces the inmem layer to disconnect itself from peers and prevents
+// creating new connections. The returned function will add all peers back
+// and re-enable connections
+func (l *InmemLayer) Partition() (unpartition func()) {
+	l.l.Lock()
+	peersCopy := make([]*InmemLayer, 0, len(l.peers))
+	for _, peer := range l.peers {
+		peersCopy = append(peersCopy, peer)
+	}
+	l.l.Unlock()
+	l.DisconnectAll()
+	return func() {
+		for _, peer := range peersCopy {
+			l.Connect(peer)
+		}
+	}
 }
 
 // Dial implements NetworkLayer.

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -231,7 +231,7 @@ func testCoreUnsealedWithAudit(t *testing.T, records **[][]byte) (*vault.Core, [
 	conf := &vault.CoreConfig{
 		BuiltinRegistry: corehelpers.NewMockBuiltinRegistry(),
 		AuditBackends: map[string]audit.Factory{
-			"noop": corehelpers.NoopAuditFactory(records),
+			"noop": audit.NoopAuditFactory(records),
 		},
 	}
 	core, keys, token := vault.TestCoreUnsealedWithConfig(t, conf)

@@ -1,10 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Controller from '@ember/controller';
-import { getOwner } from '@ember/application';
+import { getOwner } from '@ember/owner';
 
 export default class PkiKeysIndexController extends Controller {
   queryParams = ['page'];

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -9,11 +9,6 @@ import { expandAttributeMeta } from 'vault/utils/field-to-attrs';
 
 export default class Alphabet extends Model {
   idPrefix = 'alphabet/';
-
-  get idForNav() {
-    const modelId = this.id || '';
-    return `${this.idPrefix}${modelId}`;
-  }
 
   @attr('string', {
     readOnly: true,

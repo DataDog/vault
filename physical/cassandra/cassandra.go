@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package cassandra
@@ -148,6 +148,14 @@ func NewCassandraBackend(conf map[string]string, logger log.Logger) (physical.Ba
 			return nil, fmt.Errorf("'connection_timeout' must be a positive integer")
 		}
 		cluster.Timeout = time.Duration(connectionTimeout) * time.Second
+	}
+
+	if disableInitialHostLookupStr, ok := conf["disable_host_initial_lookup"]; ok {
+		disableInitialHostLookup, err := strconv.ParseBool(disableInitialHostLookupStr)
+		if err != nil {
+			return nil, fmt.Errorf("'disable_host_initial_lookup' must be a bool")
+		}
+		cluster.DisableInitialHostLookup = disableInitialHostLookup
 	}
 
 	if err := setupCassandraTLS(conf, cluster); err != nil {

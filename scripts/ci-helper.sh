@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
-
 
 # The ci-helper is used to determine build metadata, build Vault binaries,
 # package those binaries into artifacts, and execute tests with those artifacts.
@@ -92,7 +91,14 @@ function build() {
   : "${GO_TAGS:=""}"
   : "${REMOVE_SYMBOLS:=""}"
 
-  (unset GOOS; unset GOARCH; go generate ./...)
+  # Generate code but make sure we don't slurp in cross compilation env vars
+  (
+    unset GOOS
+    unset GOARCH
+    unset CC
+    unset CC_FOR_TARGET
+    go generate ./...
+  )
 
   # Build our ldflags
   msg="--> Building Vault revision $revision, built $build_date..."
@@ -118,29 +124,47 @@ function build() {
   mkdir -p out
   set -x
   go env
-  go build -v -tags "$GO_TAGS" -ldflags "$ldflags" -o dist/
+  go build -v -buildvcs=false -tags "$GO_TAGS" -ldflags "$ldflags" -o dist/
   set +x
   popd
 }
 
-# Prepare legal requirements for packaging
-function prepare_legal() {
+# ENT: Prepare legal requirements for packaging
+function prepare_ent_legal() {
   : "${PKG_NAME:="vault"}"
+
+  if [ -z "${LICENSE_DIR:-}" ]; then
+      echo "You must set LICENSE_DIR; example: export LICENSE_DIR=.release/ibm-pao/license/default" 1>&2
+      return 1
+  fi
 
   pushd "$(repo_root)"
   mkdir -p dist
-  curl -o dist/EULA.txt https://eula.hashicorp.com/EULA.txt
-  curl -o dist/TermsOfEvaluation.txt https://eula.hashicorp.com/TermsOfEvaluation.txt
+  cp -R "$LICENSE_DIR" dist/
   mkdir -p ".release/linux/package/usr/share/doc/$PKG_NAME"
-  cp dist/EULA.txt ".release/linux/package/usr/share/doc/$PKG_NAME/EULA.txt"
-  cp dist/TermsOfEvaluation.txt ".release/linux/package/usr/share/doc/$PKG_NAME/TermsOfEvaluation.txt"
+  cp -R "$LICENSE_DIR" ".release/linux/package/usr/share/doc/$PKG_NAME/"
+  popd
+}
+
+# CE: Prepare legal requirements for packaging
+function prepare_ce_legal() {
+  : "${PKG_NAME:="vault"}"
+
+  pushd "$(repo_root)"
+
+  mkdir -p dist
+  cp LICENSE dist/LICENSE.txt
+
+  mkdir -p ".release/linux/package/usr/share/doc/$PKG_NAME"
+  cp LICENSE ".release/linux/package/usr/share/doc/$PKG_NAME/LICENSE.txt"
+
   popd
 }
 
 # Package version converts a vault version string into a compatible representation for system
 # packages.
 function version_package() {
-  awk '{ gsub("-","~",$1); print $1 }' <<< "$VAULT_VERSION"
+  awk '{ gsub("-","~",$1); print $1 }' <<<"$VAULT_VERSION"
 }
 
 # Run the CI Helper
@@ -148,32 +172,35 @@ function main() {
   case $1 in
   artifact-basename)
     artifact_basename
-  ;;
+    ;;
   build)
     build
-  ;;
+    ;;
   build-ui)
     build_ui
-  ;;
+    ;;
   bundle)
     bundle
-  ;;
+    ;;
   date)
     build_date
-  ;;
-  prepare-legal)
-    prepare_legal
-  ;;
+    ;;
+  prepare-ent-legal)
+    prepare_ent_legal
+    ;;
+  prepare-ce-legal)
+    prepare_ce_legal
+    ;;
   revision)
     build_revision
-  ;;
+    ;;
   version-package)
     version_package
-  ;;
+    ;;
   *)
     echo "unknown sub-command" >&2
     exit 1
-  ;;
+    ;;
   esac
 }
 

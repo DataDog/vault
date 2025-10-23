@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2016, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 variable "cluster_name" {
@@ -23,6 +23,15 @@ variable "data_dir" {
   type        = string
   description = "The directory where the consul will store data"
   default     = "/opt/consul/data"
+}
+
+variable "hosts" {
+  description = "The target machines host addresses to use for the consul cluster"
+  type = map(object({
+    ipv6       = string
+    private_ip = string
+    public_ip  = string
+  }))
 }
 
 variable "install_dir" {
@@ -65,12 +74,4 @@ variable "release" {
     version = "1.15.3"
     edition = "ce"
   }
-}
-
-variable "target_hosts" {
-  description = "The target machines host addresses to use for the consul cluster"
-  type = map(object({
-    private_ip = string
-    public_ip  = string
-  }))
 }

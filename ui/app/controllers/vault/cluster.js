@@ -1,49 +1,23 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-/* eslint-disable ember/no-observers */
-import { service } from '@ember/service';
-import { alias } from '@ember/object/computed';
 import Controller from '@ember/controller';
-import { observer } from '@ember/object';
-export default Controller.extend({
-  auth: service(),
-  store: service(),
-  media: service(),
-  router: service(),
-  permissions: service(),
-  namespaceService: service('namespace'),
-  flashMessages: service(),
-  customMessages: service(),
+import { service } from '@ember/service';
+import { tracked } from '@glimmer/tracking';
 
-  vaultVersion: service('version'),
-  console: service(),
+export default class VaultClusterController extends Controller {
+  @service auth;
+  @service permissions;
+  @service customMessages;
+  @service flashMessages;
+  @service('version') vaultVersion;
 
-  queryParams: [
-    {
-      namespaceQueryParam: {
-        scope: 'controller',
-        as: 'namespace',
-      },
-    },
-  ],
+  queryParams = [{ namespaceQueryParam: { as: 'namespace' } }];
+  @tracked namespaceQueryParam = '';
 
-  namespaceQueryParam: '',
-
-  onQPChange: observer('namespaceQueryParam', function () {
-    this.namespaceService.setNamespace(this.namespaceQueryParam);
-  }),
-
-  consoleOpen: alias('console.isOpen'),
-  activeCluster: alias('auth.activeCluster'),
-
-  permissionBanner: alias('permissions.permissionsBanner'),
-
-  actions: {
-    toggleConsole() {
-      this.toggleProperty('consoleOpen');
-    },
-  },
-});
+  get activeCluster() {
+    return this.auth.activeCluster;
+  }
+}

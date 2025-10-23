@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package configutil
@@ -98,10 +98,7 @@ func (c *SharedConfig) Merge(c2 *SharedConfig) *SharedConfig {
 		result.ClusterName = c2.ClusterName
 	}
 
-	result.RequestLimiter = c.RequestLimiter
-	if c2.RequestLimiter != nil {
-		result.RequestLimiter = c2.RequestLimiter
-	}
+	result.FoundKeys = append(c.FoundKeys, c2.FoundKeys...)
 
 	return result
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package vault
@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/vault/sdk/helper/consts"
 	"github.com/hashicorp/vault/sdk/helper/jsonutil"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/hashicorp/vault/vault/observations"
 	"github.com/hashicorp/vault/vault/plugincatalog"
 )
 
@@ -43,6 +44,11 @@ const (
 	// table and corresponding entries
 	credentialTableType = "auth"
 )
+
+func init() {
+	// Register the keys we use for auth "mount" tables
+	registerMountOrNamespaceTablePaths(coreAuthConfigPath, coreLocalAuthConfigPath)
+}
 
 var (
 	// errLoadAuthFailed if loadCredentials encounters an error
@@ -206,7 +212,7 @@ func (c *Core) enableCredentialInternal(ctx context.Context, entry *MountEntry, 
 			if err == logical.ErrReadOnly && c.perfStandby {
 				return err
 			}
-			return errors.New("failed to update auth table")
+			return fmt.Errorf("failed to update auth table: %w", err)
 		}
 	}
 
@@ -243,6 +249,19 @@ func (c *Core) enableCredentialInternal(ctx context.Context, entry *MountEntry, 
 	if c.logger.IsInfo() {
 		c.logger.Info("enabled credential backend", "path", entry.Path, "type", entry.Type, "version", entry.RunningVersion)
 	}
+
+	err = c.observations.RecordObservationToLedger(ctx, observations.ObservationTypeMountAuthEnable, ns, map[string]interface{}{
+		"path":                   entry.Path,
+		"local_mount":            entry.Local,
+		"type":                   entry.Type,
+		"accessor":               entry.Accessor,
+		"plugin_version":         entry.Version,
+		"running_plugin_version": entry.RunningVersion,
+	})
+	if err != nil {
+		c.logger.Error("failed to record observation after enabling credential backend", "path", entry.Path, "error", err)
+	}
+
 	return nil
 }
 
@@ -375,6 +394,18 @@ func (c *Core) disableCredentialInternal(ctx context.Context, path string, updat
 		c.logger.Info("disabled credential backend", "path", path)
 	}
 
+	err = c.observations.RecordObservationToLedger(ctx, observations.ObservationTypeMountAuthDisable, ns, map[string]interface{}{
+		"path":                   path,
+		"local_mount":            entry.Local,
+		"type":                   entry.Type,
+		"accessor":               entry.Accessor,
+		"plugin_version":         entry.Version,
+		"running_plugin_version": entry.RunningVersion,
+	})
+	if err != nil {
+		c.logger.Error("failed to record observation after disabling auth backend", "path", path, "error", err)
+	}
+
 	return nil
 }
 
@@ -401,7 +432,7 @@ func (c *Core) removeCredEntry(ctx context.Context, path string, updateStorage b
 				return err
 			}
 
-			return errors.New("failed to update auth table")
+			return fmt.Errorf("failed to update auth table: %w", err)
 		}
 	}
 
@@ -480,15 +511,17 @@ func (c *Core) remountCredential(ctx context.Context, src, dst namespace.MountPa
 	srcMatch.Path = strings.TrimPrefix(dst.MountPath, credentialRoutePrefix)
 
 	// Update the mount table
-	if err := c.persistAuth(ctx, c.auth, &srcMatch.Local); err != nil {
-		srcMatch.Path = srcPath
-		srcMatch.Tainted = true
-		c.authLock.Unlock()
-		if err == logical.ErrReadOnly && c.perfStandby {
-			return err
-		}
+	if updateStorage {
+		if err := c.persistAuth(ctx, c.auth, &srcMatch.Local); err != nil {
+			srcMatch.Path = srcPath
+			srcMatch.Tainted = true
+			c.authLock.Unlock()
+			if err == logical.ErrReadOnly && c.perfStandby {
+				return err
+			}
 
-		return fmt.Errorf("failed to update auth table with error %+v", err)
+			return fmt.Errorf("failed to update auth table with error %+v", err)
+		}
 	}
 
 	// Remount the backend, setting the existing route entry
@@ -558,7 +591,7 @@ func (c *Core) taintCredEntry(ctx context.Context, nsID, path string, updateStor
 			if err == logical.ErrReadOnly && c.perfStandby {
 				return err
 			}
-			return errors.New("failed to update auth table")
+			return fmt.Errorf("failed to update auth table: %w", err)
 		}
 	}
 
@@ -658,6 +691,12 @@ func (c *Core) loadCredentials(ctx context.Context) error {
 			return namespace.ErrNoNamespace
 		}
 		entry.namespace = ns
+
+		// Subtle: in `loadMounts` there is a call to namespaceManager.Register in
+		// the equivalent place to here. It's non-obvious why that is needed (see
+		// the large comment there) but it's equally subtle why it better NOT to do
+		// the same here. For more rationale see
+		// https://github.com/hashicorp/vault-enterprise/pull/5437#issuecomment-1954434213.
 
 		// Sync values to the cache
 		entry.SyncCache()
@@ -949,6 +988,8 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 	if err != nil {
 		return nil, err
 	}
+
+	conf := make(map[string]string)
 	var runningSha string
 	factory, ok := c.credentialBackends[t]
 	if !ok {
@@ -967,13 +1008,22 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 			runningSha = hex.EncodeToString(plug.Sha256)
 		}
 
+		if plug.Download {
+			if err = sysView.DownloadExtractVerifyPlugin(ctx, plug); err != nil {
+				return nil, fmt.Errorf("failed to extract and verify plugin=%q version=%q before mounting: %w",
+					plug.Name, plug.Version, err)
+			}
+		}
+
 		factory = plugin.Factory
 		if !plug.Builtin {
 			factory = wrapFactoryCheckPerms(c, plugin.Factory)
 		}
+
+		setExternalPluginConfig(plug, conf)
 	}
+
 	// Set up conf to pass in plugin_name
-	conf := make(map[string]string)
 	for k, v := range entry.Options {
 		conf[k] = v
 	}
@@ -987,6 +1037,7 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 
 	conf["plugin_type"] = consts.PluginTypeCredential.String()
 	conf["plugin_version"] = pluginVersion
+	pluginOptionsVersion := entry.Options["version"]
 
 	authLogger := c.baseLogger.Named(fmt.Sprintf("auth.%s.%s", t, entry.Accessor))
 	c.AddLogger(authLogger)
@@ -996,19 +1047,39 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 		MountPath:     entry.Path,
 		Plugin:        entry.Type,
 		PluginVersion: pluginVersion,
-		Version:       entry.Options["version"],
+		Version:       pluginOptionsVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	pluginRunningVersion := pluginVersion
+	if pluginRunningVersion == "" && runningSha == "" {
+		pluginRunningVersion = versions.GetBuiltinVersion(consts.PluginTypeCredential, entry.Type)
+	}
+
+	pluginObservationRecorder, err := c.observations.WithPlugin(entry.namespace, &logical.ObservationPluginInfo{
+		MountClass:           consts.PluginTypeCredential.String(),
+		MountAccessor:        entry.Accessor,
+		MountPath:            entry.Path,
+		Plugin:               entry.Type,
+		PluginVersion:        pluginVersion,
+		RunningPluginVersion: pluginRunningVersion,
+		Version:              pluginOptionsVersion,
+		Local:                entry.Local,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	config := &logical.BackendConfig{
-		StorageView:  view,
-		Logger:       authLogger,
-		Config:       conf,
-		System:       sysView,
-		BackendUUID:  entry.BackendAwareUUID,
-		EventsSender: pluginEventSender,
+		StorageView:         view,
+		Logger:              authLogger,
+		Config:              conf,
+		System:              sysView,
+		BackendUUID:         entry.BackendAwareUUID,
+		EventsSender:        pluginEventSender,
+		ObservationRecorder: pluginObservationRecorder,
 	}
 
 	backend, err := factory(ctx, config)
@@ -1016,11 +1087,8 @@ func (c *Core) newCredentialBackend(ctx context.Context, entry *MountEntry, sysV
 		return nil, err
 	}
 	if backend != nil {
-		entry.RunningVersion = pluginVersion
+		entry.RunningVersion = pluginRunningVersion
 		entry.RunningSha256 = runningSha
-		if entry.RunningVersion == "" && entry.RunningSha256 == "" {
-			entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeCredential, entry.Type)
-		}
 	}
 
 	return backend, nil

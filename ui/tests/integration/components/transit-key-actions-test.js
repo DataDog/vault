@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,11 +8,12 @@ import { resolve } from 'rsvp';
 import Service from '@ember/service';
 import { module, test } from 'qunit';
 import { setupRenderingTest } from 'ember-qunit';
-import { render, click, find, findAll, fillIn, blur, triggerEvent } from '@ember/test-helpers';
+import { render, click, find, fillIn, blur, triggerEvent, waitFor } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
 import { encodeString } from 'vault/utils/b64';
 import waitForError from 'vault/tests/helpers/wait-for-error';
-import { setRunOptions } from 'ember-a11y-testing/test-support';
+import codemirror, { getCodeEditorValue, setCodeEditorValue } from 'vault/tests/helpers/codemirror';
+import { GENERAL } from 'vault/tests/helpers/general-selectors';
 
 const storeStub = Service.extend({
   callArgs: null,
@@ -45,12 +46,6 @@ module('Integration | Component | transit key actions', function (hooks) {
       this.owner.unregister('service:store');
       this.owner.register('service:store', storeStub);
       this.storeService = this.owner.lookup('service:store');
-    });
-    setRunOptions({
-      rules: {
-        // TODO: fix JSONEditor/CodeMirror
-        label: { enabled: false },
-      },
     });
   });
 
@@ -101,6 +96,50 @@ module('Integration | Component | transit key actions', function (hooks) {
       .exists({ count: 1 }, 'renders signature_algorithm field on verify with rsa key');
   });
 
+  test('it renders: padding_scheme field for rsa key types', async function (assert) {
+    const supportedActions = ['datakey', 'decrypt', 'encrypt'];
+    const supportedKeyTypes = ['rsa-2048', 'rsa-3072', 'rsa-4096'];
+
+    for (const key of supportedKeyTypes) {
+      this.set('key', {
+        type: key,
+        backend: 'transit',
+        supportedActions,
+      });
+      for (const action of this.key.supportedActions) {
+        this.selectedAction = action;
+        await render(hbs`
+    <TransitKeyActions @selectedAction={{this.selectedAction}} @key={{this.key}} />`);
+        assert
+          .dom('[data-test-padding-scheme]')
+          .hasValue(
+            'oaep',
+            `key type: ${key} renders padding_scheme field with default value for action: ${action}`
+          );
+      }
+    }
+  });
+  test('it renders: decrypt_padding_scheme and encrypt_padding_scheme fields for rsa key types', async function (assert) {
+    this.selectedAction = 'rewrap';
+    const supportedKeyTypes = ['rsa-2048', 'rsa-3072', 'rsa-4096'];
+    const SELECTOR = (type) => `[data-test-padding-scheme="${type}"]`;
+    for (const key of supportedKeyTypes) {
+      this.set('key', {
+        type: key,
+        backend: 'transit',
+        supportedActions: [this.selectedAction],
+      });
+      await render(hbs`
+    <TransitKeyActions @selectedAction={{this.selectedAction}} @key={{this.key}} />`);
+      assert
+        .dom(SELECTOR('encrypt'))
+        .hasValue('oaep', `key type: ${key} renders ${SELECTOR('encrypt')} field with default value`);
+      assert
+        .dom(SELECTOR('decrypt'))
+        .hasValue('oaep', `key type: ${key} renders ${SELECTOR('decrypt')} field with default value`);
+    }
+  });
+
   async function doEncrypt(assert, actions = [], keyattrs = {}) {
     const keyDefaults = { backend: 'transit', id: 'akey', supportedActions: ['encrypt'].concat(actions) };
 
@@ -111,7 +150,10 @@ module('Integration | Component | transit key actions', function (hooks) {
     await render(hbs`
     <TransitKeyActions @selectedAction={{this.selectedAction}} @key={{this.key}} />`);
 
-    find('#plaintext-control .CodeMirror').CodeMirror.setValue('plaintext');
+    let editor;
+    await waitFor('.cm-editor');
+    editor = codemirror('#plaintext-control');
+    setCodeEditorValue(editor, 'plaintext');
     await click('button[type="submit"]');
     assert.deepEqual(
       this.storeService.callArgs,
@@ -132,7 +174,9 @@ module('Integration | Component | transit key actions', function (hooks) {
     await click('dialog button');
     // Encrypt again, with pre-encoded value and checkbox selected
     const preEncodedValue = encodeString('plaintext');
-    find('#plaintext-control .CodeMirror').CodeMirror.setValue(preEncodedValue);
+    await waitFor('.cm-editor');
+    editor = codemirror('#plaintext-control');
+    setCodeEditorValue(editor, preEncodedValue);
     await click('input[data-test-transit-input="encodedBase64"]');
     await click('button[type="submit"]');
 
@@ -148,6 +192,7 @@ module('Integration | Component | transit key actions', function (hooks) {
       },
       'passes expected args to the adapter'
     );
+    await click('dialog button');
   }
 
   test('it encrypts', doEncrypt);
@@ -161,7 +206,9 @@ module('Integration | Component | transit key actions', function (hooks) {
     await render(hbs`
     <TransitKeyActions @selectedAction="encrypt" @key={{this.key}} />`);
 
-    findAll('.CodeMirror')[0].CodeMirror.setValue('plaintext');
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, 'plaintext');
     assert.dom('#key_version').exists({ count: 1 }, 'it renders the key version selector');
 
     await triggerEvent('#key_version', 'change');
@@ -190,8 +237,9 @@ module('Integration | Component | transit key actions', function (hooks) {
     await render(hbs`
     <TransitKeyActions @selectedAction="encrypt" @key={{this.key}} />`);
 
-    // await fillIn('#plaintext', 'plaintext');
-    find('#plaintext-control .CodeMirror').CodeMirror.setValue('plaintext');
+    await waitFor('.cm-editor');
+    const editor = codemirror('#plaintext-control');
+    setCodeEditorValue(editor, 'plaintext');
     assert.dom('#key_version').doesNotExist('it does not render the selector when there is only one key');
   });
 
@@ -202,11 +250,9 @@ module('Integration | Component | transit key actions', function (hooks) {
 
     this.set('storeService.keyActionReturnVal', { plaintext });
     this.set('selectedAction', 'decrypt');
-    assert.strictEqual(
-      find('#ciphertext-control .CodeMirror').CodeMirror.getValue(),
-      '',
-      'does not prefill ciphertext value'
-    );
+    await waitFor('.cm-editor');
+    const editor = codemirror('#ciphertext-control');
+    assert.strictEqual(getCodeEditorValue(editor), '', 'does not prefill ciphertext value');
   });
 
   const setupExport = async function () {
@@ -251,7 +297,7 @@ module('Integration | Component | transit key actions', function (hooks) {
     this.set('storeService.keyActionReturnVal', response);
     await setupExport.call(this);
     await click('[data-test-toggle-label="Wrap response"]');
-    await click('button[type="submit"]');
+    await click(GENERAL.submitButton);
     assert.dom('#transit-export-modal').exists('Modal opens after export');
     assert.deepEqual(
       JSON.parse(find('[data-test-encrypted-value="export"]').innerText),
@@ -267,7 +313,7 @@ module('Integration | Component | transit key actions', function (hooks) {
     await click('[data-test-toggle-label="Wrap response"]');
     await click('#exportVersion');
     await triggerEvent('#exportVersion', 'change');
-    await click('button[type="submit"]');
+    await click(GENERAL.submitButton);
     assert.dom('#transit-export-modal').exists('Modal opens after export');
     assert.deepEqual(
       JSON.parse(find('[data-test-encrypted-value="export"]').innerText),
@@ -301,9 +347,11 @@ module('Integration | Component | transit key actions', function (hooks) {
     <TransitKeyActions @key={{this.key}} @selectedAction="hmac" />`);
     await fillIn('#algorithm', 'sha2-384');
     await blur('#algorithm');
-    await fillIn('[data-test-component="code-mirror-modifier"] textarea', 'plaintext');
+    await waitFor('.cm-editor');
+    const editor = codemirror();
+    setCodeEditorValue(editor, 'plaintext');
     await click('input[data-test-transit-input="encodedBase64"]');
-    await click('button[type="submit"]');
+    await click(GENERAL.submitButton);
     assert.deepEqual(
       this.storeService.callArgs,
       {

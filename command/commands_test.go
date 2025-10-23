@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2016, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -25,6 +25,9 @@ func Test_Commands_HCPInit(t *testing.T) {
 	}
 
 	for n, tst := range tests {
+		n := n
+		tst := tst
+
 		t.Run(n, func(t *testing.T) {
 			t.Parallel()
 

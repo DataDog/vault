@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2016, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -21,7 +21,6 @@ const ENDPOINTS = [
   'init',
   'capabilities-self',
   'license',
-  'internal/ui/version',
 ];
 
 const REPLICATION_ENDPOINTS = {
@@ -100,12 +99,8 @@ export default ApplicationAdapter.extend({
     });
   },
 
-  fetchVersion() {
-    return this.ajax(`${this.urlFor('internal/ui/version')}`, 'GET').catch(() => ({}));
-  },
-
-  sealStatus() {
-    return this.ajax(this.urlFor('seal-status'), 'GET', { unauthenticated: true });
+  sealStatus(unauthenticated = true) {
+    return this.ajax(this.urlFor('seal-status'), 'GET', { unauthenticated });
   },
 
   seal() {
@@ -124,28 +119,6 @@ export default ApplicationAdapter.extend({
       data,
       unauthenticated: true,
     });
-  },
-
-  authenticate({ backend, data }) {
-    const { role, jwt, token, password, username, path, nonce } = data;
-    const url = this.urlForAuth(backend, username, path);
-    const verb = backend === 'token' ? 'GET' : 'POST';
-    const options = {
-      unauthenticated: true,
-    };
-    if (backend === 'token') {
-      options.headers = {
-        'X-Vault-Token': token,
-      };
-    } else if (backend === 'jwt' || backend === 'oidc') {
-      options.data = { role, jwt };
-    } else if (backend === 'okta') {
-      options.data = { password, nonce };
-    } else {
-      options.data = token ? { token, password } : { password };
-    }
-
-    return this.ajax(url, verb, options);
   },
 
   mfaValidate({ mfa_request_id, mfa_constraints }) {
@@ -174,30 +147,10 @@ export default ApplicationAdapter.extend({
   urlFor(endpoint) {
     if (!ENDPOINTS.includes(endpoint)) {
       throw new Error(
-        `Calls to a ${endpoint} endpoint are not currently allowed in the vault cluster adapater`
+        `Calls to a ${endpoint} endpoint are not currently allowed in the vault cluster adapter`
       );
     }
     return `${this.buildURL()}/${endpoint}`;
-  },
-
-  urlForAuth(type, username, path) {
-    const authBackend = type.toLowerCase();
-    const authURLs = {
-      github: 'login',
-      jwt: 'login',
-      oidc: 'login',
-      userpass: `login/${encodeURIComponent(username)}`,
-      ldap: `login/${encodeURIComponent(username)}`,
-      okta: `login/${encodeURIComponent(username)}`,
-      radius: `login/${encodeURIComponent(username)}`,
-      token: 'lookup-self',
-    };
-    const urlSuffix = authURLs[authBackend];
-    const urlPrefix = path && authBackend !== 'token' ? path : authBackend;
-    if (!urlSuffix) {
-      throw new Error(`There is no auth url for ${type}.`);
-    }
-    return `/v1/auth/${urlPrefix}/${urlSuffix}`;
   },
 
   urlForReplication(replicationMode, clusterMode, endpoint) {
