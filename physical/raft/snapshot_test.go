@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
-	iradix "github.com/hashicorp/go-immutable-radix"
+	iradix "github.com/hashicorp/go-immutable-radix/v2"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/vault/helper/testhelpers/corehelpers"
 	"github.com/hashicorp/vault/sdk/logical"

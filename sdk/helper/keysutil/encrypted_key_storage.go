@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/hashicorp/vault/sdk/logical"
 )
 

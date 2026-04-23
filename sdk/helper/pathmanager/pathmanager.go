@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	iradix "github.com/hashicorp/go-immutable-radix"
+	iradix "github.com/hashicorp/go-immutable-radix/v2"
 )
 
 // PathManager is a prefix searchable index of paths

@@ -3,7 +3,7 @@
 
 package keysutil
 
-import lru "github.com/hashicorp/golang-lru"
+import lru "github.com/hashicorp/golang-lru/v2"
 
 type TransitLRU struct {
 	size int
