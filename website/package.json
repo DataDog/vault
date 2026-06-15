@@ -33,5 +33,38 @@
   },
   "simple-git-hooks": {
     "pre-commit": "cd website && ./node_modules/.bin/next-hashicorp precommit"
+  },
+  "overrides": {
+    "@hashicorp/platform-cli": {
+      "ejs": "^3.1.10",
+      "minimatch": "^3.1.5",
+      "cross-spawn": "^7.0.6",
+      "braces": "^3.0.3",
+      "brace-expansion": "^1.1.15"
+    },
+    "@hashicorp/platform-content-conformance": {
+      "yaml": "^2.9.0"
+    },
+    "vfile-matter": {
+      "yaml": "^2.9.0"
+    },
+    "cross-fetch": {
+      "node-fetch": "^2.6.13"
+    },
+    "normalize-package-data": {
+      "semver": "^5.7.2"
+    },
+    "remark-mdx": {
+      "semver": "^5.7.2"
+    },
+    "sane": {
+      "semver": "^5.7.2"
+    },
+    "stylelint": {
+      "semver": "^5.7.2"
+    },
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^3.14.2"
+    }
   }
 }
