@@ -7,7 +7,7 @@
     "@hashicorp/platform-cli": "^2.6.0",
     "@hashicorp/platform-content-conformance": "^0.0.9",
     "dart-linkcheck": "2.0.15",
-    "next": "^14.0.4",
+    "next": "^16.2.9",
     "prettier": "2.2.1",
     "simple-git-hooks": "^2.6.1"
   },
@@ -33,5 +33,22 @@
   },
   "simple-git-hooks": {
     "pre-commit": "cd website && ./node_modules/.bin/next-hashicorp precommit"
+  },
+  "overrides": {
+    "@pkgr/utils": {
+      "picocolors": "^1.1.1"
+    },
+    "postcss": {
+      "picocolors": "^1.1.1"
+    },
+    "@hashicorp/platform-cli": {
+      "postcss": "^8.5.15",
+      "tslib": "^2.8.1"
+    },
+    "next": {
+      "postcss": "^8.5.15",
+      "@next/env": "^14.2.35",
+      "tslib": "^2.8.1"
+    }
   }
 }
