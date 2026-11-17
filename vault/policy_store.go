@@ -14,10 +14,12 @@ import (
 	log "github.com/hashicorp/go-hclog"
 	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/internalshared/namespace"
+	"github.com/hashicorp/vault/sdk/helper/cacheutil"
 	"github.com/hashicorp/vault/sdk/helper/consts"
+	"github.com/hashicorp/vault/sdk/helper/keyedlock"
 	"github.com/hashicorp/vault/sdk/helper/policyutil"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/hashicorp/vault/vault/observations"
@@ -204,16 +206,13 @@ type PolicyStore struct {
 	rgpView *BarrierView
 	egpView *BarrierView
 
-	tokenPoliciesLRU *lru.TwoQueueCache
-	egpLRU           *lru.TwoQueueCache
+	tokenPoliciesLRU cacheutil.TwoQueueCacheInterface[string, *Policy]
+	egpLRU           cacheutil.TwoQueueCacheInterface[string, *Policy]
 
-	// This is used to ensure that writes to the store (acl/rgp) or to the egp
-	// path tree don't happen concurrently. We are okay reading stale data so
-	// long as there aren't concurrent writes.
-	modifyLock *sync.RWMutex
+	keyedModifyLock lockerInterface
 
 	// Stores whether a token policy is ACL or RGP
-	policyTypeMap sync.Map
+	policyTypeMap syncMapInterface
 
 	// logger is the server logger copied over from core
 	logger log.Logger
@@ -236,21 +235,20 @@ type PolicyEntry struct {
 // using a given view. It used used to durable store and manage named policy.
 func NewPolicyStore(ctx context.Context, core *Core, baseView *BarrierView, system logical.SystemView, logger log.Logger) (*PolicyStore, error) {
 	ps := &PolicyStore{
-		aclView:    baseView.SubView(policyACLSubPath),
-		rgpView:    baseView.SubView(policyRGPSubPath),
-		egpView:    baseView.SubView(policyEGPSubPath),
-		modifyLock: new(sync.RWMutex),
-		logger:     logger,
-		core:       core,
+		aclView:         baseView.SubView(policyACLSubPath),
+		rgpView:         baseView.SubView(policyRGPSubPath),
+		egpView:         baseView.SubView(policyEGPSubPath),
+		keyedModifyLock: keyedlock.New(),
+		policyTypeMap:   &sync.Map{},
+		logger:          logger,
+		core:            core,
 	}
 
 	ps.extraInit()
 
 	if !system.CachingDisabled() {
-		cache, _ := lru.New2Q(policyCacheSize)
-		ps.tokenPoliciesLRU = cache
-		cache, _ = lru.New2Q(policyCacheSize)
-		ps.egpLRU = cache
+		ps.tokenPoliciesLRU, _ = lru.New2Q[string, *Policy](policyCacheSize)
+		ps.egpLRU, _ = lru.New2Q[string, *Policy](policyCacheSize)
 	}
 
 	aclView := ps.getACLView(namespace.RootNamespace)
@@ -334,8 +332,8 @@ func (ps *PolicyStore) invalidate(ctx context.Context, name string, policyType P
 	saneName := strings.TrimPrefix(name, "/")
 	index := ps.cacheKey(ns, saneName)
 
-	ps.modifyLock.Lock()
-	defer ps.modifyLock.Unlock()
+	ps.keyedModifyLock.Lock(index)
+	defer ps.keyedModifyLock.MustUnlock(index)
 
 	// We don't lock before removing from the LRU here because the worst that
 	// can happen is we load again if something since added it
@@ -400,8 +398,12 @@ func (ps *PolicyStore) SetPolicy(ctx context.Context, p *Policy) error {
 }
 
 func (ps *PolicyStore) setPolicyInternal(ctx context.Context, p *Policy, req *logical.Request) error {
-	ps.modifyLock.Lock()
-	defer ps.modifyLock.Unlock()
+	// Construct the cache key
+	index := ps.cacheKey(p.namespace, p.Name)
+
+	// Lock the key
+	ps.keyedModifyLock.Lock(index)
+	defer ps.keyedModifyLock.MustUnlock(index)
 
 	// Get the appropriate view based on policy type and namespace
 	view := ps.getBarrierView(p.namespace, p.Type)
@@ -424,9 +426,6 @@ func (ps *PolicyStore) setPolicyInternal(ctx context.Context, p *Policy, req *lo
 	if err != nil {
 		return fmt.Errorf("failed to create entry: %w", err)
 	}
-
-	// Construct the cache key
-	index := ps.cacheKey(p.namespace, p.Name)
 
 	switch p.Type {
 	case PolicyTypeACL:
@@ -587,7 +586,7 @@ func (ps *PolicyStore) switchedGetPolicy(ctx context.Context, name string, polic
 	}
 	index := ps.cacheKey(ns, name)
 
-	var cache *lru.TwoQueueCache
+	var cache cacheutil.TwoQueueCacheInterface[string, *Policy]
 	var view *BarrierView
 
 	switch policyType {
@@ -621,9 +620,8 @@ func (ps *PolicyStore) switchedGetPolicy(ctx context.Context, name string, polic
 	if cache != nil {
 		// Check for cached policy
 		if raw, ok := cache.Get(index); ok {
-			cachedPolicy := raw.(*Policy)
-			if cachedPolicy.namespace != nil && cachedPolicy.namespace.ID == ns.ID {
-				return cachedPolicy, nil
+			if raw.namespace != nil && raw.namespace.ID == ns.ID {
+				return raw, nil
 			}
 		}
 	}
@@ -641,16 +639,16 @@ func (ps *PolicyStore) switchedGetPolicy(ctx context.Context, name string, polic
 	}
 
 	if grabLock {
-		ps.modifyLock.Lock()
-		defer ps.modifyLock.Unlock()
+		// Lock the key
+		ps.keyedModifyLock.Lock(index)
+		defer ps.keyedModifyLock.MustUnlock(index)
 	}
 
 	// See if anything has added it since we got the lock
 	if cache != nil {
 		if raw, ok := cache.Get(index); ok {
-			cachedPolicy := raw.(*Policy)
-			if cachedPolicy.namespace != nil && cachedPolicy.namespace.ID == ns.ID {
-				return cachedPolicy, nil
+			if raw.namespace != nil && raw.namespace.ID == ns.ID {
+				return raw, nil
 			}
 		}
 	}
@@ -853,17 +851,19 @@ func (ps *PolicyStore) switchedDeletePolicy(ctx context.Context, name string, po
 	if err != nil {
 		return err
 	}
-	// If not set, the call comes from invalidation, where we'll already have
-	// grabbed the lock
-	if physicalDeletion {
-		ps.modifyLock.Lock()
-		defer ps.modifyLock.Unlock()
-	}
 
 	// Policies are normalized to lower-case
 	name = ps.sanitizeName(name)
 	index := ps.cacheKey(ns, name)
 	sentinelIndex := ns.ID + "/" + name
+
+	// If not set, the call comes from invalidation, where we'll already have
+	// grabbed the lock
+	if physicalDeletion {
+		// Lock the key
+		ps.keyedModifyLock.Lock(index)
+		defer ps.keyedModifyLock.MustUnlock(index)
+	}
 
 	view := ps.getBarrierView(ns, policyType)
 	if view == nil {
@@ -1136,4 +1136,17 @@ func (ps *PolicyStore) logDeniedParamWarning(p *Policy) {
 			ps.logger.Warn("you're using 'allowed_parameters' or 'denied_parameters' in one or more policies, note that Vault 1.21 introduced a behavior change. For details see https://developer.hashicorp.com/vault/docs/v1.21.x/updates/important-changes#item-by-item-list-comparison-for-allowed_parameters-and-denied_parameters")
 		})
 	}
+}
+
+// lockerInterface is satisfied by keyedlock.Locker type
+type lockerInterface interface {
+	Lock(name string)
+	MustUnlock(name string)
+}
+
+// syncMapInterface is satisfied by the sync.Map type
+type syncMapInterface interface {
+	Load(interface{}) (interface{}, bool)
+	Store(key, value interface{})
+	Delete(interface{})
 }

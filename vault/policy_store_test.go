@@ -36,7 +36,7 @@ func (b *syncedBuffer) Reset() {
 	b.buf.Reset()
 }
 
-func mockPolicyWithCore(t *testing.T, disableCache bool) (*Core, *PolicyStore) {
+func mockPolicyWithCore(t testing.TB, disableCache bool) (*Core, *PolicyStore) {
 	conf := &CoreConfig{
 		DisableCache: disableCache,
 	}
@@ -694,7 +694,7 @@ func TestPolicyStore_CacheKey_String_NoSeparatorAmbiguity(t *testing.T) {
 func TestPolicyStore_GetNonEGPPolicyType_UsesSharedCacheKeyFormat(t *testing.T) {
 	t.Parallel()
 
-	ps := new(PolicyStore)
+	ps := &PolicyStore{policyTypeMap: &sync.Map{}}
 
 	ps.policyTypeMap.Store("root/dev", PolicyTypeACL)
 	policyType, err := ps.GetNonEGPPolicyType("root", "dev")
