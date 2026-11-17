@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	log "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/internalshared/namespace"
 	"github.com/hashicorp/vault/sdk/logical"
 	"github.com/stretchr/testify/require"
@@ -515,9 +514,13 @@ func TestDefaultPolicy(t *testing.T) {
 func TestDefaultCeilingPolicy(t *testing.T) {
 	ctx := namespace.ContextWithNamespace(context.Background(), namespace.RootNamespace)
 
-	entity := &identity.Entity{ID: "abc-123"}
+	entity := &logical.Entity{ID: "abc-123"}
 
-	policy, err := parseACLPolicyWithTemplating(namespace.RootNamespace, defaultCeilingPolicy, true, entity, nil, parseACLPolicyOptions{})
+	parsed, err := ParseACLPolicy(namespace.RootNamespace, defaultCeilingPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := parsed.ResolvePaths(true, entity, nil, parseACLPolicyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,11 +897,14 @@ path "foo" {
 	err := ps.SetPolicy(ctx, policy)
 	require.NoError(t, err)
 
-	// Duplicate attributes should always fail now
+	// Duplicate attributes should always fail now. ACL() resolves cached
+	// policies without re-parsing their raw HCL, and SetPolicy above cached
+	// the manually constructed policy, so purge the cache to force ACL()
+	// through the storage load path, which parses the raw HCL.
+	ps.tokenPoliciesLRU.Purge()
 	_, err = ps.ACL(ctx, nil, map[string][]string{namespace.RootNamespace.ID: {"dev", "ops"}})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "error parsing templated policy \"dev\": failed to parse policy: The argument \"capabilities\" at 61:2 was already set. Each argument can only be defined once")
-
+	require.Contains(t, err.Error(), "failed to get policy: failed to parse policy: failed to parse policy: The argument \"capabilities\" at 61:2 was already set. Each argument can only be defined once")
 	ps.tokenPoliciesLRU.Purge()
 	_, err = ps.GetPolicy(ctx, "dev", PolicyTypeACL)
 	require.Error(t, err)

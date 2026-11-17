@@ -5,6 +5,7 @@ package vault
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-test/deep"
 	"github.com/hashicorp/vault/internalshared/namespace"
 	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/stretchr/testify/require"
 )
 
 var rawPolicy = strings.TrimSpace(`
@@ -124,48 +126,27 @@ func TestPolicy_Parse(t *testing.T) {
 
 	expect := []*PathRules{
 		{
-			Path:   "",
-			Policy: "deny",
-			Capabilities: []string{
-				"deny",
-			},
+			RawPath:     "*",
+			Path:        "",
 			Permissions: &ACLPermissions{CapabilitiesBitmap: DenyCapabilityInt},
 			IsPrefix:    true,
 		},
 		{
-			Path:   "stage/",
-			Policy: "sudo",
-			Capabilities: []string{
-				"create",
-				"read",
-				"update",
-				"delete",
-				"list",
-				"sudo",
-			},
+			RawPath: "stage/*",
+			Path:    "stage/",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | ReadCapabilityInt | UpdateCapabilityInt | DeleteCapabilityInt | ListCapabilityInt | SudoCapabilityInt),
 			},
 			IsPrefix: true,
 		},
 		{
-			Path:   "prod/version",
-			Policy: "read",
-			Capabilities: []string{
-				"read",
-				"list",
-			},
+			RawPath:     "prod/version",
+			Path:        "prod/version",
 			Permissions: &ACLPermissions{CapabilitiesBitmap: (ReadCapabilityInt | ListCapabilityInt)},
 		},
 		{
-			Path:   "foo/bar",
-			Policy: "read",
-			Capabilities: []string{
-				"read",
-				"list",
-			},
-			MinWrappingTTLHCL: 300,
-			MaxWrappingTTLHCL: "1h",
+			RawPath: "/foo/bar",
+			Path:    "foo/bar",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (ReadCapabilityInt | ListCapabilityInt),
 				MinWrappingTTL:     300 * time.Second,
@@ -173,13 +154,8 @@ func TestPolicy_Parse(t *testing.T) {
 			},
 		},
 		{
-			Path: "foo/bar",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			MinWrappingTTLHCL: "300s",
-			MaxWrappingTTLHCL: 3600,
+			RawPath: "foo/bar",
+			Path:    "foo/bar",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				MinWrappingTTL:     300 * time.Second,
@@ -187,37 +163,24 @@ func TestPolicy_Parse(t *testing.T) {
 			},
 		},
 		{
-			Path: "foo/bar",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			AllowedParametersHCL: map[string][]interface{}{"zip": {}, "zap": {}},
+			RawPath: "foo/bar",
+			Path:    "foo/bar",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				AllowedParameters:  map[string][]interface{}{"zip": {}, "zap": {}},
 			},
 		},
 		{
-			Path: "baz/bar",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			DeniedParametersHCL: map[string][]interface{}{"zip": {}, "zap": {}},
+			RawPath: "baz/bar",
+			Path:    "baz/bar",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				DeniedParameters:   map[string][]interface{}{"zip": {}, "zap": {}},
 			},
 		},
 		{
-			Path: "biz/bar",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			AllowedParametersHCL: map[string][]interface{}{"zim": {}, "zam": {}},
-			DeniedParametersHCL:  map[string][]interface{}{"zip": {}, "zap": {}},
+			RawPath: "biz/bar",
+			Path:    "biz/bar",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				AllowedParameters:  map[string][]interface{}{"zim": {}, "zam": {}},
@@ -225,14 +188,8 @@ func TestPolicy_Parse(t *testing.T) {
 			},
 		},
 		{
-			Path:   "test/types",
-			Policy: "",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			AllowedParametersHCL: map[string][]interface{}{"map": {map[string]interface{}{"good": "one"}}, "int": {1, 2}},
-			DeniedParametersHCL:  map[string][]interface{}{"string": {"test"}, "bool": {false}},
+			RawPath: "test/types",
+			Path:    "test/types",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				AllowedParameters:  map[string][]interface{}{"map": {map[string]interface{}{"good": "one"}}, "int": {1, 2}},
@@ -241,34 +198,23 @@ func TestPolicy_Parse(t *testing.T) {
 			IsPrefix: false,
 		},
 		{
-			Path: "test/req",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			RequiredParametersHCL: []string{"foo"},
+			RawPath: "test/req",
+			Path:    "test/req",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				RequiredParameters: []string{"foo"},
 			},
 		},
 		{
-			Path:         "test/patch",
-			Capabilities: []string{"patch"},
+			RawPath: "test/patch",
+			Path:    "test/patch",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: PatchCapabilityInt,
 			},
 		},
 		{
-			Path: "test/mfa",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
-			MFAMethodsHCL: []string{
-				"my_totp",
-				"my_totp2",
-			},
+			RawPath: "test/mfa",
+			Path:    "test/mfa",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 				MFAMethods: []string{
@@ -278,55 +224,40 @@ func TestPolicy_Parse(t *testing.T) {
 			},
 		},
 		{
-			Path: "test/+/segment",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
+			RawPath: "test/+/segment",
+			Path:    "test/+/segment",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
 			HasSegmentWildcards: true,
 		},
 		{
-			Path: "test/segment/at/end/+",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
+			RawPath: "test/segment/at/end/+",
+			Path:    "test/segment/at/end/+",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
 			HasSegmentWildcards: true,
 		},
 		{
-			Path: "test/segment/at/end/v2/+/",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
+			RawPath: "test/segment/at/end/v2/+/",
+			Path:    "test/segment/at/end/v2/+/",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
 			HasSegmentWildcards: true,
 		},
 		{
-			Path: "test/+/wildcard/+/*",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
+			RawPath: "test/+/wildcard/+/*",
+			Path:    "test/+/wildcard/+/*",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
 			HasSegmentWildcards: true,
 		},
 		{
-			Path: "test/+/wildcard/+/end*",
-			Capabilities: []string{
-				"create",
-				"sudo",
-			},
+			RawPath: "test/+/wildcard/+/end*",
+			Path:    "test/+/wildcard/+/end*",
 			Permissions: &ACLPermissions{
 				CapabilitiesBitmap: (CreateCapabilityInt | SudoCapabilityInt),
 			},
@@ -625,4 +556,51 @@ func TestPolicy_NamespaceRequired(t *testing.T) {
 			t.Errorf("Expected root namespace ID in granting policy, got: %s", grantingPolicy.NamespaceId)
 		}
 	}
+}
+
+func BenchmarkPolicy_ParseTemplated(b *testing.B) {
+	policyStr := strings.TrimSpace(`
+    path "/foo/bar/+/hello/{{identity.entity.metadata.namespace}}/{{identity.entity.metadata.serviceaccount}}/*" {
+    	min_wrapping_ttl = 300
+    	max_wrapping_ttl = "1h"
+    	capabilities = ["create", "sudo"]
+    }
+	`)
+	entity := &logical.Entity{
+		ID:          "testEntityID",
+		Name:        "testEntityName",
+		NamespaceID: namespace.RootNamespaceID,
+		Metadata: map[string]string{
+			"namespace":      "my-namespace",
+			"serviceaccount": "my-service-account",
+		},
+	}
+
+	basePolicy, err := ParseACLPolicy(namespace.RootNamespace, policyStr)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.Run("full parse", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				policy, err := ParseACLPolicy(namespace.RootNamespace, policyStr)
+				if err != nil {
+					b.Fatalf("policy parse should succeed: %v", err)
+				}
+				runtime.KeepAlive(policy)
+			}
+		})
+	})
+
+	b.Run("template only", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				policy, err := basePolicy.ResolvePaths(true, entity, nil, parseACLPolicyOptions{})
+				if err != nil {
+					b.Fatalf("template evaluation should succeed: %v", err)
+				}
+				runtime.KeepAlive(policy)
+			}
+		})
+	})
 }

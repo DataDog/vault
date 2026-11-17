@@ -6,6 +6,7 @@ package vault
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -524,15 +525,32 @@ func pathRulesToObservationPathRules(rules []*PathRules) []*ObservationPathRules
 	var observationPathRules []*ObservationPathRules
 	for _, rule := range rules {
 		if rule != nil {
+			var capabilities []string
+			if rule.Permissions != nil {
+				capabilities = capabilitiesFromBitmap(rule.Permissions.CapabilitiesBitmap)
+			}
 			observationPathRules = append(observationPathRules, &ObservationPathRules{
 				Path:                rule.Path,
-				Capabilities:        rule.Capabilities,
+				Capabilities:        capabilities,
 				Prefix:              rule.IsPrefix,
 				HasSegmentWildcards: rule.HasSegmentWildcards,
 			})
 		}
 	}
 	return observationPathRules
+}
+
+// capabilitiesFromBitmap converts a capabilities bitmap back into its
+// sorted list of capability strings.
+func capabilitiesFromBitmap(bitmap uint32) []string {
+	capabilities := make([]string, 0, len(cap2Int))
+	for capability, bit := range cap2Int {
+		if bitmap&bit != 0 {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	sort.Strings(capabilities)
+	return capabilities
 }
 
 // GetNonEGPPolicyType returns a policy's type.
@@ -988,7 +1006,8 @@ func (ps *PolicyStore) ACL(ctx context.Context, entity *identity.Entity, policyN
 	allPolicies = append(allPolicies, additionalPolicies...)
 
 	var fetchedGroups bool
-	var groups []*identity.Group
+	var groups []*logical.Group
+	sdkEntity := identity.ToSDKEntity(entity)
 	for i, policy := range allPolicies {
 		if policy.Type == PolicyTypeACL && policy.Templated {
 			if !fetchedGroups {
@@ -998,12 +1017,12 @@ func (ps *PolicyStore) ACL(ctx context.Context, entity *identity.Entity, policyN
 					if err != nil {
 						return nil, fmt.Errorf("failed to fetch group memberships: %w", err)
 					}
-					groups = append(directGroups, inheritedGroups...)
+					groups = identity.ToSDKGroups(append(directGroups, inheritedGroups...))
 				}
 			}
-			p, err := parseACLPolicyWithTemplating(policy.namespace, policy.Raw, true, entity, groups, parseACLPolicyOptions{denySlashInTemplatedPaths: ps.core.denySlashInTemplatedPolicyPaths})
+			p, err := policy.ResolvePaths(true, sdkEntity, groups, parseACLPolicyOptions{denySlashInTemplatedPaths: ps.core.denySlashInTemplatedPolicyPaths})
 			if err != nil {
-				return nil, fmt.Errorf("error parsing templated policy %q: %w", policy.Name, err)
+				return nil, fmt.Errorf("error evaluating template on policy %q: %w", policy.Name, err)
 			}
 			p.Name = policy.Name
 			allPolicies[i] = p

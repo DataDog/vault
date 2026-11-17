@@ -13,7 +13,6 @@ import (
 	"github.com/hashicorp/go-secure-stdlib/parseutil"
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/ast"
-	"github.com/hashicorp/vault/helper/identity"
 	"github.com/hashicorp/vault/internalshared/namespace"
 	"github.com/hashicorp/vault/sdk/helper/hclutil"
 	"github.com/hashicorp/vault/sdk/helper/identitytpl"
@@ -144,12 +143,18 @@ func (p *Policy) ShallowClone() *Policy {
 
 // PathRules represents a policy for a path in the namespace.
 type PathRules struct {
+	RawPath             string
 	Path                string
-	Policy              string
-	Permissions         *ACLPermissions
 	IsPrefix            bool
 	HasSegmentWildcards bool
-	Capabilities        []string
+
+	Permissions *ACLPermissions
+}
+
+// PathRulesHCL is used to decode a policy from HCL format
+type PathRulesHCL struct {
+	Policy       string
+	Capabilities []string
 
 	// These keys are used at the top level to make the HCL nicer; we store in
 	// the ACLPermissions object though
@@ -306,7 +311,7 @@ func addGrantingPoliciesToMap(m map[uint32][]logical.PolicyInfo, policy *Policy,
 // intermediary set of policies, before being compiled into
 // the ACL
 func ParseACLPolicy(ns *namespace.Namespace, rules string, opts ...ParseACLPolicyOption) (*Policy, error) {
-	return parseACLPolicyWithTemplating(ns, rules, false, nil, nil, applyParseACLPolicyOptions(opts))
+	return parseACLPolicy(ns, rules, applyParseACLPolicyOptions(opts))
 }
 
 // applyParseACLPolicyOptions applies the given options to a default
@@ -319,11 +324,10 @@ func applyParseACLPolicyOptions(opts []ParseACLPolicyOption) parseACLPolicyOptio
 	return o
 }
 
-// parseACLPolicyWithTemplating performs the actual work and checks whether we
-// should perform substitutions. If performTemplating is true we know that it
-// is templated so we don't check again, otherwise we check to see if it's a
-// templated policy.
-func parseACLPolicyWithTemplating(ns *namespace.Namespace, rules string, performTemplating bool, entity *identity.Entity, groups []*identity.Group, opts parseACLPolicyOptions) (*Policy, error) {
+// parseACLPolicy parses the raw HCL into a Policy without resolving any
+// identity-templated paths. Callers needing templated paths resolved should
+// call Policy.ResolvePaths on the result.
+func parseACLPolicy(ns *namespace.Namespace, rules string, opts parseACLPolicyOptions) (*Policy, error) {
 	// Parse the rules
 	root, err := hcl.Parse(rules)
 	if err != nil {
@@ -356,49 +360,38 @@ func parseACLPolicyWithTemplating(ns *namespace.Namespace, rules string, perform
 	}
 
 	if o := list.Filter("path"); len(o.Items) > 0 {
-		if err := parsePaths(&p, o, performTemplating, entity, groups, opts); err != nil {
+		if err := parsePaths(&p, o, opts); err != nil {
 			return nil, fmt.Errorf("failed to parse policy: %w", err)
 		}
 	}
 
-	return &p, nil
+	// Resolve once without templating to validate wildcard syntax in paths
+	return p.ResolvePaths(false, nil, nil, opts)
 }
 
-func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, entity *identity.Entity, groups []*identity.Group, opts parseACLPolicyOptions) error {
+func parsePaths(result *Policy, list *ast.ObjectList, opts parseACLPolicyOptions) error {
 	paths := make([]*PathRules, 0, len(list.Items))
 	for _, item := range list.Items {
-		key := "path"
+		pr := PathRules{
+			RawPath:     "path",
+			Permissions: &ACLPermissions{},
+		}
 		if len(item.Keys) > 0 {
-			key = item.Keys[0].Token.Value().(string)
+			pr.RawPath = item.Keys[0].Token.Value().(string)
 		}
 
 		// Check the path
-		if performTemplating {
-			_, templated, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
-				Mode:                      identitytpl.ACLTemplating,
-				String:                    key,
-				Entity:                    identity.ToSDKEntity(entity),
-				Groups:                    identity.ToSDKGroups(groups),
-				NamespaceID:               result.namespace.ID,
-				DenySlashInTemplatedPaths: opts.denySlashInTemplatedPaths,
-			})
-			if err != nil {
-				continue
-			}
-			key = templated
-		} else {
-			hasTemplating, _, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
-				Mode:                      identitytpl.ACLTemplating,
-				ValidityCheckOnly:         true,
-				String:                    key,
-				DenySlashInTemplatedPaths: opts.denySlashInTemplatedPaths,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to validate policy templating: %w", err)
-			}
-			if hasTemplating {
-				result.Templated = true
-			}
+		hasTemplating, _, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+			Mode:                      identitytpl.ACLTemplating,
+			ValidityCheckOnly:         true,
+			String:                    pr.RawPath,
+			DenySlashInTemplatedPaths: opts.denySlashInTemplatedPaths,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to validate policy templating: %w", err)
+		}
+		if hasTemplating {
+			result.Templated = true
 		}
 
 		valid := []string{
@@ -415,22 +408,13 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			"subscribe_event_types",
 		}
 		if err := hclutil.CheckHCLKeys(item.Val, valid); err != nil {
-			return multierror.Prefix(err, fmt.Sprintf("path %q:", key))
+			return multierror.Prefix(err, fmt.Sprintf("path %q:", pr.RawPath))
 		}
 
-		var pc PathRules
-
-		// allocate memory so that DecodeObject can initialize the ACLPermissions struct
-		pc.Permissions = new(ACLPermissions)
-
-		pc.Path = key
+		var pc PathRulesHCL
 
 		if err := hcl.DecodeObject(&pc, item.Val); err != nil {
-			return multierror.Prefix(err, fmt.Sprintf("path %q:", key))
-		}
-
-		if err := pc.normalizePath(result.namespace); err != nil {
-			return err
+			return multierror.Prefix(err, fmt.Sprintf("path %q:", pr.RawPath))
 		}
 
 		// Map old-style policies into capabilities
@@ -445,37 +429,37 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			case OldSudoPathPolicy:
 				pc.Capabilities = append(pc.Capabilities, []string{CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability}...)
 			default:
-				return fmt.Errorf("path %q: invalid policy %q", key, pc.Policy)
+				return fmt.Errorf("path %q: invalid policy %q", pr.RawPath, pc.Policy)
 			}
 		}
 
 		// Initialize the map
-		pc.Permissions.CapabilitiesBitmap = 0
+		pr.Permissions.CapabilitiesBitmap = 0
 		for _, cap := range pc.Capabilities {
 			switch cap {
 			// If it's deny, don't include any other capability
 			case DenyCapability:
 				pc.Capabilities = []string{DenyCapability}
-				pc.Permissions.CapabilitiesBitmap = DenyCapabilityInt
+				pr.Permissions.CapabilitiesBitmap = DenyCapabilityInt
 				goto PathFinished
 			case CreateCapability, ReadCapability, UpdateCapability, DeleteCapability, ListCapability, SudoCapability, PatchCapability, SubscribeCapability, RecoverCapability:
-				pc.Permissions.CapabilitiesBitmap |= cap2Int[cap]
+				pr.Permissions.CapabilitiesBitmap |= cap2Int[cap]
 			default:
-				return fmt.Errorf("path %q: invalid capability %q", key, cap)
+				return fmt.Errorf("path %q: invalid capability %q", pr.RawPath, cap)
 			}
 		}
 
 		if pc.AllowedParametersHCL != nil {
-			pc.Permissions.AllowedParameters = make(map[string][]interface{}, len(pc.AllowedParametersHCL))
+			pr.Permissions.AllowedParameters = make(map[string][]interface{}, len(pc.AllowedParametersHCL))
 			for k, v := range pc.AllowedParametersHCL {
-				pc.Permissions.AllowedParameters[strings.ToLower(k)] = v
+				pr.Permissions.AllowedParameters[strings.ToLower(k)] = v
 			}
 		}
 		if pc.DeniedParametersHCL != nil {
-			pc.Permissions.DeniedParameters = make(map[string][]interface{}, len(pc.DeniedParametersHCL))
+			pr.Permissions.DeniedParameters = make(map[string][]interface{}, len(pc.DeniedParametersHCL))
 
 			for k, v := range pc.DeniedParametersHCL {
-				pc.Permissions.DeniedParameters[strings.ToLower(k)] = v
+				pr.Permissions.DeniedParameters[strings.ToLower(k)] = v
 			}
 		}
 		if pc.MinWrappingTTLHCL != nil {
@@ -483,27 +467,27 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			if err != nil {
 				return fmt.Errorf("error parsing min_wrapping_ttl: %w", err)
 			}
-			pc.Permissions.MinWrappingTTL = dur
+			pr.Permissions.MinWrappingTTL = dur
 		}
 		if pc.MaxWrappingTTLHCL != nil {
 			dur, err := parseutil.ParseDurationSecond(pc.MaxWrappingTTLHCL)
 			if err != nil {
 				return fmt.Errorf("error parsing max_wrapping_ttl: %w", err)
 			}
-			pc.Permissions.MaxWrappingTTL = dur
+			pr.Permissions.MaxWrappingTTL = dur
 		}
 		if pc.MFAMethodsHCL != nil {
-			pc.Permissions.MFAMethods = make([]string, len(pc.MFAMethodsHCL))
-			copy(pc.Permissions.MFAMethods, pc.MFAMethodsHCL)
+			pr.Permissions.MFAMethods = make([]string, len(pc.MFAMethodsHCL))
+			copy(pr.Permissions.MFAMethods, pc.MFAMethodsHCL)
 		}
 		if pc.ControlGroupHCL != nil {
-			pc.Permissions.ControlGroup = new(ControlGroup)
+			pr.Permissions.ControlGroup = new(ControlGroup)
 			if pc.ControlGroupHCL.TTL != nil {
 				dur, err := parseutil.ParseDurationSecond(pc.ControlGroupHCL.TTL)
 				if err != nil {
 					return fmt.Errorf("error parsing control group max ttl: %w", err)
 				}
-				pc.Permissions.ControlGroup.TTL = dur
+				pr.Permissions.ControlGroup.TTL = dur
 			}
 			var factors []*ControlGroupFactor
 			if pc.ControlGroupHCL.Factors != nil {
@@ -546,22 +530,22 @@ func parsePaths(result *Policy, list *ast.ObjectList, performTemplating bool, en
 			if len(factors) == 0 {
 				return errors.New("no control group factors provided")
 			}
-			pc.Permissions.ControlGroup.Factors = factors
+			pr.Permissions.ControlGroup.Factors = factors
 		}
-		if pc.Permissions.MinWrappingTTL != 0 &&
-			pc.Permissions.MaxWrappingTTL != 0 &&
-			pc.Permissions.MaxWrappingTTL < pc.Permissions.MinWrappingTTL {
+		if pr.Permissions.MinWrappingTTL != 0 &&
+			pr.Permissions.MaxWrappingTTL != 0 &&
+			pr.Permissions.MaxWrappingTTL < pr.Permissions.MinWrappingTTL {
 			return errors.New("max_wrapping_ttl cannot be less than min_wrapping_ttl")
 		}
 		if len(pc.RequiredParametersHCL) > 0 {
-			pc.Permissions.RequiredParameters = pc.RequiredParametersHCL[:]
+			pr.Permissions.RequiredParameters = pc.RequiredParametersHCL[:]
 		}
 		if len(pc.SubscribeEventTypesHCL) > 0 {
-			pc.Permissions.SubscribeEventTypes = pc.SubscribeEventTypesHCL[:]
+			pr.Permissions.SubscribeEventTypes = pc.SubscribeEventTypesHCL[:]
 		}
 
 	PathFinished:
-		paths = append(paths, &pc)
+		paths = append(paths, &pr)
 	}
 
 	result.Paths = paths
@@ -600,4 +584,41 @@ func (pr *PathRules) normalizePath(ns *namespace.Namespace) error {
 	}
 
 	return nil
+}
+
+// ResolvePaths returns a shallow copy of the policy whose paths are
+// normalized for ACL matching. When performTemplating is set, identity
+// templates in each path are first evaluated against entity and groups;
+// paths whose templates cannot be resolved are dropped.
+func (p *Policy) ResolvePaths(performTemplating bool, entity *logical.Entity, groups []*logical.Group, opts parseACLPolicyOptions) (*Policy, error) {
+	newPolicy := *p // Shallow copy
+	newPolicy.Paths = make([]*PathRules, 0, len(p.Paths))
+	for _, origPath := range p.Paths {
+		pr := &PathRules{
+			RawPath:     origPath.RawPath,
+			Path:        origPath.RawPath,
+			Permissions: origPath.Permissions,
+		}
+		if performTemplating {
+			_, templated, err := identitytpl.PopulateString(identitytpl.PopulateStringInput{
+				Mode:                      identitytpl.ACLTemplating,
+				String:                    pr.Path,
+				Entity:                    entity,
+				Groups:                    groups,
+				NamespaceID:               p.namespace.ID,
+				DenySlashInTemplatedPaths: opts.denySlashInTemplatedPaths,
+			})
+			if err != nil {
+				continue
+			}
+			pr.Path = templated
+		}
+
+		if err := pr.normalizePath(p.namespace); err != nil {
+			return nil, err
+		}
+
+		newPolicy.Paths = append(newPolicy.Paths, pr)
+	}
+	return &newPolicy, nil
 }
